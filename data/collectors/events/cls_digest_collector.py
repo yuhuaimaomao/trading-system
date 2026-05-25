@@ -345,10 +345,13 @@ class CLSDigestCollector:
             return None
 
 
+    def fetch_and_save(self) -> Dict:
+        return self.collect()
+
     def collect(self) -> Dict:
         """
         统一采集接口（早报服务调用）
-        
+
         Returns:
             新闻数据：
             - morning: 早报文章

@@ -165,6 +165,9 @@ class TelegraphCollector:
 
     # ========== 主流程 ==========
 
+    def fetch_and_save(self, trade_date: str = None) -> Dict[str, Any]:
+        return self.collect(trade_date)
+
     def collect(self, trade_date: str = None) -> Dict[str, Any]:
         """
         采集电报并入库
