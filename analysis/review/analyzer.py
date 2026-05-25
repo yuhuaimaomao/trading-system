@@ -904,7 +904,7 @@ class ReviewAnalyzer:
                 "7. 数据章节做精选：龙虎榜只展示摘要，其余明细可调用 get_lhb_seats/get_hotspot_stocks/get_yesterday_limit_ups/get_unusual_stocks/get_stock_info 等工具按需获取"
                 "8. 工具调用策略：调用 get_telegraph_news / get_regulatory_risks / get_lhb_seats 核查标的后，有监管风险的直接剔除不展示，有利好消息的才在个股下方标注"
                 "9. 报告中不要出现任何工具名称（如 get_cls_digest_news、get_telegraph_news 等），不要写「数据来源：XX工具返回」，直接用分析结论"
-                "10. 第七节「趋势交易者精选」角色切换为趋势交易者，从趋势股和板块中军候选数据中选 5 只趋势票，按趋势思维分析买点和止损"
+                "10. 第七节「趋势交易者精选」角色切换为趋势交易者，从趋势股和板块中军候选数据中选 5 只趋势票。优先选蓄力期/主升初期的票（均线刚多头排列、还没大幅拉升），按趋势思维分析买点和止损。波段交易思维，持仓周期以交易日计"
             )
 
             models_to_run = [

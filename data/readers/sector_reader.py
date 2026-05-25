@@ -965,6 +965,148 @@ class SectorReader:
         return result
 
     @staticmethod
+    def filter_by_sector_trend(conn, trade_date: str, stock_codes: list,
+                               top_n: int = 5, lookback_hot_days: int = 3,
+                               lookback_resonance_days: int = 5,
+                               max_fail_days: int = 3) -> set:
+        """
+        板块趋势过滤：查每只股票所属概念板块，过滤掉冷门/弱于大盘的板块
+
+        1. 热度过滤：最近 N 天出现在 hot_history 概念 TOP5 至少 1 次
+        2. 共振过滤：近 5 日 vs 上证指数 — 大盘涨板块涨更多，大盘跌板块跌更少或收红
+
+        兜底：过滤后 < 5 只，放宽到热度 OR 共振任一通过即可
+
+        Returns:
+            通过过滤的 stock_codes set
+        """
+        if not stock_codes:
+            return set()
+
+        from system.config.trading_calendar import get_recent_trading_days
+
+        # 每只股票取涨幅最强的 3 个概念板块
+        ph_codes = ','.join('?' * len(stock_codes))
+        cursor = conn.execute(f"""
+            SELECT ss.stock_code, sc.sector_code, sc.sector_name
+            FROM sector_stocks ss
+            JOIN sector_concept sc ON ss.sector_code = sc.sector_code
+            JOIN sector_info si ON sc.sector_code = si.sector_code
+            WHERE ss.stock_code IN ({ph_codes}) AND sc.trade_date = ?
+              AND si.need_collect = 1
+            ORDER BY ss.stock_code, sc.change_percent DESC
+        """, stock_codes + [trade_date])
+
+        stock_sectors = {}  # {code: [(sector_code, sector_name), ...]}
+        for row in cursor.fetchall():
+            code = row['stock_code']
+            if code not in stock_sectors:
+                stock_sectors[code] = []
+            if len(stock_sectors[code]) < 3:
+                stock_sectors[code].append((row['sector_code'], row['sector_name']))
+
+        if not stock_sectors:
+            return set()
+
+        all_sectors = {sc for sectors in stock_sectors.values() for sc, _ in sectors}
+
+        # ===== 热度过滤：最近 N 天 TOP5 =====
+        hot_sectors = set()
+        hot_days = get_recent_trading_days(trade_date, lookback_hot_days)
+        if all_sectors and hot_days:
+            ph_sc = ','.join('?' * len(all_sectors))
+            ph_days = ','.join('?' * len(hot_days))
+            rows = conn.execute(f"""
+                SELECT sector_code FROM sector_hot_history
+                WHERE sector_type = 'concept'
+                  AND sector_code IN ({ph_sc})
+                  AND trade_date IN ({ph_days})
+                  AND rank <= ?
+            """, list(all_sectors) + hot_days + [top_n])
+            hot_sectors = {row['sector_code'] for row in rows}
+
+        # ===== 共振过滤：近 5 日 vs 上证指数 =====
+        resonance_days = get_recent_trading_days(trade_date, lookback_resonance_days) or []
+
+        # 指数涨跌幅
+        index_changes = {}
+        if resonance_days:
+            ph_days = ','.join('?' * len(resonance_days))
+            rows = conn.execute(f"""
+                SELECT trade_date, change_percent FROM index_realtime_data
+                WHERE index_code = 'sh000001' AND trade_date IN ({ph_days})
+            """, resonance_days)
+            index_changes = {row['trade_date']: row['change_percent'] or 0 for row in rows}
+
+        # 板块涨跌幅
+        sector_changes = {}  # {sc: {date: change, ...}}
+        if all_sectors and resonance_days:
+            ph_sc = ','.join('?' * len(all_sectors))
+            ph_days = ','.join('?' * len(resonance_days))
+            rows = conn.execute(f"""
+                SELECT sector_code, trade_date, change_percent
+                FROM sector_concept
+                WHERE sector_code IN ({ph_sc}) AND trade_date IN ({ph_days})
+            """, list(all_sectors) + resonance_days)
+            for row in rows:
+                sc = row['sector_code']
+                if sc not in sector_changes:
+                    sector_changes[sc] = {}
+                sector_changes[sc][row['trade_date']] = row['change_percent'] or 0
+
+        resonance_pass = set()
+        for sc in all_sectors:
+            changes = sector_changes.get(sc, {})
+            if not changes:
+                continue
+            fail_count = 0
+            total = 0
+            for date in resonance_days:
+                idx_chg = index_changes.get(date)
+                sec_chg = changes.get(date)
+                if idx_chg is None or sec_chg is None:
+                    continue
+                total += 1
+                if idx_chg > 0:
+                    if sec_chg <= idx_chg:
+                        fail_count += 1
+                elif idx_chg < 0:
+                    if sec_chg < 0 and sec_chg <= idx_chg:
+                        fail_count += 1
+                else:
+                    if sec_chg <= 0:
+                        fail_count += 1
+            if total == 0:
+                continue
+            if fail_count < max_fail_days:
+                resonance_pass.add(sc)
+
+        # 指数数据缺失时，默认所有板块共振通过
+        if not index_changes:
+            resonance_pass = set(all_sectors)
+
+        # ===== 综合判断 =====
+        passed = set()
+        for code in stock_codes:
+            sectors = stock_sectors.get(code, [])
+            for sc, _ in sectors:
+                if sc in hot_sectors and sc in resonance_pass:
+                    passed.add(code)
+                    break
+
+        # 兜底：过滤后太少，放宽
+        if len(passed) < 5:
+            for code in stock_codes:
+                if code in passed:
+                    continue
+                for sc, _ in stock_sectors.get(code, []):
+                    if sc in hot_sectors or sc in resonance_pass:
+                        passed.add(code)
+                        break
+
+        return passed
+
+    @staticmethod
     def enrich_concepts(conn, trade_date: str, stock_codes: list) -> dict:
         """给股票列表补充概念板块（每只取涨幅最高的 2 个概念，仅 need_collect=1）"""
         if not stock_codes:

@@ -262,7 +262,15 @@ class StockReader:
         strong.sort(key=lambda x: x['score'], reverse=True)
         normal.sort(key=lambda x: x['score'], reverse=True)
 
+        # 板块趋势过滤
+        all_codes = [r['stock_code'] for r in strong[:10]] + [r['stock_code'] for r in normal[:10]]
+        if all_codes:
+            from data.readers.sector_reader import SectorReader
+            passed = SectorReader.filter_by_sector_trend(conn, trade_date, all_codes)
+            strong = [r for r in strong if r['stock_code'] in passed][:10]
+            normal = [r for r in normal if r['stock_code'] in passed][:10]
+
         return {
-            'strong': strong[:10],
-            'normal': normal[:10],
+            'strong': strong,
+            'normal': normal,
         }
