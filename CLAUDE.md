@@ -61,6 +61,7 @@ trading-system/
 - 数据库默认路径：`PROJECT_ROOT / "storage" / "stock_market.db"`
 - 176 个测试，重构后全部通过
 - 电报 AI 结构化方案：`docs/电报AI结构化方案.md`（已讨论，未实现）
+- 趋势股板块过滤方案：`docs/趋势股板块过滤方案.md`（已讨论，待实现）
 
 ## 个人偏好
 
