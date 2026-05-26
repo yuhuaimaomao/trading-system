@@ -21,16 +21,20 @@ from typing import Dict, Any, Optional, List
 import requests
 
 from system.config.settings import DATABASE_PATH, LOGS_DIR
+from system.utils.dns_bypass import install as install_dns_bypass
+
+# 绕过 Shadowrocket/Surge 本地代理的 DNS 劫持
+install_dns_bypass()
 from system.config.prompts.review import REVIEW_REPORT_PROMPT
 from analysis.review.formatter import (
     format_chain_ladder, format_lhb_full,
     format_fund_flow, format_candidates, format_strong_stocks,
-    format_yzt_performance, format_yesterday_watchlist,
+    format_yzt_performance,
     format_hotspot, format_limit_quality, format_capital_concentration,
     format_three_day_trend, format_index_data,
     format_macro_overview, format_risk_flags, format_announcements,
-    format_historical_calibration, format_broken_boards,
-    format_first_boards, format_trend_stocks, format_zhongjun,
+    format_broken_boards,
+    format_first_boards, format_trend_stocks,
     calc_position_cap, fmt_change, safe_float,
 )
 from system.utils.logger import get_core_logger, get_system_logger
@@ -200,6 +204,8 @@ class ReviewAnalyzer:
                 d1 = g['data'].get(yesterday, {})
                 d2 = g['data'].get(day_before, {})
                 closes = close_history.get(code, [])
+                if d0.get('close', 0):
+                    closes = closes + [d0['close']]
                 index_data.append({
                     'index_name': g['name'],
                     # 今日
@@ -546,27 +552,27 @@ class ReviewAnalyzer:
 
             # ===== 6.5. 近期强势股（60日新高+多次涨停，凑够30只）=====
             self.logger.info("查询近期强势股...")
-            strong_stocks = StockReader.get_strong_stocks(conn, trade_date, sectors)
+            active_stocks = StockReader.get_strong_stocks(conn, trade_date, sectors)
 
             # 补充概念板块
-            strong_codes = [s['stock_code'] for s in strong_stocks]
-            strong_concepts = SectorReader.enrich_concepts(conn, trade_date, strong_codes)
-            for s in strong_stocks:
-                concepts = strong_concepts.get(s['stock_code'], [])
+            active_codes = [s['stock_code'] for s in active_stocks]
+            active_concepts = SectorReader.enrich_concepts(conn, trade_date, active_codes)
+            for s in active_stocks:
+                concepts = active_concepts.get(s['stock_code'], [])
                 if concepts:
                     s['concepts'] = concepts
 
             # ===== 6.7. 趋势股（双模式：5日线强趋势 + 20日线稳健趋势）=====
             self.logger.info("查询趋势股（双模式）...")
             trend_data = StockReader.get_trend_stocks(conn, trade_date)
-            strong_stocks = trend_data.get('strong', [])
+            strong_trend = trend_data.get('strong', [])
             normal_stocks = trend_data.get('normal', [])
-            self.logger.info(f"趋势股：强趋势{len(strong_stocks)}只 + 稳健趋势{len(normal_stocks)}只")
+            self.logger.info(f"趋势股：强趋势{len(strong_trend)}只 + 稳健趋势{len(normal_stocks)}只")
 
             # 补充概念板块（两类合并查询）
-            all_trend_codes = [s['stock_code'] for s in strong_stocks + normal_stocks]
+            all_trend_codes = [s['stock_code'] for s in strong_trend + normal_stocks]
             trend_concepts = SectorReader.enrich_concepts(conn, trade_date, all_trend_codes)
-            for s in strong_stocks + normal_stocks:
+            for s in strong_trend + normal_stocks:
                 concepts = trend_concepts.get(s['stock_code'], [])
                 if concepts:
                     s['concepts'] = concepts
@@ -586,23 +592,8 @@ class ReviewAnalyzer:
             else:
                 self.logger.info("无概念热点数据")
 
-            # ===== 7.1. 板块中军筛选（4维打分）=====
-            self.logger.info("筛选中军候选...")
-            industry_codes = [s['sector_code'] for s in top_industries] if top_industries else []
-            concept_codes = [s['sector_code'] for s in top_concepts] if top_concepts else []
-            zhongjun_industry = SectorReader.get_sector_zhongjun(
-                conn, trade_date, industry_codes, 'sector_industry', top_n=5
-            ) if industry_codes else {}
-            zhongjun_concept = SectorReader.get_sector_zhongjun(
-                conn, trade_date, concept_codes, 'sector_concept', top_n=5
-            ) if concept_codes else {}
-            all_zhongjun = {**zhongjun_industry, **zhongjun_concept}
-            self.logger.info(f"中军候选筛选完成：{sum(len(v) for v in all_zhongjun.values())}只")
-
-            # ===== 7.5. 保存热点历史 + 计算近N日上榜次数 ====
-            HOT_SCORE_THRESHOLD = 70  # 热度分阈值，≥70 分算"上榜"
-            LOOKBACK_DAYS = 5  # 回溯最近5个交易日
-            self.logger.info("保存热点历史并计算近N日上榜次数...")
+            # ===== 7.5. 保存热点历史 ====
+            self.logger.info("保存热点历史...")
 
             # 保存今日 TOP10 到历史表
             for s in top_industries:
@@ -619,35 +610,11 @@ class ReviewAnalyzer:
                 """, (trade_date, s.get('rank', 0), s['sector_code'], s['name'], s['hot_score']))
             conn.commit()
 
-            # 获取最近 LOOKBACK_DAYS 个交易日
-            from system.config.trading_calendar import get_recent_trading_days
-            recent_days = get_recent_trading_days(trade_date, LOOKBACK_DAYS)
-
-            # 一次 SQL 查出所有板块在近期交易日的上榜次数
-            all_codes = [s['sector_code'] for s in top_industries] + [s['sector_code'] for s in top_concepts]
-            if all_codes and recent_days:
-                ph_codes = ','.join('?' * len(all_codes))
-                ph_days = ','.join('?' * len(recent_days))
-                history_rows = conn.execute(f"""
-                    SELECT sector_code, COUNT(*) as appear_count
-                    FROM sector_hot_history
-                    WHERE sector_code IN ({ph_codes})
-                      AND trade_date IN ({ph_days})
-                      AND hot_score >= ?
-                    GROUP BY sector_code
-                """, all_codes + recent_days + [HOT_SCORE_THRESHOLD]).fetchall()
-
-                count_map = {row['sector_code']: row['appear_count'] for row in history_rows}
-
-                for s in top_industries:
-                    s['recent_appear'] = count_map.get(s['sector_code'], 0)
-                for s in top_concepts:
-                    s['recent_appear'] = count_map.get(s['sector_code'], 0)
-            else:
-                for s in top_industries:
-                    s['recent_appear'] = 0
-                for s in top_concepts:
-                    s['recent_appear'] = 0
+            # 今日 TOP10 本身也算一次上榜（_calc_hot_days 查的是保存前的历史，不含今日）
+            for s in top_industries:
+                s['hot_days'] = s.get('hot_days', 0) + 1
+            for s in top_concepts:
+                s['hot_days'] = s.get('hot_days', 0) + 1
 
             # ===== 8. 昨日涨停今日表现 =====
             self.logger.info("查询昨日涨停今日表现...")
@@ -660,53 +627,6 @@ class ReviewAnalyzer:
                 concepts = yzt_concepts.get(r['code'], [])
                 if concepts:
                     r['concepts'] = concepts
-
-            # ===== 9. 昨日 AI 推荐标的今日验证 =====
-            self.logger.info("查询昨日 AI 推荐标的今日表现...")
-            cursor = conn.execute("""
-                SELECT t.stock_code, t.stock_name, t.plate, t.star_rating,
-                       s.change_pct, s.turnover_rate, s.volume_ratio,
-                       s.amplitude, s.total_market_cap/100000000 as mcap,
-                       s.circ_market_cap/100000000 as circ_mcap,
-                       s.main_force_net/10000 as mf_wan,
-                       s.super_large_net/10000 as sl_wan,
-                       s.large_net/10000 as lg_wan,
-                       s.medium_net/10000 as md_wan,
-                       s.small_net/10000 as sm_wan,
-                       s.main_force_ratio,
-                       COALESCE(lp.pool_type, '') as limit_type
-                FROM stock_tracker t
-                LEFT JOIN stock_basic s ON t.stock_code = s.stock_code
-                    AND s.trade_date = ?
-                LEFT JOIN limit_pool lp ON t.stock_code = lp.stock_code
-                    AND lp.trade_date = ? AND lp.pool_type = '涨停'
-                WHERE t.push_date = ? AND t.source = '复盘'
-                ORDER BY t.star_rating DESC, COALESCE(s.change_pct, -999) DESC
-            """, (trade_date, trade_date, yesterday))
-            yesterday_watch = []
-            for row in cursor.fetchall():
-                chg = row['change_pct'] if row['change_pct'] is not None else None
-                star = row['star_rating'] or 0
-                star_label = {5: 'P0', 4: 'P1', 3: 'P2'}.get(star, 'P3')
-                yesterday_watch.append({
-                    'code': row['stock_code'],
-                    'name': row['stock_name'],
-                    'change': chg,
-                    'turnover': row['turnover_rate'] or 0,
-                    'vol_ratio': row['volume_ratio'] or 0,
-                    'amplitude': row['amplitude'] or 0,
-                    'mcap': row['mcap'] or 0,
-                    'circ_mcap': row['circ_mcap'] or 0,
-                    'mf_wan': row['mf_wan'] or 0,
-                    'sl_wan': row['sl_wan'] or 0,
-                    'lg_wan': row['lg_wan'] or 0,
-                    'md_wan': row['md_wan'] or 0,
-                    'sm_wan': row['sm_wan'] or 0,
-                    'mf_ratio': row['main_force_ratio'] or 0,
-                    'plate': row['plate'] or '',
-                    'star_label': star_label,
-                    'is_limit_up': row['limit_type'] == '涨停',
-                })
 
             # ===== 10. 资金集中度 =====
             self.logger.info("计算资金集中度...")
@@ -784,10 +704,6 @@ class ReviewAnalyzer:
             )
             self.logger.info(f"仓位硬顶：{position_cap}%（评分依据：涨停{limit_up}, 封板率{seal_rate:.1f}%, 最高{highest_board}板, 涨跌比{up_ratio:.2f}, 溢价率{yzt_avg_change:+.2f}%）")
 
-            # ===== 14.5. AI 推荐历史校准统计 =====
-            calibration_stats = self._get_calibration_stats(conn, yesterday)
-            calibration_stats_text = format_historical_calibration(calibration_stats)
-
             # ===== 15. 格式化所有数据（按 Prompt 模板新顺序）=====
             self.logger.info("格式化 Prompt 数据...")
             prompt_data = {
@@ -833,8 +749,6 @@ class ReviewAnalyzer:
                 ),
                 # 六、热点板块数据
                 'hotspot_text': format_hotspot(top_industries, top_concepts, sector_code_map=self.sector_code_map),
-                # 六-B、板块中军候选
-                'zhongjun_text': format_zhongjun(all_zhongjun, sector_code_map=self.sector_code_map),
                 # 七、板块资金暗流
                 'fund_flow_text': (
                     "【行业】\n" + format_fund_flow(sectors, fund_flow_map) +
@@ -847,11 +761,11 @@ class ReviewAnalyzer:
                 # 九、龙虎榜全量
                 'lhb_text': format_lhb_full(lhb_data),
                 # 九-B、趋势股（双模式）
-                'trend_count': len(strong_stocks) + len(normal_stocks),
+                'trend_count': len(strong_trend) + len(normal_stocks),
                 'trend_stocks_text': format_trend_stocks(trend_data, sector_code_map=self.sector_code_map),
                 # 十、近期强势股
-                'strong_count': len(strong_stocks),
-                'strong_stocks_text': format_strong_stocks(strong_stocks, sector_code_map=self.sector_code_map),
+                'strong_count': len(active_stocks),
+                'strong_stocks_text': format_strong_stocks(active_stocks, sector_code_map=self.sector_code_map),
                 # 十一、昨日涨停股今日表现
                 'yzt_count': len(yzt_records),
                 'yzt_text': format_yzt_performance(yzt_records, sector_code_map=self.sector_code_map),
@@ -1034,18 +948,23 @@ class ReviewAnalyzer:
 
     def _run_fc_review(self, prompt: str, trade_date: str, system_prompt: str) -> str:
         """
-        FC 多轮对话：强制 AI 先调用新闻工具，再生成复盘报告。
+        FC 多轮对话：一轮暴露全部工具，AI 自由选择调用顺序。
 
-        第一轮：仅暴露 get_cls_digest_news 一个工具 + Prompt 强制指令 → 变相必修
-        后续轮：暴露全部工具，AI 自主选择是否调用
+        事后校验：AI 返回报告内容时，检查必修工具是否都已调用。
+        未调完的，追加消息要求继续调用，最多 10 轮防止死循环。
         """
         from system.utils.stock_tools import TOOLS_DEFINITION
 
         fc_engine = FunctionCallingEngine()
-        news_tool_names = {'get_cls_digest_news'}
-        news_tools = [t for t in TOOLS_DEFINITION if t['function']['name'] in news_tool_names]
         all_tool_names = [t['function']['name'] for t in TOOLS_DEFINITION]
 
+        # 报告生成前必须调用的工具（get_sector_zhongjun 在选股环节调用，不在此列）
+        MANDATORY_TOOLS = [
+            'get_cls_digest_news',
+            'get_yesterday_review',
+            'get_historical_calibration',
+            'get_yesterday_picks_performance',
+        ]
         # FC 日志文件
         fc_log_path = LOGS_DIR / trade_date / 'prompts' / 'review_fc_log.txt'
         fc_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1060,7 +979,7 @@ class ReviewAnalyzer:
         _fc_log(f"复盘 FC 多轮对话日志 - {trade_date}")
         _fc_log(f"模型: {self.ai.model}")
         _fc_log(f"可用工具 ({len(all_tool_names)}): {', '.join(all_tool_names)}")
-        _fc_log(f"必修工具: get_cls_digest_news")
+        _fc_log(f"必修工具 ({len(MANDATORY_TOOLS)}): {', '.join(MANDATORY_TOOLS)}")
         _fc_log("=" * 60)
 
         messages = [
@@ -1068,22 +987,14 @@ class ReviewAnalyzer:
             {'role': 'user', 'content': prompt},
         ]
 
+        called_tools = set()
         round_num = 0
+
         while True:
             round_num += 1
-            if round_num == 1:
-                tools = news_tools
-                # 仅暴露 1 个工具 + Prompt 强制指令 = 变相必修，不用 'required'（百炼 API 不兼容）
-                tool_choice = 'auto'
-                _fc_log(f"\n第 {round_num+1} 轮（必修轮，仅 1 个工具 + Prompt 强制）")
-                _fc_log(f"  暴露工具: get_cls_digest_news")
-                _fc_log(f"  tool_choice: auto")
-            else:
-                tools = None
-                tool_choice = 'auto'
-                _fc_log(f"\n第 {round_num+1} 轮（自主轮）")
-                _fc_log(f"  暴露工具: 全部 {len(all_tool_names)} 个")
-                _fc_log(f"  tool_choice: auto")
+            tools = TOOLS_DEFINITION
+            tool_choice = 'auto'
+            _fc_log(f"\n第 {round_num} 轮（全部 {len(all_tool_names)} 个工具，tool_choice=auto）")
 
             response = self.ai._call_ai_with_tools(
                 messages, max_tokens=8000,
@@ -1103,6 +1014,7 @@ class ReviewAnalyzer:
                     fn = tc.get('function', {}) if isinstance(tc, dict) else tc.function
                     fn_name = fn.get('name', '?')
                     fn_args = fn.get('arguments', '{}')
+                    called_tools.add(fn_name)
                     _fc_log(f"    → {fn_name}({fn_args})")
 
                 assistant_msg = {'role': 'assistant', 'content': content or ''}
@@ -1111,7 +1023,6 @@ class ReviewAnalyzer:
 
                 tool_messages = fc_engine.process_tool_calls(tool_calls)
                 for tm in tool_messages:
-                    # 记录返回数据（截断长内容）
                     result_str = str(tm.get('content', ''))
                     if len(result_str) > 500:
                         result_str = result_str[:500] + f"...(共{len(result_str)}字)"
@@ -1120,23 +1031,45 @@ class ReviewAnalyzer:
                 messages.extend(tool_messages)
                 continue
 
-            # 无工具调用 = 最终回复
-            if content:
-                _fc_log(f"\n报告完成: {len(content)}字")
-                _fc_log("=" * 60)
+            # --- 无工具调用：判断是否为最终回复 ---
+            if not content:
+                _fc_log(f"  ⚠️ AI 未返回内容也未调用工具，重试")
+                continue
 
-                # 写日志文件
-                try:
-                    with open(fc_log_path, 'w', encoding='utf-8') as f:
-                        f.write('\n'.join(fc_lines))
-                    self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
-                except Exception as e:
-                    self.logger.warning(f"保存 FC 日志失败: {e}")
+            # 检查报告标记
+            is_report = '【复盘分析' in content or '<<<STOCKS>>>' in content
 
-                return content
+            if is_report:
+                missing = [t for t in MANDATORY_TOOLS if t not in called_tools]
+                if missing:
+                    _fc_log(f"  ⚠️ 检测到报告内容，但必修工具未调用: {missing}")
+                    messages.append({
+                        'role': 'user',
+                        'content': f'请先调用以下必修工具获取数据，再生成报告：{", ".join(missing)}。不要在工具调用前输出报告正文。',
+                    })
+                    continue
+                # 全部必修工具已调用，接受报告
+                _fc_log(f"  ✅ 所有必修工具已调用 ({len(called_tools)} 个)，报告完成")
+                break
 
-            _fc_log(f"  ⚠️ AI 未返回内容也未调用工具")
+            # 不是报告、也没调工具，可能是中间回复，推回继续
+            _fc_log(f"  AI 返回中间回复，继续等待工具调用")
+            messages.append({'role': 'assistant', 'content': content})
             continue
+
+        _fc_log(f"\n共 {round_num} 轮，已调用工具: {', '.join(sorted(called_tools))}")
+        _fc_log(f"报告: {len(content)}字" if content else "⚠️ 未生成报告")
+        _fc_log("=" * 60)
+
+        # 写日志文件
+        try:
+            with open(fc_log_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(fc_lines))
+            self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
+        except Exception as e:
+            self.logger.warning(f"保存 FC 日志失败: {e}")
+
+        return content
 
     # 电报类别黑名单：与 A 股选股无关的类别
     TELEGRAPH_SKIP_CATEGORIES = {'期货市场情报', '原油市场动态', '环球市场情报'}
@@ -1150,15 +1083,22 @@ class ReviewAnalyzer:
     ]
 
     def _query_telegraph(self, trade_date: str) -> list:
-        """从 DB 查询当日高评分电报（过滤宏观/政治/大盘噪音）"""
+        """从 DB 查询当日高评分电报，优先用 AI 结构化字段，旧字段做 fallback"""
         import json as _json
         try:
             conn = sqlite3.connect(str(DATABASE_PATH))
             conn.row_factory = sqlite3.Row
+            # AI 已处理的用 ai_importance>=3 且排除 ai_status='skipped'，
+            # 未处理的用旧 score>=2 并保留手工过滤逻辑
             cursor = conn.execute("""
                 SELECT * FROM cls_telegraph
-                WHERE trade_date = ? AND score >= 2
-                ORDER BY score DESC, reading_num DESC
+                WHERE trade_date = ?
+                  AND (
+                    (ai_status = 'done' AND ai_importance >= 3 AND ai_status != 'skipped')
+                    OR
+                    ((ai_status IS NULL OR ai_status = 'pending' OR ai_status = 'failed') AND score >= 2)
+                  )
+                ORDER BY COALESCE(ai_importance, score) DESC, reading_num DESC
                 LIMIT 120
             """, (trade_date,))
             rows = [dict(r) for r in cursor.fetchall()]
@@ -1168,24 +1108,34 @@ class ReviewAnalyzer:
             filtered = []
             seen_titles = set()
             for r in rows:
+                # 解析 CLS 原始 JSON 字段
                 for field in ('stock_tags', 'subject_tags', 'plate_tags'):
                     try:
                         r[field] = _json.loads(r[field]) if r[field] else []
                     except (_json.JSONDecodeError, TypeError):
                         r[field] = []
 
-                # 类别黑名单
-                cat = r.get('category', '')
-                if cat in self.TELEGRAPH_SKIP_CATEGORIES:
-                    continue
+                # 解析 AI 结构化 JSON 字段
+                for field in ('ai_stocks', 'ai_sectors'):
+                    try:
+                        r[field] = _json.loads(r[field]) if r[field] else []
+                    except (_json.JSONDecodeError, TypeError):
+                        r[field] = []
 
-                # 标题关键词过滤
-                title = r.get('title', '')
-                if any(kw in title for kw in self.TELEGRAPH_SKIP_KEYWORDS):
-                    continue
+                # AI 已处理的不再做手工关键词过滤，AI 的 ai_status='skipped' 已在 SQL 排除
+                ai_status = r.get('ai_status', '')
+                if ai_status not in ('done',):
+                    # 未处理的电报：保留手工过滤
+                    cat = r.get('category', '')
+                    if cat in self.TELEGRAPH_SKIP_CATEGORIES:
+                        continue
 
-                # 去重：相似标题（取前 20 字做 key）
-                title_key = title[:20]
+                    title = r.get('title', '')
+                    if any(kw in title for kw in self.TELEGRAPH_SKIP_KEYWORDS):
+                        continue
+
+                # 去重
+                title_key = (r.get('title') or '')[:20]
                 if title_key in seen_titles:
                     continue
                 seen_titles.add(title_key)
@@ -1233,7 +1183,7 @@ class ReviewAnalyzer:
         return text
 
     def _format_telegraph(self, trade_date: str, zt_codes: set = None) -> str:
-        """从 DB 读取电报并格式化为 Prompt 文本（按类别分组，涨停股交叉标记，内容截断 80 字）"""
+        """从 DB 读取电报并格式化为 Prompt 文本，优先用 AI 结构化字段"""
         import json as _json
         telegraph_list = self._query_telegraph(trade_date)
         if not telegraph_list:
@@ -1241,10 +1191,10 @@ class ReviewAnalyzer:
 
         zt_codes = zt_codes or set()
 
-        # 按 category 分组
+        # 按 ai_direction 分组（fallback 到旧 category）
         groups: dict[str, list] = {}
         for t in telegraph_list:
-            cat = t.get('category', '其他')
+            cat = t.get('ai_direction') or t.get('category', '其他')
             groups.setdefault(cat, []).append(t)
 
         text = f"共 {len(telegraph_list)} 条高评分电报，按类别分组如下：\n"
@@ -1254,151 +1204,65 @@ class ReviewAnalyzer:
             for item in items:
                 level = item.get('level', 'C')
                 title = item.get('title', '无标题')
-                content = item.get('content', '')
                 reading = item.get('reading_num', 0)
-                stock_tags = item.get('stock_tags', [])
 
-                # 截取 content 前 80 字
-                snippet = (content[:80] + '...') if len(content) > 80 else content
+                # 摘要：优先 ai_summary，其次 content 前 80 字
+                ai_summary = item.get('ai_summary', '')
+                snippet = ai_summary if ai_summary else (
+                    (item.get('content', '')[:80] + '...') if len(item.get('content', '') or '') > 80 else (item.get('content', '') or '')
+                )
+
+                # 关联股票：优先 ai_stocks（覆盖率高），fallback 到 stock_tags
+                ai_stocks = item.get('ai_stocks', [])
+                stock_tags = item.get('stock_tags', [])
+                display_stocks = ai_stocks if ai_stocks else stock_tags
 
                 # 涨停交叉比对
                 zt_matched = []
-                for tag in (stock_tags or []):
-                    code = tag.get('code', '') if isinstance(tag, dict) else ''
+                for s in (display_stocks or []):
+                    code = s.get('code', '') if isinstance(s, dict) else ''
                     if code and code in zt_codes:
-                        zt_matched.append(tag.get('name', code))
+                        zt_matched.append(s.get('name', code) if isinstance(s, dict) else code)
 
                 zt_flag = ' 🔥涨停关联' if zt_matched else ''
-                line = f"- [{level}]{zt_flag} {title}"
+                sentiment = item.get('ai_sentiment', '')
+                sentiment_flag = f' [{sentiment}]' if sentiment else ''
+                line = f"- [{level}]{sentiment_flag}{zt_flag} {title}"
                 if snippet and snippet != title:
                     line += f" | {snippet}"
 
-                # 关联股票（涨停股前置，最多 3 只）
-                if stock_tags:
+                # 关联股票展示（涨停股前置，最多 3 只）
+                if display_stocks:
                     tags_parts = []
-                    for tag in (stock_tags or [])[:3]:
-                        if isinstance(tag, dict):
-                            name = tag.get('name', '')
-                            code = tag.get('code', '')
+                    for s in (display_stocks or [])[:3]:
+                        if isinstance(s, dict):
+                            name = s.get('name', '')
+                            code = s.get('code', '')
+                            relevance = s.get('relevance', '')
                             prefix = '🔥' if code in zt_codes else ''
-                            tags_parts.append(f'{prefix}{name}({code})')
+                            tag_text = f'{prefix}{name}({code})'
+                            if relevance:
+                                tag_text += f'[{relevance}]'
+                            tags_parts.append(tag_text)
                     if tags_parts:
                         line += f"\n  关联：{'、'.join(tags_parts)}"
                 elif zt_matched:
                     line += f"\n  涨停关联：{'、'.join(zt_matched)}"
 
+                # AI 对 A 股的具体影响
+                ai_impact = item.get('ai_impact', '')
+                if ai_impact:
+                    line += f"\n  影响：{ai_impact}"
+
                 text += line + '\n'
 
         return text
-
-    def _get_calibration_stats(self, conn, end_date: str, num_days: int = 5) -> dict:
-        """
-        从 stock_tracker 获取历史 AI 推荐校准统计
-
-        Args:
-            conn: 数据库连接
-            end_date: 截止日期（上一个交易日）
-            num_days: 回溯交易日数
-
-        Returns:
-            统计数据 dict，数据不足时返回 None
-        """
-        from system.config.trading_calendar import is_trading_day
-
-        # 回溯 N 个交易日
-        trading_days = []
-        check_date = datetime.strptime(end_date, '%Y-%m-%d')
-        for _ in range(num_days * 3):
-            ds = check_date.strftime('%Y-%m-%d')
-            if is_trading_day(ds):
-                trading_days.append(ds)
-                if len(trading_days) >= num_days:
-                    break
-            check_date = check_date - timedelta(days=1)
-
-        if len(trading_days) < 1:
-            self.logger.info("无历史交易日数据，跳过校准统计")
-            return None
-
-        placeholders = ','.join('?' * len(trading_days))
-        cursor = conn.execute(f"""
-            SELECT t.stock_code, t.stock_name, t.plate, t.star_rating,
-                   t.final_return, t.push_date
-            FROM stock_tracker t
-            WHERE t.push_date IN ({placeholders}) AND t.source = '复盘'
-              AND t.final_return IS NOT NULL
-            ORDER BY t.push_date DESC, t.star_rating DESC
-        """, trading_days)
-
-        rows = [dict(row) for row in cursor.fetchall()]
-        if not rows:
-            self.logger.info("stock_tracker 中无历史复盘数据，跳过校准统计")
-            return None
-
-        total = len(rows)
-        wins = sum(1 for r in rows if (r['final_return'] or 0) > 0)
-        avg_return = sum(r['final_return'] or 0 for r in rows) / total
-
-        # 按优先级分组
-        by_priority = {}
-        for r in rows:
-            star = r['star_rating'] or 0
-            label = {5: 'P0', 4: 'P1', 3: 'P2'}.get(star, 'P3')
-            if label not in by_priority:
-                by_priority[label] = {'count': 0, 'wins': 0, 'total_return': 0}
-            by_priority[label]['count'] += 1
-            ret = r['final_return'] or 0
-            by_priority[label]['total_return'] += ret
-            if ret > 0:
-                by_priority[label]['wins'] += 1
-
-        # 按板块分组
-        by_sector = {}
-        for r in rows:
-            plate = r['plate'] or '未分类'
-            if plate not in by_sector:
-                by_sector[plate] = {'count': 0, 'wins': 0, 'total_return': 0}
-            by_sector[plate]['count'] += 1
-            ret = r['final_return'] or 0
-            by_sector[plate]['total_return'] += ret
-            if ret > 0:
-                by_sector[plate]['wins'] += 1
-
-        sector_stats = []
-        for plate, s in by_sector.items():
-            sector_stats.append({
-                'plate': plate,
-                'count': s['count'],
-                'avg_return': s['total_return'] / s['count'],
-                'win_rate': s['wins'] / s['count'] * 100,
-            })
-        sector_stats.sort(key=lambda x: x['avg_return'], reverse=True)
-
-        return {
-            'date_range': f"{trading_days[-1]} ~ {trading_days[0]}",
-            'num_days': len(trading_days),
-            'total': total,
-            'wins': wins,
-            'win_rate': wins / total * 100,
-            'avg_return': avg_return,
-            'by_priority': by_priority,
-            'by_sector': sector_stats,
-        }
-
-
-# ============================================================
-# AIAnalyzer — Low-level AI engine (from original analyzer.py)
-# ============================================================
-
-logger = get_system_logger('analyzer')
-
-from system.utils.stock_tools import TOOLS_DEFINITION
-
 
 class AIAnalyzer:
     """AI 分析引擎（支持 Function Calling）"""
 
     def __init__(self):
+        self.logger = get_core_logger('ai_analyzer')
         self.api_key = os.getenv('DASHSCOPE_API_KEY', '')
         self.endpoint = os.getenv('DASHSCOPE_ENDPOINT', 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation')
         self.model = os.getenv('DASHSCOPE_ANALYSIS_MODEL', 'qwen3.5-plus')
@@ -1409,9 +1273,9 @@ class AIAnalyzer:
 
         # 验证 API Key 格式（百炼 API Key 以 sk-sp-开头）
         if not (self.api_key.startswith('sk-') or self.api_key.startswith('sk-sp-')):
-            logger.warning("API Key 格式可能不正确（应以 sk-或 sk-sp-开头）")
+            self.logger.warning("API Key 格式可能不正确（应以 sk-或 sk-sp-开头）")
 
-        logger.info("AI 分析引擎初始化完成（模型：{}，支持 Function Calling）".format(self.model))
+        self.logger.info("AI 分析引擎初始化完成（模型：{}，支持 Function Calling）".format(self.model))
 
     def _call_ai(self, prompt: str, system_prompt: str = "你是一个专业的 A 股量化分析师。请务必使用阿拉伯数字格式输出所有数值，不要转换为中文数字。例如：85%而不是百分之八十五，2.5万亿而不是二点五万亿，2026-04-29而不是二零二六年四月二十九日。", enable_search: bool = False, max_tokens: int = 2000) -> Optional[str]:
         """调用 AI 模型
