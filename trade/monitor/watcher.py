@@ -204,6 +204,10 @@ class Watcher:
         self._check_review_picks(prices, market_ok)
         self._check_sl_reminders()  # 止损提醒循环
 
+        # 集合竞价后第一轮：推送汇总决策
+        if self._scan_count == 1:
+            self._send_opening_decision(prices, market_ok)
+
         # --- 第二层：每 50 轮（约10分钟）---
         if self._scan_count % 50 == 0 and self._market_snapshot:
             self._check_sector_heat(self._market_snapshot)
@@ -899,7 +903,67 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                             extra=f"最高{pos.highest_price:.2f}")
                         continue
 
+                # 利润回撤止盈（分级）
+                retrace_key, retrace_signal = self._check_retracement_stop(
+                    code, pos.stock_name, price, pos.avg_cost, trend, limit_down)
+                if retrace_signal:
+                    self._handle_stop_signal(**retrace_signal)
+                    continue
+
+            # 更新最高浮盈（即使 T+1 锁定也记录）
+            if pos.avg_cost > 0:
+                cur_pct = (price - pos.avg_cost) / pos.avg_cost
+                watch = self._bought_watch.setdefault(code, {"max_profit_pct": 0})
+                if cur_pct > watch.get("max_profit_pct", 0):
+                    watch["max_profit_pct"] = cur_pct
+
             pos.update_price(price)
+
+    def _check_retracement_stop(self, code: str, name: str, price: float,
+                                 entry_price: float, trend: str, limit_down: bool):
+        """分级利润回撤止盈。
+
+        分级阈值（从 _bought_watch 读取历史最高浮盈）：
+        - 最高浮盈 ≥ 15%: 回撤容忍 40%（即保留 60% 利润），触发线 = max * 0.60
+        - 最高浮盈 ≥ 10%: 回撤容忍 45%（即保留 55% 利润），触发线 = max * 0.55
+        - 最高浮盈 ≥ 5%:  回撤容忍 50%（即保留 50% 利润），触发线 = max * 0.50
+        返回 (key, kwargs) 或 (None, None) 表示未触发。
+        """
+        if entry_price <= 0:
+            return None, None
+
+        watch = self._bought_watch.get(code, {})
+        max_profit = watch.get("max_profit_pct", 0)
+        if max_profit < 0.05:
+            return None, None
+
+        current_profit = (price - entry_price) / entry_price
+
+        if max_profit >= 0.15:
+            keep_ratio = 0.60
+        elif max_profit >= 0.10:
+            keep_ratio = 0.55
+        else:
+            keep_ratio = 0.50
+
+        threshold = max_profit * keep_ratio
+        if current_profit >= threshold:
+            return None, None
+
+        tier_label = "T1" if max_profit >= 0.15 else "T2" if max_profit >= 0.10 else "T3"
+        key = f"{code}:retrace"
+        extra = (
+            f"{tier_label} 最高浮盈{max_profit*100:.1f}% → 当前{current_profit*100:.1f}%"
+            f"（保留{keep_ratio*100:.0f}%利润触发）"
+        )
+        trigger_price = entry_price * (1 + threshold)
+        return key, {
+            "key": key, "code": code, "name": name,
+            "stype": "利润回撤止盈",
+            "price": price, "trigger": trigger_price,
+            "ref_price": entry_price,
+            "trend": trend, "limit_down": limit_down, "extra": extra,
+        }
 
     def _handle_stop_signal(self, key: str, code: str, name: str, stype: str,
                             price: float, trigger: float, ref_price: float,
@@ -1283,16 +1347,30 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                         "止盈", price, tp, entry_price, trend, limit_down)
                     continue
 
+                # 利润回撤止盈（分级）
+                retrace_key, retrace_signal = self._check_retracement_stop(
+                    code, name, price, entry_price, trend, limit_down)
+                if retrace_signal:
+                    self._handle_stop_signal(**retrace_signal)
+                    continue
+
             # === 买入后盯盘（每50轮~10分钟推送一次状态） ===
             watch = self._bought_watch.setdefault(code, {
                 "entry_price": entry_price,
                 "last_alert_scan": 0,
                 "status": "watching",
                 "alert_count": 0,
+                "max_profit_pct": 0,
             })
             # 更新入场价（可能从DB恢复）
             if entry_price and not watch["entry_price"]:
                 watch["entry_price"] = entry_price
+
+            # 更新最高浮盈
+            if entry_price > 0:
+                cur_pct = (price - entry_price) / entry_price
+                if cur_pct > watch.get("max_profit_pct", 0):
+                    watch["max_profit_pct"] = cur_pct
 
             # 每50轮检查一次，或状态变化时立即推送
             scans_since = self._scan_count - watch["last_alert_scan"]
@@ -1413,41 +1491,23 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
     # ======================== 第一层：复盘推荐跟踪 ========================
 
     def _check_review_picks(self, prices: dict[str, float], market_ok: bool):
-        """复盘推荐盯盘 — 与信号同一逻辑：持续盯买入区间。"""
+        """复盘推荐盯盘 — 优先级：trade_signals 结构化买入区间 > MA 动态计算。"""
         monitor = self._get_review_monitor()
         if monitor is None:
             return
         if not monitor.is_loaded():
             monitor.load_picks()
 
-        # 第一轮：开盘参考（复盘 + 策略）
-        if self._scan_count == 1:
-            market_state = {}
-            idx = self._get_index_quote()
-            if idx:
-                _, _, ma20 = self._get_index_baseline()
-                market_state = {
-                    "index_price": idx["price"],
-                    "change_pct": idx["change_pct"],
-                    "ma20": ma20,
-                    "market_ok": market_ok,
-                }
-            sector_data = self._get_sector_data(prices)
+        # 加载 REVIEW 信号的结构化买入区间（策略管线入库的，优于 MA 动态计算）
+        review_zones = self._load_review_signal_zones()
 
-            # 复盘开盘参考
-            msg = monitor.build_opening_reference(prices, market_state, sector_data)
-            if msg:
-                self._alert(msg)
-
-            # 策略信号开盘参考
-            strategy_lines = self._build_strategy_opening(prices, sector_data)
-            if strategy_lines:
-                self._alert("📋 策略信号\n  " + "\n  ".join(strategy_lines))
-
-        # 每轮：检查买入区间（与 _check_signals 相同模式）
         for code in monitor.get_codes():
             price = prices.get(code)
             if price is None:
+                continue
+
+            # 如果 trade_signals 里已有同 code 的 REVIEW 信号，_check_signals 会处理，这里跳过
+            if code in review_zones:
                 continue
 
             buy_min, buy_max = monitor.get_buy_zone(code)
@@ -1484,35 +1544,138 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
 
             self._review_alert_state[code] = (price, in_zone)
 
-    @staticmethod
-    def _get_sector_data(prices: dict[str, float]) -> dict[str, float]:
-        """计算板块实时涨跌（从 stock_basic 取昨收，按行业分组取均值）。"""
+    # ------------------------------------------------------------------
+    # 结构化买入区间加载（优先于 MA 动态计算）
+    # ------------------------------------------------------------------
+
+    def _load_review_signal_zones(self) -> dict[str, tuple[float, float, float, float]]:
+        """从 trade_signals 加载 REVIEW 信号的结构化买入区间。
+        返回 {code: (buy_min, buy_max, sl, tp)}。
+        """
         try:
-            import sqlite3 as _sql
-            from collections import defaultdict
-            from system.config import settings
-            conn = _sql.connect(settings.DATABASE_PATH)
-            rows = conn.execute(
-                """SELECT stock_code, price as prev_close, industry
-                   FROM stock_basic
-                   WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)"""
+            rows = sqlite3.connect(self.db_path).execute(
+                """SELECT stock_code, buy_zone_min, buy_zone_max, stop_loss, take_profit
+                   FROM trade_signals
+                   WHERE trade_date=? AND signal_source='REVIEW' AND status='pending'""",
+                (self._trade_date,),
             ).fetchall()
-            conn.close()
-            code_ref = {r[0]: (r[1] or 0, r[2] or "") for r in rows}
-
-            sec_changes: dict[str, list[float]] = defaultdict(list)
-            for code, price in prices.items():
-                ref = code_ref.get(code)
-                if not ref or ref[0] <= 0:
-                    continue
-                prev_close, industry = ref
-                if not industry:
-                    continue
-                sec_changes[industry].append((price - prev_close) / prev_close * 100)
-
-            return {ind: round(sum(vals) / len(vals), 2) for ind, vals in sec_changes.items() if len(vals) >= 3}
+            return {
+                r[0]: (r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0)
+                for r in rows if r[1] and r[2]
+            }
         except Exception:
             return {}
+
+    # ------------------------------------------------------------------
+    # 开盘决策汇总（集合竞价后第一轮，替代之前的两个开盘参考）
+    # ------------------------------------------------------------------
+
+    def _send_opening_decision(self, prices: dict[str, float], market_ok: bool):
+        """集合竞价后推送一条汇总决策：持仓状态 + 买入区信号 + 待观察。"""
+        self._ensure_industry_cache()
+        idx = self._get_index_quote()
+        idx_price = idx["price"] if idx else 0
+        chg_pct = idx["change_pct"] if idx else 0
+        _, _, ma20 = self._get_index_baseline()
+        vs_ma20 = "MA20上方" if ma20 and idx_price >= ma20 else "MA20下方" if ma20 else ""
+        market_label = "⚠️大盘危险" if not market_ok else "正常"
+
+        header = f"📋 开盘决策 {self._trade_date}"
+        if idx_price:
+            header += f" | 上证 {idx_price:.2f} {chg_pct:+.2%} | {vs_ma20} | {market_label}"
+
+        lines = [header, ""]
+
+        # ━━━ 当前持仓 ━━━
+        if self.portfolio.positions:
+            lines.append("━━━ 当前持仓 ━━━")
+            for code, pos in self.portfolio.positions.items():
+                price = prices.get(code)
+                if price is None:
+                    continue
+                pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost else 0
+                pnl_emoji = "🟢" if pnl_pct > 2 else "🟡" if pnl_pct > -2 else "🔴"
+                is_today = " 🔒T+1" if pos.entry_date == self._trade_date else ""
+                # 检查是否触发止损/止盈
+                triggered = ""
+                if pos.stop_loss > 0 and price <= pos.stop_loss:
+                    triggered = " ⚠️触发止损"
+                elif pos.take_profit > 0 and price >= pos.take_profit:
+                    triggered = " ✅触发止盈"
+                lines.append(
+                    f"  {pnl_emoji} {code} {pos.stock_name} 成本{pos.avg_cost:.2f} "
+                    f"现价{price:.2f} {pnl_pct:+.1f}% | "
+                    f"止损{pos.stop_loss:.2f} 止盈{pos.take_profit:.2f}{is_today}{triggered}"
+                )
+            lines.append("")
+
+        # ━━━ 信号列表（来自 trade_signals）━━━
+        try:
+            signals = self.repo.get_pending_signals()
+        except Exception:
+            signals = []
+
+        buy_list = []    # 已在买入区
+        watch_list = []  # 未进入买入区
+
+        for s in signals:
+            code = s["stock_code"]
+            price = prices.get(code)
+            if price is None:
+                continue
+            buy_min = s.get("buy_zone_min") or 0
+            buy_max = s.get("buy_zone_max") or 0
+            if buy_min <= 0:
+                continue
+
+            in_zone = buy_min <= price <= buy_max
+            entry = (code, s.get("stock_name", code), price, buy_min, buy_max,
+                     s.get("stop_loss") or 0, s.get("take_profit") or 0,
+                     s.get("signal_source", ""), s.get("signal_score", 0))
+
+            if in_zone:
+                buy_list.append(entry)
+            else:
+                watch_list.append(entry)
+
+        if buy_list:
+            lines.append("━━━ 买入区信号 ━━━")
+            for code, name, price, buy_min, buy_max, sl, tp, source, score in buy_list:
+                src_tag = "复盘" if source == "REVIEW" else "AI"
+                lines.append(
+                    f"  🔴 {code} {name} 现价{price:.2f} "
+                    f"买入{buy_min:.2f}-{buy_max:.2f} | "
+                    f"止损{sl:.2f} 止盈{tp:.2f} | {src_tag} 评分{score:.0f}"
+                )
+            lines.append("")
+
+        if watch_list:
+            lines.append("━━━ 待观察（未进入买入区）━━━")
+            for code, name, price, buy_min, buy_max, sl, tp, source, score in watch_list:
+                src_tag = "复盘" if source == "REVIEW" else "AI"
+                status = "高于" if price > buy_max else "低于"
+                lines.append(
+                    f"  👀 {code} {name} 现价{price:.2f} "
+                    f"{status}买入区({buy_min:.2f}-{buy_max:.2f}) | {src_tag}"
+                )
+            lines.append("")
+
+        if not buy_list and not watch_list:
+            lines.append("━━━ 今日无待处理信号 ━━━")
+            lines.append("")
+
+        # ━━━ 板块集中度提示 ━━━
+        from collections import Counter
+        industries = []
+        for code, _, _, _, _, _, _, _, _ in buy_list + watch_list:
+            ind = self._industry_cache.get(code, "")
+            if ind:
+                industries.append(ind)
+        for ind, cnt in Counter(industries).items():
+            if cnt >= 3:
+                lines.append(f"⚠️ 板块集中度: {ind} {cnt} 只信号，注意分散风险")
+
+        self._alert("\n".join(lines))
 
     def _update_sector_trends(self):
         """用当前全市场快照更新板块趋势历史（用于买卖信号时附带板块走势）。"""
@@ -1569,61 +1732,6 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
         direction = "走强" if cumulative > 0 else "走弱"
         arrow = "↑" if cumulative > 0 else "↓"
         return f" 板块{industry} {direction} {arrow}{abs(cumulative):.1f}%"
-
-    def _build_strategy_opening(self, prices: dict[str, float],
-                                 sector_data: dict[str, float]) -> list[str]:
-        """构建策略信号的开盘参考。"""
-        try:
-            signals = self.repo.get_pending_signals()
-        except Exception:
-            return []
-        if not signals:
-            return []
-
-        # 批量加载 industry（避免 N+1）
-        industry_map: dict[str, str] = {}
-        try:
-            codes = [s["stock_code"] for s in signals]
-            placeholders = ",".join("?" for _ in codes)
-            conn = sqlite3.connect(self.db_path)
-            rows = conn.execute(
-                f"""SELECT stock_code, industry FROM stock_basic
-                    WHERE stock_code IN ({placeholders})
-                    AND trade_date=(SELECT MAX(trade_date) FROM stock_basic)""",
-                codes,
-            ).fetchall()
-            conn.close()
-            industry_map = {r[0]: (r[1] or "") for r in rows}
-        except Exception:
-            pass
-
-        lines = []
-        for s in signals:
-            code = s["stock_code"]
-            price = prices.get(code)
-            if price is None:
-                continue
-            name = s.get("stock_name", code)
-            buy_min = s.get("buy_zone_min") or 0
-            buy_max = s.get("buy_zone_max") or 0
-            sl = s.get("stop_loss") or 0
-            tp = s.get("take_profit") or 0
-            status = "在买入区" if buy_min <= price <= buy_max else ("高于买入区" if price > buy_max else "低于买入区")
-
-            industry = industry_map.get(code, "")
-            sector_str = f"板块{sector_data[industry]:+.1f}%" if industry and industry in sector_data else ""
-
-            line = f"{code} {name} 现价{price:.2f} | {status}"
-            if buy_min > 0:
-                line += f" | 买入{buy_min:.2f}-{buy_max:.2f}"
-            if sl > 0:
-                line += f" | 止损{sl:.2f}"
-            if tp > 0:
-                line += f" | 目标{tp:.2f}"
-            if sector_str:
-                line += f" | {sector_str}"
-            lines.append(line)
-        return lines
 
     def _get_review_monitor(self):
         if self._review_monitor is None:

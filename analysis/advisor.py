@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
 
 from system.config.prompts.ai_advisor import AI_ADVISOR_PROMPT
-from analysis.signals import StockProfile, OrderSignal, SignalType, SignalSource, HoldingInfo, AccountSummary
+from analysis.signals import StockProfile, OrderSignal, SignalType, SignalSource, HoldingInfo, AccountSummary, ReviewContext
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("advisor")
@@ -101,6 +101,7 @@ class AIAdvisor:
         trade_date: Optional[str] = None,
         holdings: Optional[List[HoldingInfo]] = None,
         account_summaries: Optional[List[AccountSummary]] = None,
+        review_context: Optional[ReviewContext] = None,
     ) -> List[OrderSignal]:
         """
         分析候选股票画像，返回 OrderSignal 列表。
@@ -119,7 +120,7 @@ class AIAdvisor:
             logger.error("没有可用 AI 分析器，无法分析")
             return []
 
-        prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries)
+        prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries, review_context)
         self._save_prompt(prompt, trade_date)
 
         # 并行调用各个模型
@@ -160,9 +161,13 @@ class AIAdvisor:
         trade_date: Optional[str] = None,
         holdings: Optional[List[HoldingInfo]] = None,
         account_summaries: Optional[List[AccountSummary]] = None,
+        review_context: Optional[ReviewContext] = None,
     ) -> str:
         """使用 StockProfile.to_text() 生成每只股票的完整画像文本。"""
         header_date = f"交易日期: {trade_date}" if trade_date else ""
+
+        # 复盘上下文
+        review_text = review_context.to_text() if review_context else ""
 
         # 持仓数据
         holdings_text = AIAdvisor._format_holdings(holdings, account_summaries)
@@ -181,6 +186,7 @@ class AIAdvisor:
         candidates_text = "\n".join(profile_texts)
 
         prompt = AI_ADVISOR_PROMPT.format(
+            review_context=review_text,
             holdings_data=holdings_text,
             candidates_data=candidates_text,
         )

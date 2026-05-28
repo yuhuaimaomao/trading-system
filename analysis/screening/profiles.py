@@ -514,4 +514,21 @@ class ProfileBuilder:
                     "date": r["ctime"][:10] if r["ctime"] else "",
                 })
 
+        # 3. 炸板池：今日炸板未回封的股票
+        zhapa_rows = conn.execute(
+            f"""SELECT stock_code FROM limit_pool
+            WHERE trade_date=? AND pool_type='炸板'
+              AND stock_code IN ({placeholders})""",
+            [trade_date] + codes,
+        ).fetchall()
+        zhapa_codes = {r[0] for r in zhapa_rows}
+        for code in zhapa_codes:
+            result.setdefault(code, []).append({
+                "type": "炸板未回封",
+                "level": 2,
+                "risk_type": "炸板",
+                "title": "今日触及涨停但未封板，高位抛压重，需区分试盘还是出货",
+                "date": trade_date,
+            })
+
         return result

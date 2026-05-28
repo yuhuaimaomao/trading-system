@@ -17,7 +17,7 @@ from analysis.screening.trend import TrendScreener
 from analysis.screening.breadth import MarketBreadth
 from analysis.screening.profiles import ProfileBuilder
 from analysis.advisor import AIAdvisor
-from analysis.signals import StockScore, StockProfile, OrderSignal, HoldingInfo, AccountSummary
+from analysis.signals import StockScore, StockProfile, OrderSignal, HoldingInfo, AccountSummary, ReviewContext, SignalType, SignalSource
 from data.repo import TradeRepository
 from system.utils.logger import get_system_logger
 
@@ -52,6 +52,9 @@ class StrategyPipeline:
             logger.info(f"当前持仓: {len(holdings)} 只 "
                         f"(模拟盘{sum(1 for h in holdings if h.account=='paper')}只 "
                         f"实盘{sum(1 for h in holdings if h.account=='real')}只)")
+
+        # 步骤 0.8: 加载复盘上下文
+        review_ctx = self._load_review_context(trade_date)
 
         # 步骤 1: 趋势筛选（传入大盘状态）
         candidates = self._screen(trade_date, market_state)
@@ -91,7 +94,18 @@ class StrategyPipeline:
                         f"标签:{','.join(p.tags) if p.tags else '无'}")
 
         # 步骤 3: AI 分析
-        signals = self._analyze(profiles, trade_date, holdings, account_summaries)
+        signals = self._analyze(profiles, trade_date, holdings, account_summaries, review_ctx)
+
+        # 步骤 3.5: 复盘趋势精选 → 结构化信号（与 AI 信号合并，统一盯盘）
+        if review_ctx and review_ctx.review_stocks_raw:
+            review_signals = self._build_review_signals(
+                review_ctx.review_stocks_raw, trade_date)
+            # 去重：复盘信号中与 AI 信号重复的股票跳过
+            ai_codes = {s.stock_code for s in signals}
+            new_review = [rs for rs in review_signals if rs.stock_code not in ai_codes]
+            signals = signals + new_review
+            logger.info(f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)")
+
         if not signals:
             logger.warning("AI 未生成任何买入信号，管线结束")
             return []
@@ -313,6 +327,139 @@ class StrategyPipeline:
         return holdings, summaries
 
     # ------------------------------------------------------------------
+    # 步骤 0.8: 加载复盘上下文
+    # ------------------------------------------------------------------
+
+    def _load_review_context(self, trade_date: str) -> Optional[ReviewContext]:
+        """解析复盘报告，提取策略管线需要的上下文。"""
+        import json as _json
+        from pathlib import Path
+        from system.config.settings import STORAGE_PATH
+
+        report_dir = Path(STORAGE_PATH) / "reports"
+        pattern = f"review_reports_{trade_date}_*.txt"
+        files = sorted(report_dir.glob(pattern))
+        if not files:
+            logger.info(f"未找到复盘报告: {pattern}")
+            return None
+
+        report_path = files[0]
+        logger.info(f"加载复盘报告: {report_path.name}")
+        text = report_path.read_text(encoding="utf-8")
+
+        ctx = ReviewContext(trade_date=trade_date)
+
+        # 提取各节
+        ctx.sentiment_cycle = self._extract_report_section(text, "三", "四")
+
+        section_4 = self._extract_report_section(text, "四", "五")
+        if section_4:
+            ctx.main_lines = self._extract_sub_section(section_4, "绝对主线")
+            ctx.sub_lines = self._extract_sub_section(section_4, "次线")
+            ctx.retreating_sectors = self._extract_sub_section(section_4, "退潮方向")
+
+        ctx.outlook = self._extract_report_section(text, "五", "六")
+        ctx.monitor_conditions = self._extract_report_section(text, "八", "九")
+
+        # 第十节: 解析仓位数字
+        section_10 = self._extract_report_section(text, "十", None)
+        if section_10:
+            import re
+            cap_m = re.search(r'仓位上限[：:]?\s*(\d+)%', section_10)
+            if cap_m:
+                ctx.position_cap = int(cap_m.group(1)) / 100
+            sug_m = re.search(r'建议仓位[：:]?\s*(\d+)%', section_10)
+            if sug_m:
+                ctx.suggested_position = int(sug_m.group(1)) / 100
+            attack_m = re.search(r'主攻方向[：:]?\s*(.+?)(?:\n|$)', section_10)
+            if attack_m:
+                ctx.main_attack = attack_m.group(1).strip()
+            avoid_m = re.search(r'回避方向[：:]?\s*(.+?)(?:\n|$)', section_10)
+            if avoid_m:
+                ctx.avoid_direction = avoid_m.group(1).strip()
+
+        # 第七节: 从 STOCKS JSON 提取趋势精选 codes + 结构化数据
+        ctx.review_picks, ctx.review_stocks_raw = self._extract_review_picks(text, with_raw=True)
+
+        logger.info(
+            f"复盘上下文提取完成: 情绪={ctx.sentiment_cycle[:30] if ctx.sentiment_cycle else '无'}..., "
+            f"精选票={len(ctx.review_picks)}只, 仓位={ctx.suggested_position:.0%}"
+        )
+        return ctx
+
+    @staticmethod
+    def _extract_report_section(text: str, section_num: str, next_num: Optional[str]) -> str:
+        """提取复盘报告中两个节标题之间的内容。"""
+        import re
+        # 节标题: 行首 emoji + 空格 + 中文数字 + 、
+        start_pattern = re.compile(
+            rf'^[^\x00-\x7F].*?{re.escape(section_num)}、', re.MULTILINE
+        )
+        start_m = start_pattern.search(text)
+        if not start_m:
+            return ""
+        content_start = start_m.end()
+        nl = text.find("\n", content_start)
+        if nl > 0:
+            content_start = nl + 1
+
+        if next_num:
+            next_pattern = re.compile(
+                rf'^[^\x00-\x7F].*?{re.escape(next_num)}、', re.MULTILINE
+            )
+            next_m = next_pattern.search(text, content_start)
+            content_end = next_m.start() if next_m else len(text)
+        else:
+            stocks_m = re.search(r"<<<STOCKS>>>", text[content_start:])
+            content_end = content_start + stocks_m.start() if stocks_m else len(text)
+
+        return text[content_start:content_end].strip()
+
+    @staticmethod
+    def _extract_sub_section(text: str, keyword: str) -> str:
+        """从第四节中提取子节（绝对主线/次线/退潮方向）。"""
+        import re
+        pattern = rf'•\s*{keyword}[：:]?\s*(.+)'
+        m = re.search(pattern, text)
+        if not m:
+            return ""
+        start = m.start()
+        rest = text[m.end():]
+        next_bullet = re.search(r"\n•\s", rest)
+        end = m.end() + next_bullet.start() if next_bullet else len(text)
+        return text[start:end].strip()
+
+    @staticmethod
+    def _extract_review_picks(text: str, with_raw: bool = False):
+        """从 STOCKS JSON 块提取复盘推荐的全部股票（去重，不限角色）。
+        with_raw=True 时返回 (codes, raw_dicts) 元组。
+        """
+        import json as _json
+        import re
+        stocks_m = re.search(
+            r"<<<STOCKS>>>\s*(\{.*?\})\s*<<<END>>>", text, re.DOTALL
+        )
+        if not stocks_m:
+            return ([], []) if with_raw else []
+        try:
+            data = _json.loads(stocks_m.group(1))
+            codes = []
+            seen = set()
+            raw_list = []
+            for s in data.get("stocks", []):
+                code = s.get("code", "")
+                if code and code not in seen:
+                    codes.append(code)
+                    seen.add(code)
+                    if with_raw:
+                        raw_list.append(s)
+            if with_raw:
+                return codes, raw_list
+            return codes
+        except _json.JSONDecodeError:
+            return ([], []) if with_raw else []
+
+    # ------------------------------------------------------------------
     # 步骤 1: 趋势筛选
     # ------------------------------------------------------------------
 
@@ -396,6 +543,52 @@ class StrategyPipeline:
         return candidates, reasons
 
     # ------------------------------------------------------------------
+    # 复盘趋势精选 → OrderSignal
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_review_signals(raw_stocks: list[dict], trade_date: str) -> list[OrderSignal]:
+        """将复盘 STOCKS JSON 中的全部推荐票（龙头/中军/补涨/趋势票）转为 OrderSignal。"""
+        import re
+        signals = []
+        for s in raw_stocks:
+            code = s.get("code", "")
+            if not code:
+                continue
+            name = s.get("name", "")
+            sl = s.get("stop_loss", 0) or 0
+            tp = s.get("target", 0) or 0
+            buy_cond = s.get("buy_condition", "")
+
+            # 从买入条件文字提取参考价格
+            buy_min, buy_max = None, None
+            ma_match = re.search(r'约(\d+\.?\d*)', buy_cond)
+            if ma_match:
+                ref = float(ma_match.group(1))
+                buy_min = round(ref * 0.99, 2)
+                buy_max = round(ref * 1.02, 2)
+            elif sl > 0:
+                buy_min = round(sl * 1.02, 2)
+                buy_max = round(sl * 1.06, 2)
+
+            signals.append(OrderSignal(
+                stock_code=code,
+                stock_name=name,
+                signal_type=SignalType.BUY,
+                source=SignalSource.REVIEW,
+                buy_zone_min=buy_min,
+                buy_zone_max=buy_max,
+                stop_loss=sl if sl > 0 else None,
+                take_profit=tp if tp > 0 else None,
+                target_position=0.08,
+                signal_score=70,
+                strategy_name="review_trend_pick",
+                reason=f"复盘趋势精选: {buy_cond[:50]}",
+                sector_name=s.get("sector_name", ""),
+            ))
+        return signals
+
+    # ------------------------------------------------------------------
     # 步骤 2: 画像富化
     # ------------------------------------------------------------------
 
@@ -410,13 +603,15 @@ class StrategyPipeline:
 
     def _analyze(self, profiles: list[StockProfile], trade_date: str,
                  holdings: list[HoldingInfo] = None,
-                 summaries: list[AccountSummary] = None) -> list[OrderSignal]:
+                 summaries: list[AccountSummary] = None,
+                 review_ctx: Optional[ReviewContext] = None) -> list[OrderSignal]:
         # 千问优先
         advisor = AIAdvisor(model="qwen")
         if advisor._analyzers:
             try:
                 signals = advisor.analyze(profiles, trade_date=trade_date,
-                                          holdings=holdings, account_summaries=summaries)
+                                          holdings=holdings, account_summaries=summaries,
+                                          review_context=review_ctx)
                 if signals:
                     logger.info(f"千问分析: {len(signals)} 个买入信号")
                     return signals
@@ -430,7 +625,8 @@ class StrategyPipeline:
             logger.info("fallback 到 DeepSeek 分析")
             try:
                 signals = ds_advisor.analyze(profiles, trade_date=trade_date,
-                                             holdings=holdings, account_summaries=summaries)
+                                             holdings=holdings, account_summaries=summaries,
+                                             review_context=review_ctx)
                 if signals:
                     logger.info(f"DeepSeek 分析: {len(signals)} 个买入信号")
                     return signals
@@ -475,14 +671,15 @@ class StrategyPipeline:
         now = datetime.now().isoformat()
         saved = 0
         for s in signals:
-            if not self._validate_signal(s):
-                logger.warning(f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过")
-                continue
+            if s.source != SignalSource.REVIEW:
+                if not self._validate_signal(s):
+                    logger.warning(f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过")
+                    continue
             signal_dict = {
                 "trade_date": trade_date,
                 "created_at": now,
                 "signal_type": "BUY",
-                "signal_source": "AI_ENHANCED",
+                "signal_source": s.source.name,
                 "stock_code": s.stock_code,
                 "stock_name": s.stock_name,
                 "buy_zone_min": s.buy_zone_min,

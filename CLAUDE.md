@@ -10,23 +10,29 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 
 ## 当前状态
 
-**交易管线全部完成**（2026-05-28），等盘中实跑验证。
+**交易管线全部完成**（2026-05-28），cron 全自动化，等盘中实跑验证。
 
 ### 已完成模块
 
 **盘前管线：**
 - 趋势筛选 → 画像富化 → AI（千问+持仓审查）→ 信号入库
 - AI 注入实盘+模拟盘持仓，审查止损/止盈/持有周期，交叉分析板块集中度
+- 复盘上下文注入 AI prompt（市场情绪周期/主线/次线/退潮/情景推演/仓位约束）
+- 炸板未回封检测（limit_pool 查 pool_type='炸板'），自动添加风险标签，AI 区分试盘 vs 出货
+- 复盘趋势精选结构化输出（buy_zone/sl/tp），合并到 trade_signals 统一盯盘
 - 千问优先，异常时 fallback DeepSeek
 
 **盯盘进程（Watcher）：**
 - 四层扫描：大盘状态 / 持仓风控+信号触发+复盘跟踪 / 板块热度 / 异动检测
+- 集合竞价后推送一条汇总「📋 开盘决策」（持仓+买入区+待观察+集中度预警），替代之前两条分开的参考消息
 - 智能市场模式识别：5 种模式（normal/v_reversal/dead_cat/one_sided/panic）分层决策
 - 止损提醒循环：触发→5分钟→再提醒→用户回复"成交 CODE"/"再等 N CODE"
+- 利润回撤止盈：三级分级保护（≥15%浮盈→保留60%, ≥10%→保留55%, ≥5%→保留50%），跟踪 _bought_watch.max_profit_pct
 - 涨跌停处理：涨停买不了/跌停卖不了，下一轮继续监控
 - 智能仓位计算：根据市场模式+板块趋势+买入区位置动态计算 0-20000 元
 - 买入上下文分析：布林带位置、均线偏离、回踩支撑检测
 - 买入后盯盘：健康/观察/被套/补仓机会 四类状态，每~10分钟推送
+- 复盘票买入区间优先用 trade_signals 结构化数据（来自策略管线），其次 fallback MA 动态计算
 - 风控引擎集成：黑名单+市场环境+集中度+时间止损
 - AI 大盘波动分析：急涨急跌≥0.5% 时自动调用分钟级技术指标研判
 
@@ -58,10 +64,11 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 
 ### 待完成
 
-- 盘中实跑验证（cron 部署 + 真实行情）
+- 盘中实跑验证（cron 已部署，等真实行情数据到位后实测）
 - 板块热度/异动检测阈值调优（骨架已写好）
 - QMT 策略交易权限（等券商开通）
 - holdings_review AI 输出落库和应用（目前 AI 输出但未持久化）
+- 收盘双线比对自动化（目前手动 `python main.py compare`）
 
 ## 架构总览
 
@@ -74,27 +81,32 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 
   ┌─ 交易管线 ────────────────────────────────────────────────────────┐
   │                                                                   │
-  │  9:00 MorningBrief             早盘简报（AI 盘前校准）             │
-  │         ↓                                                         │
-  │  9:02 StrategyPipeline.run()                                      │
+  │  T-1 18:00 cron: review → strategy（自动串联）                     │
   │         │                                                         │
   │         ├─ MarketBreadth         市场宽度（涨跌家数/涨跌停/指数）   │
   │         ├─ _load_holdings()      加载持仓（实盘+模拟盘独立统计）    │
+  │         ├─ _load_review_context()加载复盘上下文（情绪/主线/精选）   │
   │         ├─ TrendScreener.screen() 趋势筛选（强+稳健）              │
-  │         ├─ ProfileBuilder.build() 画像富化（60天历史+指标+板块）   │
-  │         └─ AIAdvisor.analyze()    AI分析（候选+持仓审查）          │
+  │         ├─ ProfileBuilder.build() 画像富化（60天历史+指标+板块+炸板）│
+  │         ├─ AIAdvisor.analyze()    AI分析（候选+持仓审查+复盘校准）  │
+  │         └─ _build_review_signals()复盘精选→结构化OrderSignal       │
   │               ↓                                                   │
-  │         trade_signals (status='pending')                          │
-  │               ↓                                                   │
-  │  9:25 Watcher.run()             盘中盯盘直到 15:00                 │
+  │         trade_signals (status='pending', source=AI_ENHANCED/REVIEW)│
+  │         Telegram 推送「📋 今日交易信号」                           │
+  │                                                                   │
+  │  T 9:00 cron: morning             早盘简报（AI 盘前校准）          │
+  │                                                                   │
+  │  T 9:24 cron: monitor → 等到 9:25 → 盯盘直到 15:00                │
+  │         │                                                        │
+  │         ├─ [第1轮 9:25] _send_opening_decision() 开盘决策汇总      │
   │         │                                                        │
   │         ├─ [每轮 60s]                                            │
   │         │   ├─ _check_market_state()    智能模式识别+分层决策      │
   │         │   ├─ _check_index_technicals() 分钟级MACD/RSI/KDJ拐点   │
-  │         │   ├─ _check_positions()       止损/止盈/移动止盈/时间止损│
+  │         │   ├─ _check_positions()       止损/止盈/移动止盈/回撤止盈│
   │         │   ├─ _check_signals()         pending信号→买入区→通知   │
   │         │   ├─ _check_bought_signals()  买入后盯盘（状态+补仓）    │
-  │         │   ├─ _check_review_picks()    复盘推荐跟踪              │
+  │         │   ├─ _check_review_picks()    复盘推荐跟踪（去重后）     │
   │         │   ├─ _check_sl_reminders()    止损提醒循环（5分钟）      │
   │         │   └─ _check_replies()         Telegram用户回复处理       │
   │         │                                                        │
@@ -106,7 +118,9 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
   │         ↓                                                         │
   │  用户回复成交 → ManualExecutor → trade_orders (account=real)       │
   │         ↓                                                         │
-  │  15:00 OrderComparator         收盘双线比对（实盘 vs 模拟盘）       │
+  │  15:00 收盘: pending→expired                                       │
+  │         ↓                                                         │
+  │  15:00 OrderComparator (手动)     收盘双线比对（实盘 vs 模拟盘）    │
   └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -116,15 +130,15 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 trading-system/
 ├── main.py                     # CLI 入口，12 个命令
 ├── analysis/                   # 分析层
-│   ├── advisor.py              #   AI 顾问：双模型并行分析 + 持仓格式化
-│   ├── strategy.py             #   盘前管线：筛选→AI→入库 + 持仓加载
+│   ├── advisor.py              #   AI 顾问：双模型并行分析 + 持仓格式化 + 复盘上下文注入
+│   ├── strategy.py             #   盘前管线：筛选→AI→入库 + 持仓加载 + 复盘上下文 + 复盘精选结构化
 │   ├── morning.py              #   盘前简报：AI 盘前校准
 │   ├── tracker.py              #   推荐追踪：Excel+DB，日收益计算
-│   ├── signals.py              #   StockScore/StockProfile/OrderSignal/HoldingInfo/AccountSummary
+│   ├── signals.py              #   StockScore/StockProfile/OrderSignal/HoldingInfo/AccountSummary/ReviewContext
 │   ├── screening/
 │   │   ├── trend.py            #     趋势筛选：强趋势(MA5)+稳健(MA20)
 │   │   ├── breadth.py          #     市场宽度：涨跌家数+大盘状态
-│   │   ├── profiles.py         #     画像富化：60天历史+板块+RPS+指标+估值
+│   │   ├── profiles.py         #     画像富化：60天历史+板块+RPS+指标+估值+炸板检测
 │   │   ├── factors.py          #     19个因子 + 硬关卡 + 场景匹配
 │   │   └── indicators.py       #     技术指标：MACD/RSI/KDJ/布林带/ATR/背离/交叉
 │   ├── review/                 #   盘后复盘（analyzer/formatter/service/stats）
@@ -185,21 +199,21 @@ trading-system/
 ## CLI 命令
 
 ```bash
-# 盘后
-python main.py review              # 18:00 — 采集→AI→报告→Telegram，AI 成功后自动调 strategy
+# 盘后（T-1 日 18:00 cron 自动执行）
+python main.py review              # 采集→AI报告→Telegram，成功后自动调 strategy
 python main.py review --analyze-only  # 同上，跳过采集（成功也会触发 strategy）
+python main.py strategy            # 策略管线（通常由 review 自动调用，也可单独跑）
 
 # 盘前
-python main.py morning             #  9:00 — 早盘简报
-python main.py strategy            #  9:02 — 策略管线（筛选→画像→AI→信号入库）
+python main.py morning             #  9:00 cron — 早盘简报
 
 # 盘中
-python main.py monitor             #  9:25 — 盯盘进程（自管理生命周期）
-python main.py listen              #  9:00 — Telegram 消息监听（cron 管理生命周期）
-python main.py collect --module news  # 盘中电报（每5分钟）
+python main.py monitor             #  9:24 cron → 9:25 启动盯盘，自管理生命周期到 15:00
+python main.py listen              #  Telegram 消息监听（cron 管理生命周期）
+python main.py collect --module news  # 盘中电报（每5分钟 cron）
 
-# 盘后
-python main.py compare             # 15:00 — 双线比对
+# 盘后（手动）
+python main.py compare             # 收盘双线比对
 python main.py track               # 股票追踪统计
 
 # 手动
@@ -228,6 +242,11 @@ StrategyPipeline.run(trade_date)
   │   ├─ 输出: [HoldingInfo × N] 每只票的成本/现价/盈亏/止损/止盈/持有天数/均线/T+1锁定
   │   └─ 输出: [AccountSummary] 实盘+模拟盘的各自总资产/现金/仓位/当日盈亏
   │
+  ├─ 步骤0.8: _load_review_context()
+  │   ├─ 解析复盘报告 markdown（提取三/四/五/七/八/十节）
+  │   ├─ 解析 STOCKS JSON 块（<<<STOCKS>>>...<<<END>>>），含 buy_condition/stop_loss/target/role
+  │   └─ 输出: ReviewContext（sentiment_cycle/main_lines/outlook/review_picks/monitor_conditions/仓位建议）
+  │
   ├─ 步骤1: TrendScreener.screen()
   │   ├─ 数据源: stock_basic 表
   │   ├─ 过滤: 非ST, 非688, 市值>50亿, 排除白酒/银行/保险/证券, 涨跌停排除
@@ -240,29 +259,39 @@ StrategyPipeline.run(trade_date)
   │   └─ 加载昨日 status='expired' 的 AI 信号，构建 StockScore（标签="昨日遗留"）
   │
   ├─ 步骤2: ProfileBuilder.build()
-  │   └─ 每只候选富化为 StockProfile: 60天OHLCV+主力+板块参照+RPS+估值+电报+技术指标
+  │   ├─ 60天OHLCV+主力+板块参照+RPS+估值+电报+技术指标
+  │   ├─ 炸板检测: 查 limit_pool WHERE pool_type='炸板' → 添加风险标签 type="炸板未回封"
+  │   └─ 富化为 StockProfile
   │
-  └─ 步骤3: AIAdvisor.analyze()
-      ├─ _format_holdings() → holdings_text（注入持仓上下文）
-      ├─ 候选池 to_text() → candidates_text
-      ├─ prompt = AI_ADVISOR_PROMPT.format(holdings_data, candidates_data)
-      ├─ 千问(qwen3.6-plus)分析 → JSON:
-      │   ├─ stocks: [{action, buy_zone, stop_loss, take_profit, reason, expected_trend...}]
-      │   └─ holdings_review: [{action, new_stop_loss, new_take_profit, tomorrow_outlook...}]
-      ├─ 千问异常 → fallback DeepSeek(deepseek-chat)
-      ├─ trend_mode 不从 AI 取，从筛选结果直接回填
-      └─ 只保留 action='buy' 的结果
-
-→ [OrderSignal × N] → TradeRepository.insert_signal()
-  ├─ status='pending', account='paper'
-  └─ Telegram 推送摘要
+  ├─ 步骤3: AIAdvisor.analyze()
+  │   ├─ _format_holdings() → holdings_text（注入持仓上下文）
+  │   ├─ review_context.to_text() → review_text（注入复盘上下文到 prompt）
+  │   ├─ 候选池 to_text() → candidates_text
+  │   ├─ prompt = AI_ADVISOR_PROMPT.format(review_context, holdings_data, candidates_data)
+  │   ├─ 千问(qwen3.6-plus)分析 → JSON:
+  │   │   ├─ stocks: [{action, buy_zone, stop_loss, take_profit, reason, expected_trend...}]
+  │   │   └─ holdings_review: [{action, new_stop_loss, new_take_profit, tomorrow_outlook...}]
+  │   ├─ 千问异常 → fallback DeepSeek(deepseek-chat)
+  │   ├─ trend_mode 不从 AI 取，从筛选结果直接回填
+  │   └─ 只保留 action='buy' 的结果
+  │
+  ├─ 步骤3.5: _build_review_signals()
+  │   ├─ 从 ReviewContext.review_stocks_raw 提取所有角色（主线龙头/中军/补涨/次线龙头/趋势票）
+  │   ├─ 解析 buy_condition 文本提取参考价：正则 r'约(\d+\.?\d*)' 支持区间格式"约8.2-8.4元"
+  │   └─ 生成 OrderSignal（source=REVIEW, buy_zone_min/max, stop_loss, take_profit）
+  │
+  └─ _save_signals() → TradeRepository.insert_signal()
+      ├─ AI_ENHANCED 信号: _validate_signal() 过安全网（re-check 硬关卡）
+      ├─ REVIEW 信号: 跳过安全网（来自复盘，已人工筛选）
+      └─ status='pending', account='paper'
+→ Telegram 推送「📋 今日交易信号」摘要
 ```
 
 ### 盯盘（monitor 命令）— 详细
 
 ```
 Watcher.run()
-  ├─ 9:25 前等待
+  ├─ 9:25 前等待（cron 9:24 拉起，睡到 9:25）
   │
   ├─ 盘中循环（9:30-11:30, 13:00-15:00），每轮 60s
   │   │
@@ -270,7 +299,7 @@ Watcher.run()
   │   │   └─ 从 trade_orders 恢复持仓（按 stock_code 汇总买入）
   │   │
   │   ├─ [每轮] _get_watch_codes()
-  │   │   └─ 信号票 + 复盘票 + 持仓票（合并去重）
+  │   │   └─ pending 信号票 + 复盘票 + 持仓票（合并去重）
   │   │
   │   ├─ [每轮] _get_realtime_prices()
   │   │   ├─ QMT /quotes 批量获取（自动 .SH/.SZ 后缀）
@@ -282,6 +311,10 @@ Watcher.run()
   │   │
   │   ├─ [每3轮] _update_sector_trends()
   │   │   └─ 按行业分组计算日内涨跌均值 → _sector_trend_history
+  │   │
+  │   ├─ [第1轮] _send_opening_decision()
+  │   │   └─ 集合竞价后推送一条汇总：持仓状态+买入区信号+待观察+板块集中度预警
+  │   │     （替代之前分开的「📋复盘开盘参考」和「📋策略信号」两条消息）
   │   │
   │   ├─ [第一层 每轮] _check_market_state()
   │   │   ├─ _classify_market_pattern(): 五模式识别
@@ -303,6 +336,11 @@ Watcher.run()
   │   │   ├─ 止损触发 → _handle_stop_signal()
   │   │   ├─ 止盈触发 → _handle_stop_signal()
   │   │   ├─ 移动止盈触发 → _handle_stop_signal()
+  │   │   ├─ 利润回撤止盈 → _check_retracement_stop()
+  │   │   │   ├─ 最高浮盈≥15%: 保留60%利润（回撤40%触发）
+  │   │   │   ├─ 最高浮盈≥10%: 保留55%利润（回撤45%触发）
+  │   │   │   └─ 最高浮盈≥5%:  保留50%利润（回撤50%触发）
+  │   │   ├─ 更新 _bought_watch.max_profit_pct（即使T+1锁定也记录）
   │   │   └─ RiskEngine.check_positions() → 日内熔断+时间止损
   │   │
   │   ├─ [第一层 每轮] _handle_stop_signal()
@@ -312,7 +350,7 @@ Watcher.run()
   │   │   └─ 模拟盘自动执行: PaperTrader.close()
   │   │
   │   ├─ [第一层 每轮] _check_signals()
-  │   │   ├─ 遍历 pending 信号
+  │   │   ├─ 遍历 pending 信号（含 AI_ENHANCED 和 REVIEW）
   │   │   ├─ 涨停检查 → 跳过
   │   │   ├─ _calculate_position_size(): 智能仓位计算
   │   │   │   ├─ panic/one_sided/dead_cat → 0（不买）
@@ -327,6 +365,7 @@ Watcher.run()
   │   ├─ [第一层 每轮] _check_bought_signals()
   │   │   ├─ 查 trade_signals WHERE status='bought'
   │   │   ├─ 止损/止盈检查（T+1前不触发）
+  │   │   ├─ 利润回撤止盈检查（同 _check_positions 逻辑）
   │   │   ├─ _classify_holding_status(): 四类状态
   │   │   │   ├─ healthy: 盈利>2%
   │   │   │   ├─ watching: 小亏<2%
@@ -340,7 +379,10 @@ Watcher.run()
   │   │   └─ "成交 CODE" → 移除提醒
   │   │
   │   ├─ [第一层 每轮] _check_review_picks()
-  │   │   └─ 复盘推荐进入买入区间 → Telegram 通知
+  │   │   ├─ 优先用 _load_review_signal_zones() 从 trade_signals 取结构化买入区间
+  │   │   ├─ fallback: ReviewPickMonitor MA10/MA20 动态计算
+  │   │   ├─ 已在 trade_signals 中的 REVIEW 信号跳过（_check_signals 处理，防止重复）
+  │   │   └─ 进入买入区间 → Telegram 通知 + 模拟盘执行
   │   │
   │   ├─ [第二层 每50轮] _check_sector_heat()
   │   │   └─ 板块涨跌排名 + 持仓板块标记
@@ -569,6 +611,11 @@ calc_atr(highs, lows, closes, period=14)
 13. **智能仓位替代固定比例** — 不再所有票买 10%，而是根据市场模式（0-20000）+ 板块趋势（±20-40%）+ 买入区位置（±10-30%）动态计算
 14. **模拟盘费率对齐实际** — 佣金万 0.85 最低 5 元，印花税 0.1% 卖出单边征收
 15. **买入后盯盘不丢** — 买入后每 ~10 分钟推送持仓状态（健康/观察/被套/补仓机会），不再像以前买入就不管了
+16. **复盘上下文注入 AI** — 盘后复盘报告的结论（情绪周期/主线/次线/退潮/情景推演/仓位建议）注入次日策略管线的 AI prompt，AI 据此调整 confidence 和选股方向
+17. **复盘精选统一盯盘** — 所有复盘角色（主线龙头/中军/补涨/次线龙头/趋势票）统一转为结构化 OrderSignal（source=REVIEW），合并到 trade_signals，和 AI 信号用同一套 buy_zone/sl/tp 格式，Watcher 统一盯盘
+18. **利润回撤止盈分级** — 不是简单的"回撤 X% 就卖"，而是根据最高浮盈分三级：≥15%→保留60%，≥10%→保留55%，≥5%→保留50%。浮盈越大的票给更多回撤容忍空间
+19. **炸板区分试盘/出货** — 自动检测炸板未回封，添加风险标签。AI 根据量价和主力流向判断：缩量+主力未出逃→试盘（降 confidence 保留），放量+主力出逃→出货（直接 skip）
+20. **开盘决策替代开盘参考** — 集合竞价后推送一条汇总（持仓+买入区+待观察+集中度预警），替代之前两条分开的参考消息，减少噪音
 
 ## 注意事项 / 坑
 
@@ -585,6 +632,22 @@ calc_atr(highs, lows, closes, period=14)
 - 手动成交默认 account='real'，不再区分模拟盘/实盘。用户回复只需 `代码 股数 价格`
 - `parse_reply` 支持股票名称（2-4 中文字符），`handle_user_reply` 会自动查 `stock_basic` 转代码
 - cron 脚本日志路径格式: `storage/logs/<date>/tasks/cron_<task>.log`
+- **cron 完整调度**:
+  ```
+  18 0 * * 1-5  review     → 复盘+AI报告 → 成功则自动跑 strategy → 推送「📋今日交易信号」
+  0  9 * * 1-5  morning    → 早盘简报
+  */5 9-17 * * 1-5 collect --module news → 盘中电报
+  24 9 * * 1-5  monitor    → 盯盘进程（9:25开始扫描，9:25推送「📋开盘决策」）
+  0  9 * * 0   cleanup    → 周清理
+  ```
+- **Telegram 推送时间线**:
+  ```
+  T-1 18:00 ~ 18:30  📋 今日交易信号（策略管线输出）
+  T    9:00         早盘简报
+  T    9:25         📋 开盘决策（集合竞价后汇总：持仓+买入区+待观察+集中度）
+  T    9:30-15:00   盘中消息（🔴买入/⚠️止损/✅止盈/📊板块/🏭异动/📈技术拐点...）
+  T   15:00         盯盘结束
+  ```
 - `system/utils/dns_bypass.py` 绕过 Shadowrocket/Surge/Clash 的 DNS 劫持（patch `socket.getaddrinfo`，检测 198.18.x.x 假 IP 后通过 dig @8.8.8.8 解析真实 IP），`main.py` 和 `analysis/review/analyzer.py` 启动时自动安装
 - `system/utils/telegram.py` 的 `requests` 调用加了 `verify=False`，因为小火箭 HTTPS 解密（MITM）会导致证书验证失败
 - 板块上榜次数 `hot_days` 从 `sector_hot_history`（综合打分）取数，不再用原始表涨幅排名。复盘时先查历史再保存今日再 +1

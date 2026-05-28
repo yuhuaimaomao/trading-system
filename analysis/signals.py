@@ -42,6 +42,7 @@ class SignalSource(Enum):
     RULE = auto()         # 纯量化规则
     AI_ENHANCED = auto()  # AI 精选 + 规则
     RISK = auto()         # 风控触发
+    REVIEW = auto()       # 复盘趋势精选
 
 
 @dataclass
@@ -240,6 +241,60 @@ class AccountSummary:
     position_ratio: float
     daily_pnl: float
     position_count: int
+
+
+@dataclass
+class ReviewContext:
+    """复盘报告提取的上下文 — 注入策略管线 AI prompt"""
+    trade_date: str = ""
+    # 三、市场情绪周期
+    sentiment_cycle: str = ""
+    # 四、核心主线与资金暗流
+    main_lines: str = ""         # 绝对主线
+    sub_lines: str = ""           # 次线/轮动
+    retreating_sectors: str = ""  # 退潮方向
+    # 五、明日大局推演
+    outlook: str = ""
+    # 七、趋势交易者精选 codes + 结构化数据
+    review_picks: list[str] = field(default_factory=list)
+    review_stocks_raw: list = field(default_factory=list)  # STOCKS JSON 中趋势票的原始数据
+    # 八、早盘监控雷达
+    monitor_conditions: str = ""
+    # 十、仓位与策略
+    suggested_position: float = 0.0
+    position_cap: float = 0.0
+    main_attack: str = ""
+    avoid_direction: str = ""
+
+    def to_text(self) -> str:
+        """格式化给 AI 的上下文文本"""
+        parts = []
+        if self.sentiment_cycle:
+            parts.append(f"【复盘·市场情绪周期】\n{self.sentiment_cycle}")
+        if self.main_lines:
+            parts.append(f"【复盘·绝对主线】\n{self.main_lines}")
+        if self.sub_lines:
+            parts.append(f"【复盘·次线/轮动】\n{self.sub_lines}")
+        if self.retreating_sectors:
+            parts.append(f"【复盘·退潮方向】\n{self.retreating_sectors}")
+        if self.outlook:
+            parts.append(f"【复盘·明日大局推演】\n{self.outlook}")
+        if self.review_picks:
+            parts.append(f"【复盘·趋势精选参考】\n  复盘精选股票: {', '.join(self.review_picks)}\n  这些股票如出现在今日候选池中，可给予额外加分（趋势延续性好），但不强制推荐。")
+        if self.monitor_conditions:
+            parts.append(f"【复盘·早盘监控条件】\n{self.monitor_conditions}")
+        if self.main_attack or self.avoid_direction:
+            pos_parts = []
+            if self.suggested_position > 0:
+                pos_parts.append(f"建议仓位: {self.suggested_position:.0%}")
+            if self.position_cap > 0:
+                pos_parts.append(f"仓位上限: {self.position_cap:.0%}")
+            if self.main_attack:
+                pos_parts.append(f"主攻方向: {self.main_attack}")
+            if self.avoid_direction:
+                pos_parts.append(f"回避方向: {self.avoid_direction}")
+            parts.append(f"【复盘·仓位与策略】\n  {' | '.join(pos_parts)}")
+        return "\n\n".join(parts) if parts else ""
 
 
 @dataclass
