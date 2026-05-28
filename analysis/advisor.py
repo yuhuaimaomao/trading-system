@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
 
 from system.config.prompts.ai_advisor import AI_ADVISOR_PROMPT
-from analysis.signals import StockProfile, OrderSignal, SignalType, SignalSource, HoldingInfo, AccountSummary, ReviewContext
+from analysis.signals import StockProfile, OrderSignal, SignalType, SignalSource, HoldingInfo, AccountSummary, ReviewContext, HoldingReview
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("advisor")
@@ -102,9 +102,9 @@ class AIAdvisor:
         holdings: Optional[List[HoldingInfo]] = None,
         account_summaries: Optional[List[AccountSummary]] = None,
         review_context: Optional[ReviewContext] = None,
-    ) -> List[OrderSignal]:
+    ) -> tuple[List[OrderSignal], List[HoldingReview]]:
         """
-        分析候选股票画像，返回 OrderSignal 列表。
+        分析候选股票画像，返回 (OrderSignal 列表, 持仓审查列表)。
 
         流程：
         1. 将 StockProfile 列表格式化为 prompt（使用 to_text()）
@@ -114,20 +114,21 @@ class AIAdvisor:
         """
         if not candidates:
             logger.info("候选股票池为空，跳过分析")
-            return []
+            return [], []
 
         if not self._analyzers:
             logger.error("没有可用 AI 分析器，无法分析")
-            return []
+            return [], []
 
         prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries, review_context)
         self._save_prompt(prompt, trade_date)
 
         # 并行调用各个模型
-        raw_results: List[List[OrderSignal]] = []
+        raw_signals: List[List[OrderSignal]] = []
+        all_holdings_reviews: List[HoldingReview] = []
         with ThreadPoolExecutor(max_workers=len(self._analyzers)) as executor:
             future_map = {
-                executor.submit(self._call_and_parse, name, analyzer, prompt): name
+                executor.submit(self._call_and_parse, name, analyzer, prompt, trade_date): name
                 for name, analyzer in self._analyzers
             }
             for future in as_completed(future_map):
@@ -135,21 +136,25 @@ class AIAdvisor:
                 try:
                     result = future.result(timeout=620)
                     if result:
-                        raw_results.append(result)
-                        logger.info(f"{name} 分析完成: 生成 {len(result)} 个信号")
+                        signals, hr_list = result
+                        if signals:
+                            raw_signals.append(signals)
+                            logger.info(f"{name} 分析完成: 生成 {len(signals)} 个信号")
+                        if hr_list:
+                            all_holdings_reviews.extend(hr_list)
                     else:
                         logger.warning(f"{name} 分析结果为空")
                 except Exception as e:
                     logger.error(f"{name} 分析失败: {e}")
 
-        if not raw_results:
+        if not raw_signals:
             logger.error("所有模型分析均失败，返回空列表")
-            return []
+            return [], all_holdings_reviews
 
         # 单模型直接返回，多模型合并
-        if len(raw_results) == 1:
-            return raw_results[0]
-        return self._merge_results(*raw_results)
+        if len(raw_signals) == 1:
+            return raw_signals[0], all_holdings_reviews
+        return self._merge_results(*raw_signals), all_holdings_reviews
 
     # ------------------------------------------------------------------
     # Prompt 构建
@@ -251,6 +256,12 @@ class AIAdvisor:
                     detail_parts.append(f"日内最高 {h.highest_price:.2f}")
                 lines.append(f"    {' | '.join(detail_parts)}")
 
+                # 完整技术画像
+                if h.profile:
+                    lines.append("")
+                    lines.append(h.profile.to_text())
+                    lines.append("")
+
             lines.append("")
 
         return "\n".join(lines)
@@ -289,8 +300,9 @@ class AIAdvisor:
         name: str,
         analyzer: "AIAnalyzer",
         prompt: str,
-    ) -> Optional[List[OrderSignal]]:
-        """调用单个模型并解析结果。"""
+        trade_date: Optional[str] = None,
+    ) -> Optional[tuple[List[OrderSignal], List[HoldingReview]]]:
+        """调用单个模型并解析结果，返回 (信号列表, 持仓审查列表)。"""
         system_prompt = (
             "你是专业的A股趋势交易分析师。请严格按要求的JSON格式输出，"
             "只输出JSON（用```json包裹），不要额外解释。"
@@ -304,14 +316,66 @@ class AIAdvisor:
             if not text:
                 logger.warning(f"{name} 返回空内容")
                 return None
-            return AIAdvisor._parse_json_response(text, name)
+
+            signals, holdings_review = AIAdvisor._parse_json_response(text, name)
+
+            # 保存 AI 原始返回结果到 reports
+            AIAdvisor._save_response(text, name, trade_date, holdings_review)
+
+            if not signals:
+                logger.warning(f"{name} 无有效信号")
+                return None
+
+            return signals, holdings_review
         except Exception as e:
             logger.error(f"{name} 调用异常: {e}")
             return None
 
     @staticmethod
-    def _parse_json_response(text: str, model_name: str) -> Optional[List[OrderSignal]]:
-        """从 AI 回复中提取 JSON 并解析为 OrderSignal 列表。"""
+    def _save_response(text: str, model_name: str, trade_date: Optional[str] = None,
+                       holdings_review: Optional[List[HoldingReview]] = None):
+        """保存 AI 原始返回结果到 reports 文件夹"""
+        from pathlib import Path
+        from datetime import datetime
+        from system.config.settings import STORAGE_PATH
+
+        date_str = trade_date or datetime.now().strftime("%Y-%m-%d")
+        report_dir = Path(STORAGE_PATH) / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%H%M%S")
+
+        # 保存原始文本
+        report_path = report_dir / f"strategy_ai_response_{date_str}_{model_name}_{ts}.txt"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(f"模型: {model_name}\n")
+            f.write(f"日期: {date_str}\n")
+            f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(text)
+        logger.info(f"AI 原始返回已落盘: {report_path}")
+
+        # 保存持仓审查 JSON
+        if holdings_review:
+            hr_path = report_dir / f"strategy_holdings_review_{date_str}_{model_name}_{ts}.json"
+            hr_data = []
+            for hr in holdings_review:
+                hr_data.append({
+                    "stock_code": hr.stock_code,
+                    "account": hr.account,
+                    "action": hr.action,
+                    "new_stop_loss": hr.new_stop_loss,
+                    "new_take_profit": hr.new_take_profit,
+                    "expected_holding_days": hr.expected_holding_days,
+                    "tomorrow_outlook": hr.tomorrow_outlook,
+                    "reason": hr.reason,
+                })
+            with open(hr_path, "w", encoding="utf-8") as f:
+                json.dump(hr_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"持仓审查已落盘: {hr_path}")
+
+    @staticmethod
+    def _parse_json_response(text: str, model_name: str) -> tuple[List[OrderSignal], List[HoldingReview]]:
+        """从 AI 回复中提取 JSON 并解析为 OrderSignal 列表和持仓审查。"""
         # 提取 ```json {...} ``` 包裹的 JSON
         json_match = re.search(
             r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL
@@ -329,15 +393,13 @@ class AIAdvisor:
                     data = json.loads(json_str[start : end + 1])
                 except json.JSONDecodeError as e:
                     logger.error(f"{model_name} JSON 解析失败: {e}")
-                    return None
+                    return [], []
             else:
                 logger.error(f"{model_name} 响应中未找到 JSON: {text[:200]}")
-                return None
+                return [], []
 
         stocks = data.get("stocks", [])
-        if not stocks:
-            logger.warning(f"{model_name} 响应中 stocks 为空")
-            return None
+        holdings_raw = data.get("holdings_review", [])
 
         signals = []
         for item in stocks:
@@ -345,11 +407,16 @@ class AIAdvisor:
             if signal:
                 signals.append(signal)
 
-        if not signals:
-            logger.warning(f"{model_name} 无有效解析结果")
-            return None
+        holdings_review = []
+        for item in holdings_raw:
+            hr = AIAdvisor._parse_holding_review(item)
+            if hr:
+                holdings_review.append(hr)
 
-        return signals
+        if holdings_review:
+            logger.info(f"{model_name} 持仓审查: {len(holdings_review)} 条建议")
+
+        return signals, holdings_review
 
     @staticmethod
     def _parse_stock_result(
@@ -396,6 +463,24 @@ class AIAdvisor:
             return float(val)
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _parse_holding_review(item: dict) -> Optional[HoldingReview]:
+        """解析持仓审查条目。"""
+        code = str(item.get("stock_code", ""))
+        action = item.get("action", "")
+        if not code or action not in ("hold", "add", "reduce", "close"):
+            return None
+        return HoldingReview(
+            stock_code=code,
+            account=str(item.get("account", "")),
+            action=action,
+            new_stop_loss=AIAdvisor._safe_float(item, "new_stop_loss"),
+            new_take_profit=AIAdvisor._safe_float(item, "new_take_profit"),
+            expected_holding_days=item.get("expected_holding_days"),
+            tomorrow_outlook=str(item.get("tomorrow_outlook", "")),
+            reason=str(item.get("reason", "")),
+        )
 
     # ------------------------------------------------------------------
     # 结果合并

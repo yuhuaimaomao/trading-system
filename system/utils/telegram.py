@@ -43,7 +43,7 @@ class MessageSender:
             chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
 
             for i, chunk_text in enumerate(chunks):
-                escaped_chunk = chunk_text.replace('<', '&lt;').replace('>', '&gt;')
+                escaped_chunk = chunk_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 payload = {
                     'chat_id': self.chat_id,
                     'text': escaped_chunk,

@@ -522,8 +522,9 @@ class TestAnalyzeWithMocks:
         """空候选返回空列表。"""
         mock_create.return_value = MagicMock()
         advisor = AIAdvisor()
-        signals = advisor.analyze([])
+        signals, holdings_review = advisor.analyze([])
         assert signals == []
+        assert holdings_review == []
 
     @patch("analysis.advisor.AIAdvisor._call_and_parse")
     def test_analyze_fallback_to_single_model(
@@ -537,8 +538,8 @@ class TestAnalyzeWithMocks:
         advisor_inst._analyzers = [("qwen", mock_ana)]
         advisor_inst.logger = MagicMock()
 
-        # mock _call_and_parse
-        mock_call.return_value = [
+        # mock _call_and_parse — returns (signals, holdings_review) tuple
+        mock_call.return_value = ([
             OrderSignal(
                 stock_code="000001",
                 stock_name="平安银行",
@@ -553,9 +554,9 @@ class TestAnalyzeWithMocks:
                 strategy_name="ai_advisor_qwen",
                 reason="MA多头排列",
             )
-        ]
+        ], [])
 
-        signals = advisor_inst.analyze(mock_stock_profiles, "2025-01-15")
+        signals, holdings_review = advisor_inst.analyze(mock_stock_profiles, "2025-01-15")
         assert len(signals) == 1
         assert signals[0].stock_code == "000001"
 
@@ -565,7 +566,7 @@ class TestAnalyzeWithMocks:
         mock_create.return_value = MagicMock()
         advisor = AIAdvisor()
         advisor._analyzers = []  # 模拟无分析器
-        signals = advisor.analyze(mock_stock_profiles)
+        signals, holdings_review = advisor.analyze(mock_stock_profiles)
         assert signals == []
 
 

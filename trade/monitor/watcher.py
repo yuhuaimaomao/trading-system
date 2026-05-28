@@ -35,6 +35,7 @@ MARKET_CLOSE = dt_time(15, 0)
 # 大盘熔断阈值
 INDEX_HALT_PCT = -0.02       # 上证跌幅 > 2%
 INDEX_DANGER_PCT = -0.01     # 上证跌破 MA20 且跌幅 > 1%
+MAX_DRAWDOWN_PCT = 0.15      # 总账户最大回撤 15% 硬上限
 
 
 class Watcher:
@@ -70,12 +71,25 @@ class Watcher:
         self._index_alerted_downtrend: bool = False
         self._index_last_fluctuation_price: float = 0.0  # 上次波动预警时的价格
 
+        # 大盘量能追踪（量价背离检测）
+        self._market_turnovers: list[float] = []  # 近 N 轮全市场成交额
+        self._volume_alerted_divergence: bool = False  # 量价背离已推送过
+
+        # 尾盘决策
+        self._closing_decision_done: bool = False  # 14:30 后只推送一次
+
+        # 最大回撤保护
+        self._max_drawdown_alerted: bool = False
+
         # 全市场快照（每3轮刷新）
         self._market_snapshot: dict[str, dict] = {}
 
         # 板块趋势跟踪（用于买卖信号时附带板块走势）
         self._sector_trend_history: dict[str, list[float]] = defaultdict(list)
         self._industry_cache: dict[str, str] = {}  # code → industry
+        self._concept_cache: dict[str, list[str]] = {}  # code → [concept_names]
+        self._sector_stats: dict[str, dict] = {}  # sector_name → {change_pct, up, down} 实时
+        self._concept_stats: dict[str, dict] = {}  # concept_name → {change_pct, up, down} 实时
 
         # 指数技术指标拐点检测状态
         self._index_tech_state: dict[str, str | None] = {
@@ -99,6 +113,10 @@ class Watcher:
 
         # 买入后盯盘状态：code → {entry_price, last_alert_scan, status, alert_count}
         self._bought_watch: dict[str, dict] = {}
+
+        # watch_codes 缓存（signals + review_picks 查询结果，盘中极少变化）
+        self._cached_db_watch_codes: set[str] = set()
+        self._watch_codes_stale: bool = True
 
     # ======================== 生命周期 ========================
 
@@ -138,7 +156,30 @@ class Watcher:
             else:
                 time.sleep(5)
 
-        self.portfolio.snapshot(self._trade_date)
+        snap = self.portfolio.snapshot(self._trade_date)
+        self.repo.insert_snapshot(snap.to_db_dict(account="paper"))
+
+        # 保存持仓明细
+        pos_rows = []
+        for code, pos in self.portfolio.positions.items():
+            pos_rows.append({
+                "stock_code": code,
+                "stock_name": pos.stock_name,
+                "volume": pos.volume,
+                "avg_cost": pos.avg_cost,
+                "current_price": pos.current_price,
+                "market_value": pos.market_value,
+                "pnl": pos.pnl,
+                "pnl_pct": pos.pnl_pct,
+                "stop_loss": pos.stop_loss,
+                "take_profit": pos.take_profit,
+                "holding_days": 0,
+                "sector_code": pos.sector_code,
+            })
+        if pos_rows:
+            self.repo.insert_positions(self._trade_date, "paper", pos_rows)
+
+        logger.info(f"模拟盘快照已保存: 总资产{snap.total_value:.0f} 仓位{snap.position_count}只")
         self._expire_signals()
         logger.info("盯盘进程退出")
 
@@ -186,6 +227,11 @@ class Watcher:
 
         self.portfolio.update_prices(prices)
 
+        # 最大回撤保护（总账户回撤 > 15% 硬上限）
+        if self.portfolio.drawdown >= MAX_DRAWDOWN_PCT:
+            self._check_max_drawdown()
+            return  # 跳过本轮扫
+
         # 每 3 轮拉一次全市场快照
         if self._scan_count % 3 == 0:
             self._refresh_market_snapshot()
@@ -215,6 +261,26 @@ class Watcher:
         # --- 第三层：每 3 轮 ---
         if self._scan_count % 3 == 0:
             self._check_abnormal(prices)
+
+        # --- 第四层：每 15 轮（约15分钟）主动换仓评估 ---
+        if self._scan_count % 15 == 0:
+            self._evaluate_swaps(prices)
+
+        # --- 第五层：尾盘决策（14:30 后触发一次）---
+        self._check_closing(prices)
+
+    def _check_max_drawdown(self):
+        """最大回撤保护：总账户回撤超 15% 硬上限时发出警报。"""
+        if self._max_drawdown_alerted:
+            return
+        self._max_drawdown_alerted = True
+        p = self.portfolio
+        msg = (
+            f"🚨 最大回撤警报\n"
+            f"总资产 {p.total_value:.0f}  回撤 {p.drawdown:.1%}\n"
+            f"建议立即清仓所有持仓"
+        )
+        self._alert(msg)
 
     # ======================== 持仓恢复 ========================
 
@@ -273,27 +339,40 @@ class Watcher:
     # ======================== 关注清单 ========================
 
     def _get_watch_codes(self) -> list[str]:
+        """获取需要监控的代码列表。positions 来自内存实时，signals+picks 用缓存。"""
         codes: set[str] = set()
 
-        try:
-            signals = self.repo.get_pending_signals()
-            for s in signals:
-                codes.add(s["stock_code"])
-        except Exception as e:
-            logger.warning(f"获取待处理信号异常: {e}")
-
+        # 持仓来自内存，始终实时
         for code in self.portfolio.positions:
             codes.add(code)
 
-        # 复盘推荐标的
-        try:
-            picks = self._load_review_picks()
-            for p in picks:
-                codes.add(p["stock_code"])
-        except Exception as e:
-            logger.warning(f"获取复盘推荐异常: {e}")
+        # signals + review picks 缓存，盘中极少变化
+        if self._watch_codes_stale:
+            try:
+                signals = self.repo.get_pending_signals()
+                for s in signals:
+                    codes.add(s["stock_code"])
+            except Exception as e:
+                logger.warning(f"获取待处理信号异常: {e}")
+
+            try:
+                picks = self._load_review_picks()
+                for p in picks:
+                    codes.add(p["stock_code"])
+            except Exception as e:
+                logger.warning(f"获取复盘推荐异常: {e}")
+
+            self._cached_db_watch_codes = codes - set(self.portfolio.positions.keys())
+            self._watch_codes_stale = False
+        else:
+            # 从缓存恢复（不含持仓，持仓已从内存加入）
+            codes |= self._cached_db_watch_codes
 
         return list(codes)
+
+    def _invalidate_watch_codes_cache(self):
+        """模拟盘成交后刷新关注列表缓存。"""
+        self._watch_codes_stale = True
 
     # ======================== 行情获取 ========================
 
@@ -410,6 +489,7 @@ class Watcher:
                 "price": float(price),
                 "pre_close": float(data.get("preClose") or 0),
                 "change_pct": float(data.get("changePct") or 0) / 100,
+                "amount": float(data.get("amount") or data.get("turnover") or 0),  # 成交额
             }
         except Exception:
             return None
@@ -491,6 +571,13 @@ class Watcher:
         self._index_prices.append(index_price)
         if len(self._index_prices) > 60:
             self._index_prices = self._index_prices[-60:]
+
+        # 追踪成交额（量价背离检测）
+        amount = idx.get("amount", 0)
+        if amount > 0:
+            self._market_turnovers.append(amount)
+            if len(self._market_turnovers) > 30:
+                self._market_turnovers = self._market_turnovers[-30:]
 
         prev_close = idx["pre_close"]
         change_pct = idx["change_pct"]
@@ -581,7 +668,107 @@ class Watcher:
                     else:
                         self._alert(base_msg)
 
+        # 量价背离检测（至少 10 个数据点）
+        self._check_volume_divergence(index_price)
+
         return True
+
+    def _check_volume_divergence(self, current_price: float):
+        """检测量价背离：价升量缩=诱多，价跌量增=恐慌放量。"""
+        prices = self._index_prices
+        volumes = self._market_turnovers
+        if len(prices) < 10 or len(volumes) < 10:
+            return
+
+        # 取最近 10 个点的趋势
+        n = 10
+        recent_prices = prices[-n:]
+        recent_volumes = volumes[-n:]
+
+        price_change = (recent_prices[-1] - recent_prices[0]) / recent_prices[0]
+        vol_start = sum(recent_volumes[:3]) / 3
+        vol_end = sum(recent_volumes[-3:]) / 3
+        vol_change = (vol_end - vol_start) / vol_start if vol_start > 0 else 0
+
+        # 阈值：价格变化 > 0.3% 且量变化 > 15%
+        if abs(price_change) < 0.003 or abs(vol_change) < 0.15:
+            self._volume_alerted_divergence = False
+            return
+
+        # 价升量缩 → 诱多
+        if price_change > 0 and vol_change < -0.15:
+            if not self._volume_alerted_divergence:
+                self._volume_alerted_divergence = True
+                self._alert(
+                    f"⚠️ 量价背离(诱多): 上证近10轮涨{price_change*100:.1f}%，"
+                    f"但成交额缩{abs(vol_change)*100:.0f}%\n"
+                    f"→ 上涨缺乏量能支撑，注意诱多风险"
+                )
+
+        # 价跌量增 → 恐慌放量
+        elif price_change < 0 and vol_change > 0.15:
+            if not self._volume_alerted_divergence:
+                self._volume_alerted_divergence = True
+                self._alert(
+                    f"⚠️ 量价背离(恐慌): 上证近10轮跌{abs(price_change)*100:.1f}%，"
+                    f"但成交额放{vol_change*100:.0f}%\n"
+                    f"→ 恐慌盘涌出，关注是否加速赶底"
+                )
+
+    def _check_closing(self, prices: dict[str, float]):
+        """尾盘决策（14:30 后触发一次）：持仓过夜判断 + 尾盘异动提醒。"""
+        now = datetime.now().time()
+        if now < dt_time(14, 30) or self._closing_decision_done:
+            return
+        if not self.portfolio.positions:
+            self._closing_decision_done = True
+            return
+
+        lines = ["🔔 尾盘决策 (14:30+)"]
+        has_action = False
+
+        for code, pos in self.portfolio.positions.items():
+            price = prices.get(code)
+            if price is None:
+                continue
+
+            pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost else 0
+            is_today = pos.entry_date == self._trade_date
+            dist_sl = (price - pos.stop_loss) / price * 100 if pos.stop_loss > 0 and price > 0 else 999
+
+            if is_today:
+                lines.append(f"  🔒 {code} {pos.stock_name} T+1锁定 浮盈{pnl_pct:+.1f}%")
+                continue
+
+            if pnl_pct < -3:
+                lines.append(
+                    f"  🔴 {code} {pos.stock_name} 浮亏{pnl_pct:.1f}% "
+                    f"现价{price:.2f} 距止损{pos.stop_loss:.2f}({dist_sl:.1f}%)"
+                    f"\n     → 建议尾盘止损，不持亏过夜"
+                )
+                has_action = True
+            elif pnl_pct < -1 and dist_sl < 3:
+                lines.append(
+                    f"  🟡 {code} {pos.stock_name} 浮亏{pnl_pct:.1f}% "
+                    f"现价{price:.2f} 距止损仅{dist_sl:.1f}%"
+                    f"\n     → 关注是否触发止损，做好尾盘处理准备"
+                )
+                has_action = True
+            elif pnl_pct > 5:
+                lines.append(
+                    f"  🟢 {code} {pos.stock_name} 浮盈{pnl_pct:+.1f}% "
+                    f"现价{price:.2f}"
+                    f"\n     → 利润可观，可考虑减仓锁定浮盈"
+                )
+                has_action = True
+            else:
+                lines.append(
+                    f"  ✅ {code} {pos.stock_name} {pnl_pct:+.1f}% 可持过夜"
+                )
+
+        if has_action:
+            self._alert("\n".join(lines))
+        self._closing_decision_done = True
 
     def _is_index_downtrend(self) -> bool:
         """结构性判断单边下跌:
@@ -1006,6 +1193,8 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
         pt = self._get_paper_trader()
         if pt:
             pt.close(code, price, stype)
+        self._bought_watch.pop(code, None)  # 卖出后清理盯盘状态
+        self._invalidate_watch_codes_cache()
 
     def _check_sl_reminders(self):
         """止损提醒循环：5分钟未确认则重新推送。"""
@@ -1051,6 +1240,7 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
             removed = [k for k, v in self._sl_reminders.items() if v["code"] == code]
             for k in removed:
                 del self._sl_reminders[k]
+            self._bought_watch.pop(code, None)  # 确认卖出后清理盯盘状态
             if removed:
                 return f"✅ 已确认 {code} 成交，停止提醒"
             return ""
@@ -1280,10 +1470,11 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                 )
                 pt = self._get_paper_trader()
                 if pt:
+                    sector = self._industry_cache.get(code, "") if hasattr(self, '_industry_cache') else ""
                     bought = pt.try_buy(code, name, price,
                                buy_min, buy_max, sl, tp,
                                score=s.get('signal_score', 0), source='signal',
-                               max_amount=max_amount)
+                               max_amount=max_amount, sector=sector)
                     if bought:
                         # 加入买入后盯盘
                         self._bought_watch[code] = {
@@ -1292,6 +1483,7 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                             "status": "watching",
                             "alert_count": 0,
                         }
+                        self._invalidate_watch_codes_cache()
 
             self._signal_alert_state[sid] = (price, in_zone)
 
@@ -1538,9 +1730,13 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                 )
                 pt = self._get_paper_trader()
                 if pt:
-                    pt.try_buy(code, pick.get('name', ''), price,
+                    sector = self._industry_cache.get(code, "") if hasattr(self, '_industry_cache') else ""
+                    bought = pt.try_buy(code, pick.get('name', ''), price,
                                buy_min, buy_max, sl, tp,
-                               score=pick.get('score', 0), source='review')
+                               score=pick.get('score', 0), source='review',
+                               sector=sector)
+                    if bought:
+                        self._invalidate_watch_codes_cache()
 
             self._review_alert_state[code] = (price, in_zone)
 
@@ -1678,28 +1874,59 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
         self._alert("\n".join(lines))
 
     def _update_sector_trends(self):
-        """用当前全市场快照更新板块趋势历史（用于买卖信号时附带板块走势）。"""
+        """用当前全市场快照更新板块趋势 + 行业/概念实时统计。"""
         if not self._market_snapshot:
             return
         self._ensure_industry_cache()
-        sec_changes: dict[str, list[float]] = defaultdict(list)
+        self._ensure_concept_cache()
+
+        ind_changes: dict[str, list[float]] = defaultdict(list)
+        con_changes: dict[str, list[float]] = defaultdict(list)
+
         for code, item in self._market_snapshot.items():
-            industry = self._industry_cache.get(code)
-            if not industry:
-                continue
             chg = item.get("changePct", 0)
             try:
                 chg = float(chg)
             except (ValueError, TypeError):
                 chg = 0
-            sec_changes[industry].append(chg)
-        for ind, changes in sec_changes.items():
+
+            industry = self._industry_cache.get(code)
+            if industry:
+                ind_changes[industry].append(chg)
+
+            for concept in self._concept_cache.get(code, []):
+                con_changes[concept].append(chg)
+
+        # 行业趋势历史（保留原有逻辑）
+        for ind, changes in ind_changes.items():
             if len(changes) < 3:
                 continue
             avg = sum(changes) / len(changes)
             self._sector_trend_history[ind].append(avg)
             if len(self._sector_trend_history[ind]) > 3:
                 self._sector_trend_history[ind] = self._sector_trend_history[ind][-3:]
+
+        # 行业实时统计
+        self._sector_stats.clear()
+        for ind, changes in ind_changes.items():
+            if len(changes) < 3:
+                continue
+            self._sector_stats[ind] = {
+                "change_pct": sum(changes) / len(changes),
+                "up": sum(1 for c in changes if c > 0),
+                "down": sum(1 for c in changes if c < 0),
+            }
+
+        # 概念实时统计
+        self._concept_stats.clear()
+        for con, changes in con_changes.items():
+            if len(changes) < 3:
+                continue
+            self._concept_stats[con] = {
+                "change_pct": sum(changes) / len(changes),
+                "up": sum(1 for c in changes if c > 0),
+                "down": sum(1 for c in changes if c < 0),
+            }
 
     def _ensure_industry_cache(self):
         """加载代码→行业映射（懒加载一次）。"""
@@ -1716,6 +1943,64 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
             self._industry_cache = {r[0]: (r[1] or "") for r in rows}
         except Exception:
             pass
+
+    def _ensure_concept_cache(self):
+        """加载代码→概念列表映射（懒加载一次）。"""
+        if self._concept_cache:
+            return
+        try:
+            import sqlite3 as _sql
+            conn = _sql.connect(self.db_path)
+            rows = conn.execute(
+                """SELECT stock_code, concepts FROM stock_basic
+                   WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)"""
+            ).fetchall()
+            conn.close()
+            for r in rows:
+                concepts_str = (r[1] or "").strip()
+                if concepts_str:
+                    self._concept_cache[r[0]] = [c.strip() for c in concepts_str.replace("|", ",").split(",") if c.strip()]
+            logger.info(f"概念缓存加载: {len(self._concept_cache)} 只")
+        except Exception as e:
+            logger.warning(f"概念缓存加载失败: {e}")
+
+    def _build_sector_context(self, codes: set[str]) -> str:
+        """构建板块行情上下文（行业+概念日内实时数据），供 AI 换仓评估使用。"""
+        self._ensure_industry_cache()
+        self._ensure_concept_cache()
+
+        # 收集涉及的行业和概念
+        industries: dict[str, list[str]] = {}
+        concepts_dict: dict[str, list[str]] = {}
+        for code in codes:
+            ind = self._industry_cache.get(code, "")
+            if ind and ind in self._sector_stats:
+                industries.setdefault(ind, []).append(code)
+            for c in self._concept_cache.get(code, []):
+                if c in self._concept_stats:
+                    concepts_dict.setdefault(c, []).append(code)
+
+        if not industries and not concepts_dict:
+            return ""
+
+        lines = ["板块行情（日内实时）："]
+
+        if industries:
+            lines.append("行业:")
+            for ind_name in sorted(industries, key=lambda n: abs(self._sector_stats.get(n, {}).get("change_pct", 0)), reverse=True):
+                s = self._sector_stats[ind_name]
+                lines.append(f"  {ind_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}")
+            lines.append("")
+
+        if concepts_dict:
+            sorted_c = sorted(concepts_dict, key=lambda n: abs(self._concept_stats.get(n, {}).get("change_pct", 0)), reverse=True)[:10]
+            lines.append("概念（前10）:")
+            for c_name in sorted_c:
+                s = self._concept_stats[c_name]
+                lines.append(f"  {c_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}")
+            lines.append("")
+
+        return "\n".join(lines)
 
     def _get_sector_trend(self, code: str) -> str:
         """返回股票所在板块的日内趋势描述，用于买卖信号。"""
@@ -1806,6 +2091,99 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
                 self._alert("\n".join(messages))
         except Exception as e:
             logger.warning(f"异动检测异常: {e}")
+
+    def _evaluate_swaps(self, prices: dict[str, float]):
+        """每15分钟主动评估换仓：AI 实时判断是否卖出某持仓换入候选。"""
+        pt = self._get_paper_trader()
+        if not pt or len(pt.portfolio.positions) < 3:
+            return
+
+        # 收集买点区内（或接近买点区）的候选信号
+        try:
+            signals = self.repo.get_pending_signals()
+        except Exception as e:
+            logger.warning(f"换仓评估获取信号失败: {e}")
+            return
+
+        candidates = []
+        for s in signals:
+            code = s["stock_code"]
+            price = prices.get(code)
+            if price is None:
+                continue
+            buy_min = s.get("buy_zone_min") or 0
+            buy_max = s.get("buy_zone_max") or 0
+            if buy_min <= 0:
+                continue
+            # 在买点区 或 低于买点区 5% 以内（接近买点）
+            in_or_near = (buy_min * 0.95 <= price <= buy_max)
+            if in_or_near:
+                snap = self._market_snapshot.get(code, {}) if self._market_snapshot else {}
+                industry = self._industry_cache.get(code, "") if hasattr(self, '_industry_cache') else ""
+                sec_trend = ""
+                if industry and hasattr(self, '_sector_trend_history'):
+                    history = self._sector_trend_history.get(industry, [])
+                    if history:
+                        sec_trend = f"{history[-1]:+.1f}%"
+                candidates.append({
+                    "code": code,
+                    "name": s.get("stock_name", ""),
+                    "price": price,
+                    "change_pct": snap.get("changePct", 0),
+                    "score": s.get("signal_score", 0) or 0,
+                    "sl": s.get("stop_loss", 0) or 0,
+                    "tp": s.get("take_profit", 0) or 0,
+                    "buy_min": buy_min,
+                    "buy_max": buy_max,
+                    "sector": industry,
+                    "sector_trend": sec_trend,
+                })
+                # 添加概念板块（前3，按实时涨跌幅绝对值排序）
+                concepts = self._concept_cache.get(code, [])
+                if concepts and self._concept_stats:
+                    top = sorted(concepts, key=lambda c: abs(self._concept_stats.get(c, {}).get("change_pct", 0)), reverse=True)[:3]
+                    candidates[-1]["concepts"] = top
+
+        if not candidates:
+            return
+
+        # 大盘背景
+        ctx = ""
+        if self._index_prices and len(self._index_prices) >= 2:
+            idx_chg = (self._index_prices[-1] - self._index_prices[-2]) / self._index_prices[-2] * 100
+            ctx = f"上证指数 日内变动{idx_chg:+.2f}%"
+
+        # 构建持仓的实时涨跌 + 板块数据
+        price_info = {}
+        if self._market_snapshot:
+            for code, pos in pt.portfolio.positions.items():
+                snap = self._market_snapshot.get(code, {})
+                info = {"change_pct": snap.get("changePct", 0)}
+                # 板块趋势
+                industry = pos.sector_code
+                if industry and hasattr(self, '_sector_trend_history'):
+                    history = self._sector_trend_history.get(industry, [])
+                    if history:
+                        info["sector_trend"] = f"{history[-1]:+.1f}%"
+                # 概念板块（前3，按实时涨跌幅绝对值排序）
+                concepts = self._concept_cache.get(code, [])
+                if concepts and self._concept_stats:
+                    top = sorted(concepts, key=lambda c: abs(self._concept_stats.get(c, {}).get("change_pct", 0)), reverse=True)[:3]
+                    info["concepts"] = top
+                price_info[code] = info
+
+        # 构建板块行情上下文
+        all_codes = set(c["code"] for c in candidates) | set(pt.portfolio.positions.keys())
+        sector_context = self._build_sector_context(all_codes)
+
+        logger.info(f"主动换仓评估: {len(candidates)} 个候选, {len(pt.portfolio.positions)} 个持仓")
+        try:
+            swapped = pt.evaluate_swaps(candidates, market_context=ctx, price_info=price_info,
+                            sector_context=sector_context)
+            if swapped:
+                self._invalidate_watch_codes_cache()
+        except Exception as e:
+            logger.warning(f"换仓评估异常: {e}")
 
     def _get_abnormal_detector(self):
         if self._abnormal_detector is None:

@@ -50,9 +50,9 @@ class CollectionStatsService:
     }
     
     def __init__(self):
-        from system.config.settings import TELEGRAM_REPORT_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
+        from system.config.settings import TELEGRAM_PRIVATE_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
         self.sender = MessageSender(
-            chat_id=TELEGRAM_REPORT_CHAT_ID,
+            chat_id=TELEGRAM_PRIVATE_CHAT_ID,
             bot_token=TELEGRAM_REPORT_BOT_TOKEN
         )
     

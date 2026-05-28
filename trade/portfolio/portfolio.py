@@ -57,7 +57,8 @@ class PortfolioSnapshot:
         total = self.market_value or 1
         return {k: v / total for k, v in exposure.items()}
 
-    def to_db_dict(self) -> dict:
+    def to_db_dict(self, account: str = "paper") -> dict:
+        from datetime import datetime
         return {
             "trade_date": self.date,
             "total_value": self.total_value,
@@ -68,6 +69,8 @@ class PortfolioSnapshot:
             "drawdown": self.drawdown,
             "position_count": self.position_count,
             "sector_exposure": json.dumps(self.get_sector_exposure(), ensure_ascii=False),
+            "account": account,
+            "created_at": datetime.now().isoformat(),
         }
 
 
@@ -146,11 +149,12 @@ class Portfolio:
             return False
 
         self.cash -= cost
+        actual_avg_cost = (price * volume + commission) / volume if volume > 0 else price
         pos = Position(
             stock_code=stock_code,
             stock_name=stock_name,
             volume=volume,
-            avg_cost=price,
+            avg_cost=actual_avg_cost,
             current_price=price,
             market_value=price * volume,
             sector_code=sector_code,
@@ -189,6 +193,10 @@ class Portfolio:
         for code, pos in self.positions.items():
             if code in prices:
                 pos.update_price(prices[code])
+        # 盘中实时更新峰值（用于最大回撤保护）
+        cur = self.total_value
+        if cur > self._peak_value:
+            self._peak_value = cur
 
     def snapshot(self, date: str) -> PortfolioSnapshot:
         cur = self.total_value

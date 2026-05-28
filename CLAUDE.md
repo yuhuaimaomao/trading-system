@@ -37,8 +37,10 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 - AI 大盘波动分析：急涨急跌≥0.5% 时自动调用分钟级技术指标研判
 
 **模拟盘（PaperTrader）：**
-- 20 万初始资金，最多 8 只票，动态仓位
-- 佣金万 0.85 最低 5 元，印花税单边 0.1%（卖出征收）
+- 20 万初始资金，最多 5 只票，动态仓位
+- 佣金万 0.85 最低 5 元，印花税万分之五（减半征收，卖出单边）
+- AI 驱动换仓：持仓满时 AI 实时评估卖出谁换入谁（DeepSeek API，20s 超时）
+- 主动换仓评估：每 15 轮扫描评估是否换仓，结合板块实时行情
 - 自动执行买卖，Telegram 推送成交通知
 
 **手动成交：**
@@ -67,7 +69,6 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 - 盘中实跑验证（cron 已部署，等真实行情数据到位后实测）
 - 板块热度/异动检测阈值调优（骨架已写好）
 - QMT 策略交易权限（等券商开通）
-- holdings_review AI 输出落库和应用（目前 AI 输出但未持久化）
 - 收盘双线比对自动化（目前手动 `python main.py compare`）
 
 ## 架构总览
@@ -112,6 +113,7 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
   │         │                                                        │
   │         ├─ [每3轮] _refresh_market_snapshot() + _update_sector_trends()
   │         ├─ [每3轮] _check_abnormal()    异动检测                   │
+	  │         ├─ [每15轮] _evaluate_swaps()    主动换仓评估（AI+板块）                   │
   │         └─ [每50轮] _check_sector_heat() 板块热度                  │
   │         ↓                                                         │
   │  信号触发 → Telegram 通知 → 模拟盘自动执行 + 实盘等用户确认        │
@@ -130,11 +132,11 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 trading-system/
 ├── main.py                     # CLI 入口，12 个命令
 ├── analysis/                   # 分析层
-│   ├── advisor.py              #   AI 顾问：双模型并行分析 + 持仓格式化 + 复盘上下文注入
+│   ├── advisor.py              #   AI 顾问：双模型并行分析 + 持仓格式化 + 复盘上下文注入 + AI原始返回到reports
 │   ├── strategy.py             #   盘前管线：筛选→AI→入库 + 持仓加载 + 复盘上下文 + 复盘精选结构化
 │   ├── morning.py              #   盘前简报：AI 盘前校准
 │   ├── tracker.py              #   推荐追踪：Excel+DB，日收益计算
-│   ├── signals.py              #   StockScore/StockProfile/OrderSignal/HoldingInfo/AccountSummary/ReviewContext
+│   ├── signals.py              #   StockScore/StockProfile/OrderSignal/HoldingReview/HoldingInfo/AccountSummary/ReviewContext
 │   ├── screening/
 │   │   ├── trend.py            #     趋势筛选：强趋势(MA5)+稳健(MA20)
 │   │   ├── breadth.py          #     市场宽度：涨跌家数+大盘状态
@@ -310,7 +312,9 @@ Watcher.run()
   │   │   └─ 用于板块热度+异动检测
   │   │
   │   ├─ [每3轮] _update_sector_trends()
-  │   │   └─ 按行业分组计算日内涨跌均值 → _sector_trend_history
+  │   │   ├─ 按行业分组计算日内涨跌均值 → _sector_trend_history
+  │   │   ├─ 行业实时统计 → _sector_stats（涨跌家数+平均涨跌幅）
+  │   │   └─ 概念实时统计 → _concept_stats（同上，从 _concept_cache 聚合）
   │   │
   │   ├─ [第1轮] _send_opening_decision()
   │   │   └─ 集合竞价后推送一条汇总：持仓状态+买入区信号+待观察+板块集中度预警
@@ -439,26 +443,40 @@ OrderComparator.compare(trade_date)
 ## 模拟盘（PaperTrader）
 
 ```python
-# 费率：佣金万0.85 最低5元 + 印花税0.1%（卖出单边）
+# 费率：佣金万0.85 最低5元 + 印花税万分之五（减半征收，卖出单边）
 
 INITIAL_CAPITAL = 200_000
 POSITION_PCT = 0.10    # 默认每只10%，但 Watcher 会用 smart sizing 覆盖
-MAX_POSITIONS = 8
+MAX_POSITIONS = 5      # 最多5只持仓
+SWAP_SCORE_GAP = 15    # 新信号比最弱持仓高15分才考虑换仓
 COMMISSION_RATE = 0.000085
 MIN_COMMISSION = 5.0
-STAMP_TAX_RATE = 0.001
+STAMP_TAX_RATE = 0.0005  # 万分之五（减半征收）
 
 # try_buy() 流程：
 #   1. 检查持仓上限 + 重复买入
-#   2. 动态仓位: max_amount 优先，否则 total_value * POSITION_PCT
-#   3. 按 price 算 volume（100股整数倍）
-#   4. 扣佣金 → 算可用资金 → 不够则缩量 → <100股放弃
-#   5. portfolio.open_position() + 记录 trade_orders (account='paper')
+#   2. 持仓满 → _try_swap() AI 实时换仓评估
+#   3. 动态仓位: max_amount 优先，否则 total_value * POSITION_PCT
+#   4. 按 price 算 volume（100股整数倍）
+#   5. 扣佣金 → 算可用资金 → 不够则缩量 → <100股放弃
+#   6. portfolio.open_position(sector_code=...) + 记录 trade_orders (account='paper')
+
+# try_buy → _try_swap() 换仓流程：
+#   1. _ai_evaluate_swap(candidates) → DeepSeek API 实时判断卖谁买谁
+#   2. AI 失败 → _rule_swap_target() 规则兜底（AI审查 close > reduce > 分差）
+#   3. 卖出 → 确认已平仓 → 再买入
+
+# evaluate_swaps() 主动换仓（每15轮扫描触发）：
+#   1. 收集买点区内候选信号
+#   2. 构建板块上下文（行业+概念实时统计）
+#   3. _ai_evaluate_swap(持仓+候选+板块上下文+大盘) → 换仓决策
 
 # close() 流程：
-#   1. 算金额 → 佣金(万0.85+最低5元) + 印花税(0.1%)
+#   1. 算金额 → 佣金(万0.85+最低5元) + 印花税(万分之五)
 #   2. portfolio.close_position() + 记录 trade_orders
 #   3. Telegram 推送成交通知
+
+# avg_cost 含佣金：open_position 时 (price * volume + commission) / volume
 ```
 
 ## 风控引擎（RiskEngine）
@@ -575,14 +593,16 @@ calc_atr(highs, lows, closes, period=14)
 |------|------|----------|
 | `trade_signals` | 交易信号 | signal_type, stock_code, buy_zone_min/max, stop_loss, take_profit, status(pending/bought/expired), account |
 | `trade_orders` | 成交记录 | signal_id, stock_code, order_type(buy/sell), filled_price/volume, commission, account(paper/real) |
+| `trade_portfolio_positions` | 每日持仓明细 | stock_code, volume, avg_cost(含佣金), current_price, pnl, pnl_pct, stop_loss, take_profit, holding_days, sector_code, account(paper/real) |
 | `trade_portfolio_snapshots` | 每日快照 | total_value, cash, market_value, daily_pnl, drawdown, position_count, sector_exposure, account |
+| `trade_holdings_review` | AI 持仓审查 | stock_code, action(close/reduce/hold), new_stop_loss, new_take_profit, tomorrow_outlook, reason, account |
 | `trade_factor_values` | 因子值 | factor_name, factor_value, factor_zscore |
 | `trade_strategy_metrics` | 策略表现 | win_rate, avg_profit, sharpe_ratio, max_drawdown |
 | `market_breadth` | 市场宽度 | up_count, down_count, limit_up/down_count, index_change_pct, market_state |
 
 ### 共用表
 
-- `stock_basic` — 全市场日线（stock_code 无后缀，含 industry/ma5/ma10/ma20/主力/量比/换手）
+- `stock_basic` — 全市场日线（stock_code 无后缀，含 industry/concepts/ma5/ma10/ma20/主力/量比/换手）
 - `stock_indicators` — 技术指标（MACD/RSI/KDJ/布林带 bb_upper/mid/lower/width/pct_b）
 - `stock_tracker` — 复盘推荐标的（push_date, star_rating, target_price, stop_loss）
 - `cls_telegraph` — AI 结构化电报（ai_stocks/ai_summary/ai_sectors 等字段）
@@ -609,26 +629,34 @@ calc_atr(highs, lows, closes, period=14)
 11. **市场分层智能决策** — 5 种模式识别（panic/v_reversal/dead_cat/one_sided/normal），不是机械的"跌幅>2%就暂停"，而是根据价格轨迹三段分析判断市场性质
 12. **止损循环人工确认** — 止损触发后不自动执行实盘，而是推送提醒 + 5 分钟循环 + 支持"再等 N"延迟，确保人在回路上
 13. **智能仓位替代固定比例** — 不再所有票买 10%，而是根据市场模式（0-20000）+ 板块趋势（±20-40%）+ 买入区位置（±10-30%）动态计算
-14. **模拟盘费率对齐实际** — 佣金万 0.85 最低 5 元，印花税 0.1% 卖出单边征收
+14. **模拟盘费率对齐实际** — 佣金万 0.85 最低 5 元，印花税万分之五（减半征收）卖出单边。avg_cost 含佣金
 15. **买入后盯盘不丢** — 买入后每 ~10 分钟推送持仓状态（健康/观察/被套/补仓机会），不再像以前买入就不管了
 16. **复盘上下文注入 AI** — 盘后复盘报告的结论（情绪周期/主线/次线/退潮/情景推演/仓位建议）注入次日策略管线的 AI prompt，AI 据此调整 confidence 和选股方向
 17. **复盘精选统一盯盘** — 所有复盘角色（主线龙头/中军/补涨/次线龙头/趋势票）统一转为结构化 OrderSignal（source=REVIEW），合并到 trade_signals，和 AI 信号用同一套 buy_zone/sl/tp 格式，Watcher 统一盯盘
 18. **利润回撤止盈分级** — 不是简单的"回撤 X% 就卖"，而是根据最高浮盈分三级：≥15%→保留60%，≥10%→保留55%，≥5%→保留50%。浮盈越大的票给更多回撤容忍空间
 19. **炸板区分试盘/出货** — 自动检测炸板未回封，添加风险标签。AI 根据量价和主力流向判断：缩量+主力未出逃→试盘（降 confidence 保留），放量+主力出逃→出货（直接 skip）
 20. **开盘决策替代开盘参考** — 集合竞价后推送一条汇总（持仓+买入区+待观察+集中度预警），替代之前两条分开的参考消息，减少噪音
+21. **AI 驱动换仓而非硬编码** — 持仓满时由 AI（DeepSeek）实时评估卖出谁换入谁，20 秒超时。规则兜底仅作 fallback（AI 审查 close > reduce > 分数差距）。主动换仓评估每 15 轮扫描触发，发送全部持仓+全部候选+板块上下文给 AI 综合判断
+22. **板块上下文实时计算** — 行业和概念的涨跌幅/涨跌家数从 QMT 全市场快照实时聚合（`_update_sector_trends` 每 3 轮更新），不用 DB 的 `sector_industry`/`sector_concept` 表（盘中是昨天收盘数据）。概念映射来自 `stock_basic.concepts`（逗号/竖线分隔），`_concept_cache` 懒加载
 
 ## 注意事项 / 坑
 
 - `system/config/settings.py` 的 `PROJECT_ROOT` 用了 `.parent.parent.parent`（相对于 system/config/ 三层上）
-- **费率已修正**: `STAMP_TAX_RATE = 0.001`, `DEFAULT_COMMISSION_RATE = 0.000085`
+- **费率已修正**: `STAMP_TAX_RATE = 0.0005`（减半征收）, `DEFAULT_COMMISSION_RATE = 0.000085`
 - QMT 被拆到三处：`data/live/quotes.py`（行情）、`trade/execution/orders.py`（下单存根）、`system/qmt/`（连接+日历）
 - `trade_orders` 表 `get_orders_by_date()` 返回的列已包含 `account`（迁移添加，默认 'real'）
 - 电报 AI 结构化：`TelegraphCollector._ai_structure_batch()` 的 pending 查询必须带 trade_date 过滤
+- **CLS API 迁移 (2026-05-28)**：财联社废弃了 `/nodeapi/telegraphList`（返回 404），新端点为 `/api/cache?name=telegraph&rn=20&lastTime=<ts>`，数据格式不变（`data.roll_data`）。注意 `/api/cache` 返回 Brotli 压缩，已修改 `telegraph_collector.py` 的 `Accept-Encoding` 去掉 `br`
+- **天启代理整点劣化 (2026-05-28)**：18:00 cron review 时行业/概念/个股三个代理采集器页1全部失败，8-10 分钟后手动重跑正常。根因是天启代理在整点附近返回劣质 IP。`review/service.py` 已加代理采集器失败后等 60s 重试一次的逻辑
 - `sector_hot_history` 2026-05-19 前 rank 全为 0（旧版不写 rank），filter 已加 `rank > 0`
 - 复盘 Prompt 交叉验证：第六节选股对应第四节主线/次线，第七节趋势票须来自当日热点板块
 - `agent-browser` 在 cron 环境 PATH 不可用，`cls_digest_collector.py` 已加 fallback
 - `stock_tracker` 表字段含 `star_rating`（不是 `score`），`target_price`/`stop_loss` 存在
-- `MessageReceiver` 和 Open Claw MCP 用不同 bot token：trading 用 `TELEGRAM_REPORT_BOT_TOKEN`，Open Claw 用 `~/.claude/channels/telegram/.env`
+- `MessageReceiver` 用 `TELEGRAM_REPORT_BOT_TOKEN`（唯一 bot），Bot B (Open Claw/AshareGet) 已弃用
+- 推送路由（双 chat_id + 同 bot）:
+  - 数据采集统计报告 → 仅 `TELEGRAM_PRIVATE_CHAT_ID`（私聊）
+  - AI 分析报告 → `TELEGRAM_REPORT_CHAT_ID`（群）+ 私聊
+  - 明天交易信号 + 持仓审查 → 群 + 私聊；持仓审查中实盘部分仅私聊可见
 - 手动成交默认 account='real'，不再区分模拟盘/实盘。用户回复只需 `代码 股数 价格`
 - `parse_reply` 支持股票名称（2-4 中文字符），`handle_user_reply` 会自动查 `stock_basic` 转代码
 - cron 脚本日志路径格式: `storage/logs/<date>/tasks/cron_<task>.log`

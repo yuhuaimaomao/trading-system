@@ -46,12 +46,21 @@ class StrategyPipeline:
         # 步骤 0: 市场宽度 → 大盘状态
         market_state = self._compute_market_state(trade_date)
 
-        # 步骤 0.5: 加载持仓（实盘 + 模拟盘）
+        # 步骤 0.5: 加载持仓（实盘 + 模拟盘）+ 保存快照
         holdings, account_summaries = self._load_holdings(trade_date)
         if holdings:
             logger.info(f"当前持仓: {len(holdings)} 只 "
                         f"(模拟盘{sum(1 for h in holdings if h.account=='paper')}只 "
                         f"实盘{sum(1 for h in holdings if h.account=='real')}只)")
+
+        # 保存实盘/模拟盘快照到 trade_portfolio_snapshots
+        if account_summaries:
+            self._save_portfolio_snapshots(account_summaries, trade_date)
+            self._save_portfolio_positions(holdings, trade_date)
+
+        # 为持仓构建完整技术画像（供 AI 审查用）
+        if holdings:
+            self._enrich_holdings(holdings, trade_date, market_state)
 
         # 步骤 0.8: 加载复盘上下文
         review_ctx = self._load_review_context(trade_date)
@@ -94,7 +103,11 @@ class StrategyPipeline:
                         f"标签:{','.join(p.tags) if p.tags else '无'}")
 
         # 步骤 3: AI 分析
-        signals = self._analyze(profiles, trade_date, holdings, account_summaries, review_ctx)
+        signals, holdings_review = self._analyze(profiles, trade_date, holdings, account_summaries, review_ctx)
+
+        # 步骤 3.1: 持仓审查落库 + 应用止损止盈
+        if holdings_review:
+            self._save_holdings_review(holdings_review, trade_date)
 
         # 步骤 3.5: 复盘趋势精选 → 结构化信号（与 AI 信号合并，统一盯盘）
         if review_ctx and review_ctx.review_stocks_raw:
@@ -106,26 +119,29 @@ class StrategyPipeline:
             signals = signals + new_review
             logger.info(f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)")
 
-        if not signals:
-            logger.warning("AI 未生成任何买入信号，管线结束")
+        # 即使没有买入信号，持仓审查也要推送
+        if not signals and not holdings_review:
+            logger.warning("AI 未生成任何买入信号或持仓审查，管线结束")
             return []
 
-        # AI 返回后，从原始 profile 回填 trend_mode（确定性数据，不依赖 AI）
-        profile_map = {p.code: p for p in profiles}
-        for s in signals:
-            if s.stock_code in profile_map:
-                s.trend_mode = profile_map[s.stock_code].trend_mode
+        if signals:
+            # AI 返回后，从原始 profile 回填 trend_mode（确定性数据，不依赖 AI）
+            profile_map = {p.code: p for p in profiles}
+            for s in signals:
+                if s.stock_code in profile_map:
+                    s.trend_mode = profile_map[s.stock_code].trend_mode
 
-        saved = self._save_signals(signals, trade_date)
-        logger.info(f"策略管线完成: 候选{len(candidates)} → 画像{len(profiles)} → AI信号{len(signals)} → 入库{saved}")
-        for s in signals:
-            logger.info(f"  → 入库: {s.stock_code} {s.stock_name} "
-                        f"买入{s.buy_zone_min}-{s.buy_zone_max} "
-                        f"止损{s.stop_loss} 止盈{s.take_profit} "
-                        f"评分{s.signal_score:.0f}")
+            saved = self._save_signals(signals, trade_date)
+            logger.info(f"策略管线完成: 候选{len(candidates)} → 画像{len(profiles)} → AI信号{len(signals)} → 入库{saved}")
+            for s in signals:
+                logger.info(f"  → 入库: {s.stock_code} {s.stock_name} "
+                            f"买入{s.buy_zone_min}-{s.buy_zone_max} "
+                            f"止损{s.stop_loss} 止盈{s.take_profit} "
+                            f"评分{s.signal_score:.0f}")
 
-        if saved > 0:
-            self._push_summary(signals, profiles, trade_date)
+        # 有信号或有持仓审查就推送
+        if signals or holdings_review:
+            self._push_summary(signals, profiles, trade_date, holdings_review)
 
         return signals
 
@@ -229,7 +245,7 @@ class StrategyPipeline:
                 if net_vol <= 0 or buy_vol <= 0:
                     continue
 
-                avg_cost = buy_amt / buy_vol if buy_vol > 0 else 0
+                avg_cost = (buy_amt + (buy_comm or 0)) / buy_vol if buy_vol > 0 else 0
                 pinfo = price_map.get(code)
                 if not pinfo:
                     continue
@@ -597,6 +613,68 @@ class StrategyPipeline:
     ) -> list[StockProfile]:
         return self.profiler.build(candidates, trade_date, market_state=market_state)
 
+    def _enrich_holdings(
+        self, holdings: list[HoldingInfo], trade_date: str, market_state: str = "",
+    ):
+        """为持仓构建完整 StockProfile 画像，注入 AI 审查用技术数据。"""
+        import sqlite3
+
+        codes = [h.stock_code for h in holdings]
+        if not codes:
+            return
+
+        conn = sqlite3.connect(self.screener.db_path)
+        try:
+            placeholders = ",".join("?" for _ in codes)
+            rows = conn.execute(
+                f"""SELECT stock_code, stock_name, price, change_pct,
+                          total_market_cap, turnover_rate, volume_ratio,
+                          ma5, ma10, ma20, ma5_angle, industry,
+                          main_force_net, main_force_ratio
+                   FROM stock_basic
+                   WHERE trade_date=(SELECT MAX(trade_date) FROM stock_basic)
+                     AND stock_code IN ({placeholders})""",
+                codes,
+            ).fetchall()
+            basic_map = {r[0]: r for r in rows}
+        finally:
+            conn.close()
+
+        scores = []
+        for h in holdings:
+            row = basic_map.get(h.stock_code)
+            if not row:
+                continue
+            _, name, price, chg, mcap, turnover, vol_ratio, ma5, ma10, ma20, ma5_angle, industry, mf_net, mf_ratio = row
+            mcap_yi = (mcap or 0) / 1_0000_0000
+            scores.append(StockScore(
+                stock_code=h.stock_code,
+                stock_name=name or h.stock_name,
+                trend_mode="",
+                score=0,
+                price=price or 0,
+                change_pct=chg or 0,
+                mcap=round(mcap_yi, 1),
+                circ_mcap=round(mcap_yi, 1),
+                turnover_rate=turnover or 0,
+                volume_ratio=vol_ratio or 0,
+                ma5=ma5 or 0,
+                ma10=ma10 or 0,
+                ma20=ma20 or 0,
+                ma5_angle=ma5_angle or 0,
+                industry=industry or h.industry,
+                mf_wan=(mf_net or 0) / 10000,
+                mf_ratio=mf_ratio or 0,
+            ))
+
+        if scores:
+            holding_profiles = self.profiler.build(scores, trade_date, market_state=market_state)
+            profile_map = {p.code: p for p in holding_profiles}
+            for h in holdings:
+                h.profile = profile_map.get(h.stock_code)
+
+        logger.info(f"持仓画像富化: {len(scores)} 只 → {len([h for h in holdings if h.profile])} 个完整画像")
+
     # ------------------------------------------------------------------
     # 步骤 3: AI 分析（千问优先，DeepSeek fallback）
     # ------------------------------------------------------------------
@@ -604,17 +682,17 @@ class StrategyPipeline:
     def _analyze(self, profiles: list[StockProfile], trade_date: str,
                  holdings: list[HoldingInfo] = None,
                  summaries: list[AccountSummary] = None,
-                 review_ctx: Optional[ReviewContext] = None) -> list[OrderSignal]:
+                 review_ctx: Optional[ReviewContext] = None) -> tuple[list[OrderSignal], list]:
         # 千问优先
         advisor = AIAdvisor(model="qwen")
         if advisor._analyzers:
             try:
-                signals = advisor.analyze(profiles, trade_date=trade_date,
+                signals, holdings_review = advisor.analyze(profiles, trade_date=trade_date,
                                           holdings=holdings, account_summaries=summaries,
                                           review_context=review_ctx)
                 if signals:
-                    logger.info(f"千问分析: {len(signals)} 个买入信号")
-                    return signals
+                    logger.info(f"千问分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查")
+                    return signals, holdings_review
                 logger.warning("千问分析返回空结果")
             except Exception as e:
                 logger.warning(f"千问分析异常: {e}")
@@ -624,18 +702,18 @@ class StrategyPipeline:
         if ds_advisor._analyzers:
             logger.info("fallback 到 DeepSeek 分析")
             try:
-                signals = ds_advisor.analyze(profiles, trade_date=trade_date,
+                signals, holdings_review = ds_advisor.analyze(profiles, trade_date=trade_date,
                                              holdings=holdings, account_summaries=summaries,
                                              review_context=review_ctx)
                 if signals:
-                    logger.info(f"DeepSeek 分析: {len(signals)} 个买入信号")
-                    return signals
+                    logger.info(f"DeepSeek 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查")
+                    return signals, holdings_review
                 logger.warning("DeepSeek 分析返回空结果")
             except Exception as e:
                 logger.error(f"DeepSeek 分析异常: {e}")
 
         logger.error("所有 AI 模型分析均失败")
-        return []
+        return [], []
 
     # ------------------------------------------------------------------
     # 安全网: 验证 AI 输出的股票确实通过硬关卡
@@ -664,13 +742,107 @@ class StrategyPipeline:
             return True  # 无法验证时放行，避免阻塞管线
 
     # ------------------------------------------------------------------
+    # 步骤 0.6: 账户快照落库
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _save_portfolio_snapshots(summaries: list, trade_date: str):
+        """保存实盘/模拟盘账户快照到 DB"""
+        import json as _json
+        from datetime import datetime
+        from data.repo import TradeRepository
+
+        repo = TradeRepository()
+        now = datetime.now().isoformat()
+        for s in summaries:
+            snap_dict = {
+                "trade_date": trade_date,
+                "total_value": s.total_value,
+                "cash": s.cash,
+                "market_value": s.market_value,
+                "daily_pnl": s.daily_pnl,
+                "total_pnl": s.total_value - s.initial_capital,
+                "drawdown": 0,
+                "position_count": s.position_count,
+                "sector_exposure": "{}",
+                "account": s.account,
+                "created_at": now,
+            }
+            repo.insert_snapshot(snap_dict)
+            logger.info(f"{s.label}快照已保存: 总资产{s.total_value:,.0f} 仓位{s.position_ratio:.1%}")
+
+    @staticmethod
+    def _save_portfolio_positions(holdings: list, trade_date: str):
+        """保存持仓明细到 trade_portfolio_positions（按账户分组落库）。"""
+        from data.repo import TradeRepository
+
+        repo = TradeRepository()
+        for account in ("paper", "real"):
+            acct_holdings = [h for h in holdings if h.account == account]
+            if not acct_holdings:
+                continue
+            rows = []
+            for h in acct_holdings:
+                rows.append({
+                    "stock_code": h.stock_code,
+                    "stock_name": h.stock_name,
+                    "volume": h.volume,
+                    "avg_cost": h.avg_cost,
+                    "current_price": h.current_price,
+                    "market_value": h.market_value,
+                    "pnl": (h.current_price - h.avg_cost) * h.volume,
+                    "pnl_pct": h.pnl_pct,
+                    "stop_loss": h.stop_loss,
+                    "take_profit": h.take_profit,
+                    "holding_days": h.holding_days,
+                    "sector_code": h.industry or "",
+                })
+            repo.insert_positions(trade_date, account, rows)
+        logger.info(f"持仓明细已保存: {len(holdings)} 只")
+
+    # ------------------------------------------------------------------
+    # 步骤 3.1: 持仓审查落库
+    # ------------------------------------------------------------------
+
+    def _save_holdings_review(self, holdings_review: list, trade_date: str):
+        """AI 持仓审查落库 + 应用止损止盈到 bought 信号"""
+        now = datetime.now().isoformat()
+        for hr in holdings_review:
+            review_dict = {
+                "trade_date": trade_date,
+                "created_at": now,
+                "stock_code": hr.stock_code,
+                "account": hr.account or "paper",
+                "action": hr.action,
+                "new_stop_loss": hr.new_stop_loss,
+                "new_take_profit": hr.new_take_profit,
+                "expected_holding_days": hr.expected_holding_days,
+                "tomorrow_outlook": hr.tomorrow_outlook,
+                "reason": hr.reason,
+                "applied": 0,
+            }
+            self.repo.insert_holdings_review(review_dict)
+            logger.info(f"持仓审查入库: {hr.stock_code} {hr.action}")
+
+            # 应用止损止盈（实盘 + 模拟盘都需要）
+            if hr.new_stop_loss or hr.new_take_profit:
+                self.repo.apply_holdings_review_sl_tp(
+                    trade_date, hr.stock_code,
+                    new_stop_loss=hr.new_stop_loss,
+                    new_take_profit=hr.new_take_profit,
+                )
+                logger.info(f"  已应用止损止盈: {hr.stock_code} sl={hr.new_stop_loss} tp={hr.new_take_profit}")
+
+    # ------------------------------------------------------------------
     # 步骤 4: 信号入库
     # ------------------------------------------------------------------
 
     def _save_signals(self, signals: list[OrderSignal], trade_date: str) -> int:
         now = datetime.now().isoformat()
         saved = 0
-        for s in signals:
+        # AI 精选信号后保存，确保 REPLACE 时覆盖复盘精选的同票记录
+        ordered = sorted(signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1)
+        for s in ordered:
             if s.source != SignalSource.REVIEW:
                 if not self._validate_signal(s):
                     logger.warning(f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过")
@@ -708,26 +880,65 @@ class StrategyPipeline:
 
     def _push_summary(
         self, signals: list[OrderSignal], profiles: list[StockProfile],
-        trade_date: str,
+        trade_date: str, holdings_review: list = None,
     ):
-        if not self.telegram:
-            try:
-                from system.utils.telegram import MessageSender
-                self.telegram = MessageSender()
-            except Exception:
-                logger.warning("Telegram 不可用，跳过推送")
-                return
+        from system.utils.telegram import MessageSender
+        from system.config.settings import TELEGRAM_REPORT_CHAT_ID, TELEGRAM_PRIVATE_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
 
         pmap = {p.code: p for p in profiles}
-        lines = [f"📋 今日交易信号 ({trade_date})", ""]
+        lines = [f"📋 明天交易信号 ({trade_date})", ""]
         for i, s in enumerate(signals, 1):
             p = pmap.get(s.stock_code)
             lines.append(self._format_signal(i, s, p))
 
-        try:
-            self.telegram.send("\n".join(lines))
-        except Exception as e:
-            logger.warning(f"Telegram 推送失败: {e}")
+        # 按账户拆分持仓审查
+        paper_reviews = [hr for hr in (holdings_review or []) if hr.account != "real"]
+        real_reviews = [hr for hr in (holdings_review or []) if hr.account == "real"]
+
+        # 群消息：信号 + 模拟盘持仓审查（不含实盘）
+        group_lines = list(lines)
+        if paper_reviews:
+            group_lines.append("")
+            group_lines.append("---")
+            group_lines.append("📊 持仓审查建议（模拟盘）")
+            for hr in paper_reviews:
+                group_lines.append(hr.to_summary())
+        group_msg = "\n".join(group_lines)
+
+        # 私聊消息：信号 + 全部持仓审查
+        private_lines = list(lines)
+        if holdings_review:
+            private_lines.append("")
+            private_lines.append("---")
+            private_lines.append("📊 持仓审查建议")
+            for hr in holdings_review:
+                tag = "🔴实盘" if hr.account == "real" else "🟡模拟"
+                private_lines.append(f"{tag} {hr.to_summary()}")
+        private_msg = "\n".join(private_lines)
+
+        # 推送到群（仅模拟盘内容）
+        if TELEGRAM_REPORT_CHAT_ID:
+            try:
+                sender = MessageSender(
+                    chat_id=TELEGRAM_REPORT_CHAT_ID,
+                    bot_token=TELEGRAM_REPORT_BOT_TOKEN
+                )
+                sender.send(group_msg)
+                logger.info("交易信号推送成功 (群)")
+            except Exception as e:
+                logger.warning(f"交易信号推送失败 (群): {e}")
+
+        # 推送到私聊（含实盘持仓审查）
+        if TELEGRAM_PRIVATE_CHAT_ID:
+            try:
+                sender = MessageSender(
+                    chat_id=TELEGRAM_PRIVATE_CHAT_ID,
+                    bot_token=TELEGRAM_REPORT_BOT_TOKEN
+                )
+                sender.send(private_msg)
+                logger.info("交易信号推送成功 (私聊)")
+            except Exception as e:
+                logger.warning(f"交易信号推送失败 (私聊): {e}")
 
     @staticmethod
     def _format_signal(index: int, s: OrderSignal, p: Optional[StockProfile]) -> str:
@@ -738,7 +949,8 @@ class StrategyPipeline:
             if mcap:
                 mcap_str = f"，市值{mcap:.0f}亿"
 
-        lines = [f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）"]
+        source_tag = "🤖AI精选" if s.source == SignalSource.AI_ENHANCED else "📊复盘精选"
+        lines = [f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）{source_tag}"]
 
         # 趋势定级
         trend_rating = StrategyPipeline._derive_trend_rating(s, p)

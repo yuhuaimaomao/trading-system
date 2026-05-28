@@ -2,7 +2,7 @@
 """
 财联社电报采集器
 
-数据源：财联社 nodeapi/telegraphList（直调 HTTP，不经过 akshare）
+数据源：财联社 /api/cache（直调 HTTP，不经过 akshare）
 写入表：cls_telegraph
 用途：为复盘提供盘中消息驱动分析
 
@@ -28,7 +28,8 @@ from system.config.akshare_config import get_headers
 from system.utils.logger import get_collector_logger
 
 # ========== 常量 ==========
-TELEGRAPH_LIST_URL = "https://www.cls.cn/nodeapi/telegraphList"
+TELEGRAPH_LIST_URL = "https://www.cls.cn/api/cache"
+TELEGRAPH_LIST_PARAMS = {"name": "telegraph", "rn": 20}
 ARTICLE_URL = "https://api3.cls.cn/share/article/{}"
 ARTICLE_PARAMS = "?os=web&sv=8.4.6&app=CailianpressWeb"
 DEFAULT_TIMEOUT = 20
@@ -88,15 +89,19 @@ class TelegraphCollector:
         self.db_path = db_path or str(DATABASE_PATH)
         self.session = requests.Session()
         self.session.headers.update(get_headers())
+        # /api/cache 返回 Brotli，requests 默认不支持，去掉 br
+        self.session.headers["Accept-Encoding"] = "gzip, deflate"
         self.session.headers.update({"Referer": "https://www.cls.cn/telegraph"})
         self.logger.info("电报采集器初始化完成")
 
     # ========== 数据采集 ==========
 
     def _fetch_telegraph_list(self) -> list:
-        """获取电报列表（单次返回约 20 条，覆盖约 22 分钟窗口）"""
+        """获取电报列表（单次返回约 20 条，覆盖约 35 分钟窗口）"""
         try:
-            resp = self.session.get(TELEGRAPH_LIST_URL, timeout=DEFAULT_TIMEOUT)
+            params = dict(TELEGRAPH_LIST_PARAMS)
+            params["lastTime"] = int(time.time())
+            resp = self.session.get(TELEGRAPH_LIST_URL, params=params, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             items = data.get("data", {}).get("roll_data", [])
@@ -499,6 +504,8 @@ class TelegraphCollector:
         if not pending_rows:
             return
 
+        # 单次最多 10 条，避免输出超 token 限制
+        pending_rows = pending_rows[:10]
         self.logger.info(f"AI 结构化：处理 {len(pending_rows)} 条电报（跳过 {len(skipped_ids)} 条噪声）")
 
         # 2. 格式化为 prompt
@@ -547,7 +554,7 @@ class TelegraphCollector:
 
             for _round in range(max_rounds):
                 response = ai._call_ai_with_tools(
-                    messages, max_tokens=2000,
+                    messages, max_tokens=None,
                     tools=TELEGRAPH_FC_TOOLS, tool_choice='auto'
                 )
 
@@ -599,49 +606,83 @@ class TelegraphCollector:
             if result_text.startswith('json'):
                 result_text = result_text[4:].strip()
 
-            items = _json.loads(result_text)
+            items = self._parse_ai_json(result_text)
             if not isinstance(items, list):
                 items = [items]
-
-            # 6. 回写 DB
-            updated = 0
-            conn = sqlite3.connect(self.db_path)
-            for item in items:
-                tid = str(item.get('telegraph_id', ''))
-                if not tid:
-                    continue
-                try:
-                    conn.execute("""
-                        UPDATE cls_telegraph SET
-                            ai_summary=?, ai_sentiment=?, ai_impact=?,
-                            ai_stocks=?, ai_sectors=?,
-                            ai_importance=?, ai_direction=?,
-                            ai_status='done'
-                        WHERE telegraph_id=?
-                    """, (
-                        item.get('ai_summary', '')[:100],
-                        item.get('ai_sentiment', '中性'),
-                        item.get('ai_impact', '')[:100],
-                        _json.dumps(item.get('ai_stocks', []), ensure_ascii=False),
-                        _json.dumps(item.get('ai_sectors', []), ensure_ascii=False),
-                        item.get('ai_importance', 0),
-                        item.get('ai_direction', '其他'),
-                        tid,
-                    ))
-                    updated += 1
-                except Exception as e:
-                    self.logger.warning(f"回写电报 {tid} AI 字段失败: {e}")
-
-            conn.commit()
-            conn.close()
-            self.logger.info(f"AI 结构化完成：{updated}/{len(items)} 条已更新")
+            items = [it for it in items if it.get('telegraph_id')]
+            self._update_ai_fields(items)
 
         except _json.JSONDecodeError as e:
-            self.logger.warning(f"AI 返回 JSON 解析失败: {e}\n原始返回: {result_text[:200] if result_text else '(空)'}")
-            self._mark_failed([r['telegraph_id'] for r in pending_rows])
+            repaired = self._repair_truncated_json(result_text)
+            if repaired:
+                try:
+                    items = _json.loads(repaired)
+                    if isinstance(items, list):
+                        self.logger.info(f"JSON 修复成功，恢复 {len(items)}/{len(pending_rows)} 条")
+                        items = [it for it in items if it.get('telegraph_id')]
+                        self._update_ai_fields(items)
+                except _json.JSONDecodeError:
+                    self.logger.warning(f"AI 返回 JSON 解析失败（修复无效）: {e}")
+                    self._mark_failed([r['telegraph_id'] for r in pending_rows])
+            else:
+                self.logger.warning(f"AI 返回 JSON 解析失败（无法修复）: {e}")
+                self._mark_failed([r['telegraph_id'] for r in pending_rows])
         except Exception as e:
             self.logger.warning(f"AI 结构化失败: {e}")
             self._mark_failed([r['telegraph_id'] for r in pending_rows])
+
+    def _parse_ai_json(self, text: str) -> list:
+        """解析 AI 返回 JSON，失败抛出 JSONDecodeError"""
+        return _json.loads(text)
+
+    def _repair_truncated_json(self, text: str) -> Optional[str]:
+        """尝试修复因 max_tokens 截断导致的 JSON 不完整"""
+        if not text:
+            return None
+        text = text.strip()
+        # 找到最后一个完整的对象（以 }, 结尾）
+        last_complete = text.rfind('},')
+        if last_complete > 0:
+            text = text[:last_complete + 1]
+            # 闭合数组
+            if text.rstrip().endswith(','):
+                text = text.rstrip()[:-1]
+            text = text.strip() + '\n]'
+            return text
+        return None
+
+    def _update_ai_fields(self, items: list):
+        """回写 AI 结构化结果到 DB"""
+        updated = 0
+        conn = sqlite3.connect(self.db_path)
+        for item in items:
+            tid = str(item.get('telegraph_id', ''))
+            if not tid:
+                continue
+            try:
+                conn.execute("""
+                    UPDATE cls_telegraph SET
+                        ai_summary=?, ai_sentiment=?, ai_impact=?,
+                        ai_stocks=?, ai_sectors=?,
+                        ai_importance=?, ai_direction=?,
+                        ai_status='done'
+                    WHERE telegraph_id=?
+                """, (
+                    item.get('ai_summary', '')[:100],
+                    item.get('ai_sentiment', '中性'),
+                    item.get('ai_impact', '')[:100],
+                    _json.dumps(item.get('ai_stocks', []), ensure_ascii=False),
+                    _json.dumps(item.get('ai_sectors', []), ensure_ascii=False),
+                    item.get('ai_importance', 0),
+                    item.get('ai_direction', '其他'),
+                    tid,
+                ))
+                updated += 1
+            except Exception as e:
+                self.logger.warning(f"回写电报 {tid} AI 字段失败: {e}")
+        conn.commit()
+        conn.close()
+        self.logger.info(f"AI 结构化完成：{updated}/{len(items)} 条已更新")
 
     def _mark_failed(self, telegraph_ids: List[str]):
         """标记 AI 结构化失败的记录"""

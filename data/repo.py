@@ -18,7 +18,7 @@ class TradeRepository:
         conn = self._conn()
         cols = ", ".join(signal_dict.keys())
         placeholders = ", ".join(["?" for _ in signal_dict])
-        sql = f"INSERT OR IGNORE INTO trade_signals ({cols}) VALUES ({placeholders})"
+        sql = f"INSERT OR REPLACE INTO trade_signals ({cols}) VALUES ({placeholders})"
         cursor = conn.execute(sql, list(signal_dict.values()))
         conn.commit()
         row_id = cursor.lastrowid
@@ -168,5 +168,64 @@ class TradeRepository:
         placeholders = ", ".join(["?" for _ in metrics])
         sql = f"INSERT OR REPLACE INTO trade_strategy_metrics ({cols}) VALUES ({placeholders})"
         conn.execute(sql, list(metrics.values()))
+        conn.commit()
+        conn.close()
+
+    # ---- trade_holdings_review ----
+
+    def insert_holdings_review(self, review_dict: dict) -> int:
+        """保存 AI 持仓审查建议。apply_sl_tp=True 时同步更新 trade_signals 止损止盈。"""
+        conn = self._conn()
+        cols = ", ".join(review_dict.keys())
+        placeholders = ", ".join(["?" for _ in review_dict])
+        sql = f"INSERT OR REPLACE INTO trade_holdings_review ({cols}) VALUES ({placeholders})"
+        cursor = conn.execute(sql, list(review_dict.values()))
+        conn.commit()
+        row_id = cursor.lastrowid
+        conn.close()
+        return row_id
+
+    def apply_holdings_review_sl_tp(self, trade_date: str, stock_code: str,
+                                     new_stop_loss: float = None,
+                                     new_take_profit: float = None):
+        """将 AI 建议的止损/止盈应用到 bought 状态的信号上"""
+        conn = self._conn()
+        if new_stop_loss is not None:
+            conn.execute(
+                "UPDATE trade_signals SET stop_loss=? WHERE id=(SELECT id FROM trade_signals"
+                " WHERE trade_date<=? AND stock_code=? AND status='bought'"
+                " ORDER BY id DESC LIMIT 1)",
+                (new_stop_loss, trade_date, stock_code),
+            )
+        if new_take_profit is not None:
+            conn.execute(
+                "UPDATE trade_signals SET take_profit=? WHERE id=(SELECT id FROM trade_signals"
+                " WHERE trade_date<=? AND stock_code=? AND status='bought'"
+                " ORDER BY id DESC LIMIT 1)",
+                (new_take_profit, trade_date, stock_code),
+            )
+        conn.commit()
+        conn.close()
+
+    # ---- trade_portfolio_positions ----
+
+    def insert_positions(self, trade_date: str, account: str,
+                         positions: list[dict]):
+        """批量保存持仓明细（按日按账户覆盖）。"""
+        conn = self._conn()
+        conn.execute(
+            "DELETE FROM trade_portfolio_positions WHERE trade_date=? AND account=?",
+            (trade_date, account),
+        )
+        for p in positions:
+            p["trade_date"] = trade_date
+            p["account"] = account
+            p["created_at"] = datetime.now().isoformat()
+            cols = ", ".join(p.keys())
+            placeholders = ", ".join(["?" for _ in p])
+            conn.execute(
+                f"INSERT INTO trade_portfolio_positions ({cols}) VALUES ({placeholders})",
+                list(p.values()),
+            )
         conn.commit()
         conn.close()

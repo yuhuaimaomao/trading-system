@@ -72,38 +72,35 @@ class ReviewService:
         logger.info("开始采集复盘数据...")
         logger.info("=" * 60)
         
+        def _collect_with_retry(name, collector):
+            """代理采集器：失败后等 120s 重试一次，应对代理池整点刷新"""
+            t0 = time.time()
+            for attempt in (1, 2):
+                try:
+                    result = collector.fetch_and_save()
+                except Exception as e:
+                    logger.error(f"❌ {name}采集异常：{e}")
+                    result = {'success': False, 'count': 0, 'total': 0, 'data': []}
+                if result.get('success') and result.get('count', 0) > 0:
+                    logger.info(f"  ✅ {name}完成，耗时 {time.time()-t0:.1f}秒")
+                    return result
+                if attempt == 1:
+                    logger.warning(f"  ⚠️ {name}第1次失败，等120s后重试...")
+                    time.sleep(120)
+            logger.error(f"  ❌ {name}重试后仍失败，跳过")
+            return result
+
         # 采集行业板块
         logger.info("【1/13】采集行业板块...")
-        t0 = time.time()
-        
-        try:
-            industry_result = self.industry_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 行业板块采集异常：{e}")
-            industry_result = {'success': False, 'count': 0, 'total': 0, 'data': []}
-        logger.info(f"  ✅ 行业板块完成，耗时 {time.time()-t0:.1f}秒")
-        
+        industry_result = _collect_with_retry("行业板块", self.industry_collector)
+
         # 采集概念板块
         logger.info("【2/13】采集概念板块...")
-        t0 = time.time()
-        
-        try:
-            concept_result = self.concept_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 概念板块采集异常：{e}")
-            concept_result = {'success': False, 'count': 0, 'total': 0, 'data': []}
-        logger.info(f"  ✅ 概念板块完成，耗时 {time.time()-t0:.1f}秒")
-        
+        concept_result = _collect_with_retry("概念板块", self.concept_collector)
+
         # 采集个股行情
         logger.info("【3/13】采集个股行情...")
-        t0 = time.time()
-        
-        try:
-            stock_basic_result = self.stock_basic_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 个股行情采集异常：{e}")
-            stock_basic_result = {'success': False, 'count': 0, 'total': 0, 'data': []}
-        logger.info(f"  ✅ 个股行情完成，耗时 {time.time()-t0:.1f}秒")
+        stock_basic_result = _collect_with_retry("个股行情", self.stock_basic_collector)
         
         # 采集强势股
         logger.info("【4/13】采集强势股...")
@@ -290,22 +287,26 @@ class ReviewService:
         return report, stock_pool
     
     def send(self, message: str) -> None:
-        """推送消息到 Telegram"""
+        """推送消息到 Telegram（群 + 私聊双推）"""
         from system.utils.telegram import MessageSender
-        from system.config.settings import TELEGRAM_REPORT_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
-        
-        logger.info(f"推送复盘报告到 Telegram (chat_id={TELEGRAM_REPORT_CHAT_ID})...")
-        
-        try:
-            sender = MessageSender(
-                chat_id=TELEGRAM_REPORT_CHAT_ID,
-                bot_token=TELEGRAM_REPORT_BOT_TOKEN
-            )
-            sender.send(message)
-            logger.info("✅ 复盘报告推送成功")
-            
-        except Exception as e:
-            logger.error(f"❌ 推送失败：{e}", exc_info=True)
+        from system.config.settings import TELEGRAM_REPORT_CHAT_ID, TELEGRAM_PRIVATE_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
+
+        for chat_id, label in [
+            (TELEGRAM_REPORT_CHAT_ID, "群"),
+            (TELEGRAM_PRIVATE_CHAT_ID, "私聊"),
+        ]:
+            if not chat_id:
+                continue
+            logger.info(f"推送复盘报告到 Telegram {label} (chat_id={chat_id})...")
+            try:
+                sender = MessageSender(
+                    chat_id=chat_id,
+                    bot_token=TELEGRAM_REPORT_BOT_TOKEN
+                )
+                sender.send(message)
+                logger.info(f"✅ 复盘报告推送成功 ({label})")
+            except Exception as e:
+                logger.error(f"❌ 推送失败 ({label})：{e}", exc_info=True)
     
     def _check_data_complete(self, trade_date: str) -> list:
         """检查 AI 分析所需的 DB 数据是否齐全，返回缺失的数据项列表"""

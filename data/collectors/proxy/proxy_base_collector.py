@@ -330,6 +330,11 @@ class ProxyBaseCollector(ProxyRequester):
             data_section = page_data.get('data') or {}
             result_section = page_data.get('result') or {}
             diff_list = data_section.get('diff') or result_section.get('data', [])
+
+            # 记录每页 total（末页用于数据源变动校验）
+            page_total = data_section.get('total')
+            if page_total is not None:
+                self.cache_data['last_page_total'] = page_total
             
             # 如果数据为空，说明已是最后一页
             if not diff_list:
@@ -423,10 +428,15 @@ class ProxyBaseCollector(ProxyRequester):
                     
                     page_data = self._fetch_page(page, proxy_dict)
                     
-                    if page_data and (page_data.get('data', {}).get('diff') or 
+                    if page_data and (page_data.get('data', {}).get('diff') or
                                       page_data.get('result', {}).get('data')):
                         # 解析数据
-                        diff_list = page_data['data'].get('diff', []) or page_data['result'].get('data', [])
+                        data_section = page_data.get('data') or {}
+                        diff_list = data_section.get('diff') or page_data.get('result', {}).get('data', [])
+
+                        page_total = data_section.get('total')
+                        if page_total is not None:
+                            self.cache_data['last_page_total'] = page_total
                         
                         if diff_list:
                             # 追加数据到缓存
@@ -454,7 +464,42 @@ class ProxyBaseCollector(ProxyRequester):
                     self.logger.error(f"❌ 第{page}页重试失败，保留在失败列表中")
             
             self.logger.info(f"第{round_num}轮重试完成：成功{round_success_count}页，失败{len(failed_pages) - round_success_count}页")
-        
+
+        # 数据完整性校验（所有重试轮次结束后）
+        if success:
+            collected = len(self.cache_data.get('data', []))
+            expected = self.cache_data.get('total', 0)
+            last_page_total = self.cache_data.get('last_page_total')
+
+            if expected > 0 and collected != expected:
+                diff = abs(expected - collected)
+                self.logger.warning(
+                    f"数据完整性校验：count={collected} != total={expected}（差{diff}条）"
+                )
+
+                # 差 < 一页 → 数据源变动，用末页 total 二次校验
+                if diff < self.PAGE_SIZE and last_page_total is not None and collected == last_page_total:
+                    self.logger.info(
+                        f"数据源变动：首页total={expected} → 末页total={last_page_total}，"
+                        f"实际采集={collected}，以末页为准"
+                    )
+                    self.cache_data['total'] = last_page_total
+                elif not getattr(self, '_integrity_rerun', False):
+                    self.logger.warning("整轮重跑一次...")
+                    self._integrity_rerun = True
+                    self.cache_data['data'] = []
+                    self.cache_data['completed_pages'] = 0
+                    self.cache_data['failed_pages'] = []
+                    self.cache_data['status'] = 'incomplete'
+                    self.cache_data.pop('last_page_total', None)
+                    self._save_cache()
+                    return self.fetch_all(max_retries=max_retries)
+                else:
+                    self.logger.warning(
+                        f"重跑后数据仍不完整：count={collected} != total={expected}，跳过，等待手工重跑"
+                    )
+                    success = False
+
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         

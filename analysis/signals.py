@@ -227,6 +227,7 @@ class HoldingInfo:
     highest_price: float = 0
     signal_score: float = 0
     is_today_buy: bool = False  # T+1 锁定期
+    profile: Optional["StockProfile"] = None  # 完整画像（含技术指标、板块、电报等）
 
 
 @dataclass
@@ -295,6 +296,35 @@ class ReviewContext:
                 pos_parts.append(f"回避方向: {self.avoid_direction}")
             parts.append(f"【复盘·仓位与策略】\n  {' | '.join(pos_parts)}")
         return "\n\n".join(parts) if parts else ""
+
+
+@dataclass
+class HoldingReview:
+    """AI 持仓审查建议"""
+    stock_code: str
+    account: str = ""
+    action: str = ""  # hold | add | reduce | close
+    new_stop_loss: Optional[float] = None
+    new_take_profit: Optional[float] = None
+    expected_holding_days: Optional[int] = None
+    tomorrow_outlook: str = ""
+    reason: str = ""
+
+    def to_summary(self) -> str:
+        action_icon = {"add": "➕加仓", "reduce": "➖减仓", "close": "🔴清仓", "hold": "🟢持有"}
+        icon = action_icon.get(self.action, "❓")
+        parts = [f"{icon} {self.stock_code}"]
+        if self.new_stop_loss:
+            parts.append(f"止损→{self.new_stop_loss:.2f}")
+        if self.new_take_profit:
+            parts.append(f"止盈→{self.new_take_profit:.2f}")
+        if self.expected_holding_days:
+            parts.append(f"预计{self.expected_holding_days}天")
+        if self.tomorrow_outlook:
+            parts.append(self.tomorrow_outlook)
+        if self.reason:
+            parts.append(self.reason)
+        return " | ".join(parts)
 
 
 @dataclass

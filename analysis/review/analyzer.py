@@ -1279,7 +1279,7 @@ class AIAnalyzer:
         self.session = requests.Session()
         self.logger.info("AI 分析引擎初始化完成（模型：{}，支持 Function Calling）".format(self.model))
 
-    def _call_ai(self, prompt: str, system_prompt: str = "你是一个专业的 A 股量化分析师。请务必使用阿拉伯数字格式输出所有数值，不要转换为中文数字。例如：85%而不是百分之八十五，2.5万亿而不是二点五万亿，2026-04-29而不是二零二六年四月二十九日。", enable_search: bool = False, max_tokens: int = 2000) -> Optional[str]:
+    def _call_ai(self, prompt: str, system_prompt: str = "你是一个专业的 A 股量化分析师。请务必使用阿拉伯数字格式输出所有数值，不要转换为中文数字。例如：85%而不是百分之八十五，2.5万亿而不是二点五万亿，2026-04-29而不是二零二六年四月二十九日。", enable_search: bool = False, max_tokens: Optional[int] = None) -> Optional[str]:
         """调用 AI 模型
 
         Args:
@@ -1310,8 +1310,9 @@ class AIAnalyzer:
                     {'role': 'system', 'content': system_prompt},
                     {'role': 'user', 'content': prompt}
                 ],
-                'max_tokens': max_tokens
             }
+            if max_tokens is not None:
+                payload['max_tokens'] = max_tokens
 
             # 启用百炼联网搜索功能（仅百炼支持）
             if enable_search and not self.model.startswith('deepseek'):
@@ -1346,7 +1347,7 @@ class AIAnalyzer:
             self.logger.error("AI 调用失败：{}".format(e))
             raise RuntimeError("AI API 调用失败: {}".format(e)) from e
 
-    def _call_ai_with_tools(self, messages: List[Dict], max_tokens: int = 2000,
+    def _call_ai_with_tools(self, messages: List[Dict], max_tokens: Optional[int] = None,
                             tools: List[Dict] = None, tool_choice: str = 'auto') -> Dict:
         """
         调用 AI（支持工具调用）
@@ -1387,8 +1388,9 @@ class AIAnalyzer:
                 'tools': _tools,
                 'tool_choice': tool_choice,
                 'parallel_tool_calls': True,
-                'max_tokens': max_tokens
             }
+            if max_tokens is not None:
+                payload['max_tokens'] = max_tokens
 
             self.logger.info("调用 AI（支持工具，消息数：{}，tool_choice={}）...".format(len(messages), tool_choice))
             response = self.session.post(endpoint, json=payload, headers=headers, timeout=600)

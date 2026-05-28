@@ -40,7 +40,7 @@ def ensure_tables():
             reason TEXT,
             status TEXT DEFAULT 'pending',
             executed_at TEXT,
-            UNIQUE(trade_date, stock_code, created_at)
+            UNIQUE(trade_date, stock_code)
         );
 
         CREATE TABLE IF NOT EXISTS trade_orders (
@@ -76,7 +76,44 @@ def ensure_tables():
             position_count INTEGER,
             sector_exposure TEXT,
             created_at TEXT,
-            UNIQUE(trade_date)
+            account TEXT DEFAULT 'real',
+            UNIQUE(trade_date, account)
+        );
+
+        CREATE TABLE IF NOT EXISTS trade_portfolio_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            account TEXT DEFAULT 'paper',
+            stock_code TEXT NOT NULL,
+            stock_name TEXT,
+            volume INTEGER,
+            avg_cost REAL,
+            current_price REAL,
+            market_value REAL,
+            pnl REAL,
+            pnl_pct REAL,
+            stop_loss REAL,
+            take_profit REAL,
+            holding_days INTEGER DEFAULT 0,
+            sector_code TEXT,
+            created_at TEXT,
+            UNIQUE(trade_date, account, stock_code)
+        );
+
+        CREATE TABLE IF NOT EXISTS trade_holdings_review (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            account TEXT DEFAULT 'paper',
+            action TEXT NOT NULL,
+            new_stop_loss REAL,
+            new_take_profit REAL,
+            expected_holding_days INTEGER,
+            tomorrow_outlook TEXT,
+            reason TEXT,
+            applied INTEGER DEFAULT 0,
+            UNIQUE(trade_date, stock_code, account)
         );
 
         CREATE TABLE IF NOT EXISTS trade_strategy_metrics (
