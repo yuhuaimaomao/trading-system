@@ -39,7 +39,7 @@ class LimitPoolReader:
                    sb.main_force_ratio,
                    sb.turnover/10000 as turnover_wan,
                    lp.industry,
-                   sb.price, sb.ma5, sb.ma20, sb.ma5_angle
+                   sb.price, sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle
             FROM limit_pool lp
             JOIN stock_basic sb ON lp.stock_code = sb.stock_code AND sb.trade_date = ?
             WHERE lp.trade_date = ? AND lp.pool_type = '涨停'
@@ -72,6 +72,7 @@ class LimitPoolReader:
                 'industry': row['industry'] or '',
                 'price': row['price'] or 0,
                 'ma5': row['ma5'] or 0,
+                'ma10': row['ma10'] or 0,
                 'ma20': row['ma20'] or 0,
                 'ma5_angle': row['ma5_angle'] or 0,
             })
@@ -102,7 +103,7 @@ class LimitPoolReader:
                    sb.change_pct, sb.turnover_rate, sb.amplitude,
                    sb.main_force_net/10000 as mf_wan,
                    sb.total_market_cap/100000000 as mcap,
-                   sb.price, sb.ma5, sb.ma20, sb.ma5_angle
+                   sb.price, sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle
             FROM limit_pool lp
             JOIN stock_basic sb ON lp.stock_code = sb.stock_code AND sb.trade_date = ?
             WHERE lp.trade_date = ? AND lp.pool_type = '炸板'
@@ -123,6 +124,7 @@ class LimitPoolReader:
                 'industry': row['industry'] or '',
                 'price': row['price'] or 0,
                 'ma5': row['ma5'] or 0,
+                'ma10': row['ma10'] or 0,
                 'ma20': row['ma20'] or 0,
                 'ma5_angle': row['ma5_angle'] or 0,
             })
@@ -145,7 +147,7 @@ class LimitPoolReader:
                    sb.main_force_ratio,
                    sb.turnover/10000 as turnover_wan,
                    COALESCE(lhb.net_inflow, 0) as lhb_net,
-                   sb.price, sb.ma5, sb.ma20, sb.ma5_angle
+                   sb.price, sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle
             FROM limit_pool lp
             JOIN stock_basic sb ON lp.stock_code = sb.stock_code
                 AND sb.trade_date = ?
@@ -185,6 +187,7 @@ class LimitPoolReader:
                 'lhb_net': row['lhb_net'] or 0,
                 'price': row['price'] or 0,
                 'ma5': row['ma5'] or 0,
+                'ma10': row['ma10'] or 0,
                 'ma20': row['ma20'] or 0,
                 'ma5_angle': row['ma5_angle'] or 0,
             })
@@ -226,7 +229,7 @@ class LimitPoolReader:
                    sb.medium_net/10000 as md_wan,
                    sb.small_net/10000 as sm_wan,
                    sb.main_force_ratio,
-                   sb.price, sb.ma5, sb.ma20, sb.ma5_angle
+                   sb.price, sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle
             FROM yesterday_zt_performance yp
             LEFT JOIN stock_basic sb ON yp.stock_code = sb.stock_code AND sb.trade_date = ?
             WHERE yp.trade_date = ?
@@ -254,6 +257,7 @@ class LimitPoolReader:
                 'mf_ratio': row['main_force_ratio'] or 0,
                 'price': row['price'] or 0,
                 'ma5': row['ma5'] or 0,
+                'ma10': row['ma10'] or 0,
                 'ma20': row['ma20'] or 0,
                 'ma5_angle': row['ma5_angle'] or 0,
             })

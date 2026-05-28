@@ -70,36 +70,23 @@ class SectorReader:
 
     @staticmethod
     def _calc_hot_days(conn, trade_date: str, table_name: str) -> dict:
-        """统计每个板块近10个交易日内进入涨幅前10的天数（累计，非连续）"""
+        """统计每个板块近10个交易日内进入综合打分前10的天数"""
         from system.config.trading_calendar import get_previous_trading_day
+
+        sector_type = 'industry' if table_name == 'sector_industry' else 'concept'
 
         start_date = trade_date
         for _ in range(10):
             start_date = get_previous_trading_day(start_date)
 
-        cursor = conn.execute(f"""
-            SELECT trade_date, sector_code, change_percent
-            FROM {table_name}
-            WHERE trade_date BETWEEN ? AND ?
-            ORDER BY trade_date DESC, change_percent DESC
-        """, (start_date, trade_date))
+        cursor = conn.execute("""
+            SELECT sector_code, COUNT(*) as appear_count
+            FROM sector_hot_history
+            WHERE sector_type = ? AND trade_date BETWEEN ? AND ?
+            GROUP BY sector_code
+        """, (sector_type, start_date, trade_date))
 
-        # 按日期分组（已按 change_percent DESC 排序），每组前10即当天前十
-        from collections import OrderedDict
-        date_groups = OrderedDict()
-        for row in cursor.fetchall():
-            d = row['trade_date']
-            if d not in date_groups:
-                date_groups[d] = []
-            date_groups[d].append(row['sector_code'])
-
-        hot_days = {}
-        for date, codes in date_groups.items():
-            for i, code in enumerate(codes):
-                if i < 10:
-                    hot_days[code] = hot_days.get(code, 0) + 1
-
-        return hot_days
+        return {row['sector_code']: row['appear_count'] for row in cursor.fetchall()}
 
     @staticmethod
     def _calc_hot_trend(sector_codes: list, conn, trade_date: str, sector_type: str) -> dict:
@@ -432,7 +419,7 @@ class SectorReader:
                        sb.change_pct, sb.circ_market_cap,
                        sb.super_large_net, sb.volume_ratio, sb.turnover_rate,
                        sb.amplitude, sb.main_force_net, sb.main_force_ratio,
-                       sb.ma5, sb.ma20, sb.ma5_angle,
+                       sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle,
                        COALESCE(lp.consecutive_boards, 0) as boards,
                        lp.first_seal_time, lp.open_count
                 FROM sector_stocks ss
@@ -466,6 +453,7 @@ class SectorReader:
                     'mf_wan': raw_mf / 10000,
                     'mf_ratio': row['main_force_ratio'] or 0,
                     'ma5': row['ma5'] or 0,
+                    'ma10': row['ma10'] or 0,
                     'ma20': row['ma20'] or 0,
                     'ma5_angle': row['ma5_angle'] or 0,
                     'boards': row['boards'] or 0,
@@ -1021,7 +1009,7 @@ class SectorReader:
                 WHERE sector_type = 'concept'
                   AND sector_code IN ({ph_sc})
                   AND trade_date IN ({ph_days})
-                  AND rank <= ?
+                  AND rank > 0 AND rank <= ?
             """, list(all_sectors) + hot_days + [top_n])
             hot_sectors = {row['sector_code'] for row in rows}
 

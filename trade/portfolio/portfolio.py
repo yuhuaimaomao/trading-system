@@ -173,6 +173,8 @@ class Portfolio:
         if not pos:
             return False
 
+        # 先以实际成交价更新，再取 PnL
+        pos.update_price(price)
         proceeds = price * pos.volume - commission
         self.cash += proceeds
         self.trade_log.append({

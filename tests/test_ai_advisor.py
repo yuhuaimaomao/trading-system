@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from analysis.advisor import AIAdvisor
-from analysis.signals import StockScore, OrderSignal, SignalType, SignalSource
+from analysis.signals import StockScore, StockProfile, OrderSignal, SignalType, SignalSource
 
 # =====================  Fixtures  =====================
 
@@ -57,6 +57,59 @@ def mock_stock_scores():
             mf_ratio=0.03,
             bias_ma5=0.00,
             bias_ma20=3.95,
+        ),
+    ]
+
+
+@pytest.fixture
+def mock_stock_profiles():
+    """一组模拟的 StockProfile 对象 — 用于 analyze() 和 _build_prompt()。"""
+    return [
+        StockProfile(
+            code="000001",
+            name="平安银行",
+            trade_date="2025-01-15",
+            tier="强烈推荐",
+            score=75.0,
+            scenarios=["突破追涨", "趋势加速"],
+            tags=["放量启动", "主力介入", "趋势延续", "RPS20强"],
+            snapshot={
+                "price": 12.50, "change_pct": 3.2, "volume_ratio": 1.3,
+                "amplitude": 4.5, "main_force_net": 80000000,
+                "main_force_ratio": 8.0, "industry": "银行", "turnover_rate": 4.5,
+            },
+            history={
+                "ma5": 12.10, "ma10": 11.60, "ma20": 11.00,
+                "consecutive_yang": 3, "ma_bull_days": 5,
+                "mf_5d_cum": 200000000, "mf_consec_inflow": 3,
+            },
+            rps={"rps_20": 0.85, "rps_60": 0.0, "rps_120": 0.0},
+            sectors=[{"code": "BK1036", "name": "银行Ⅱ", "change_pct": 1.5}],
+            valuation={"pe_ttm": 6.5, "pb": 0.8, "mcap_yi": 500},
+            market_state="普涨",
+        ),
+        StockProfile(
+            code="000002",
+            name="万科A",
+            trade_date="2025-01-15",
+            tier="推荐",
+            score=68.0,
+            scenarios=["回踩MA10"],
+            tags=["缩量回调", "趋势延续", "板块加持"],
+            snapshot={
+                "price": 15.80, "change_pct": 1.5, "volume_ratio": 0.9,
+                "amplitude": 3.2, "main_force_net": 30000000,
+                "main_force_ratio": 3.0, "industry": "地产", "turnover_rate": 3.2,
+            },
+            history={
+                "ma5": 15.50, "ma10": 15.70, "ma20": 15.20,
+                "consecutive_yang": 1, "ma_bull_days": 3,
+                "mf_5d_cum": 50000000, "mf_consec_inflow": 1,
+            },
+            rps={"rps_20": 0.65, "rps_60": 0.0, "rps_120": 0.0},
+            sectors=[{"code": "BK1040", "name": "房地产", "change_pct": 0.8}],
+            valuation={"pe_ttm": 12.0, "pb": 1.2, "mcap_yi": 800},
+            market_state="普涨",
         ),
     ]
 
@@ -189,30 +242,25 @@ class TestAIAdvisorInstantiation:
 class TestPromptBuilding:
     """测试 Prompt 构建逻辑。"""
 
-    def test_build_prompt_contains_stock_data(self, mock_stock_scores):
+    def test_build_prompt_contains_stock_data(self, mock_stock_profiles):
         """测试 prompt 中包含股票数据。"""
-        prompt = AIAdvisor._build_prompt(mock_stock_scores, "2025-01-15")
+        prompt = AIAdvisor._build_prompt(mock_stock_profiles, "2025-01-15")
 
-        # 应包含头部信息
         assert "交易日期: 2025-01-15" in prompt
-
-        # 应包含两只股票的代码
         assert "000001" in prompt
         assert "平安银行" in prompt
         assert "000002" in prompt
         assert "万科A" in prompt
 
-        # 应包含关键数据点
-        assert "MA5: 12.10" in prompt
-        assert "MA10: 11.60" in prompt
-        assert "MA20: 11.00" in prompt
-        assert "主力净流入: 8000万" in prompt
-        assert "强趋势" in prompt
-        assert "稳健趋势" in prompt
+        # to_text() 输出格式检查
+        assert "强烈推荐" in prompt
+        assert "突破追涨" in prompt
+        assert "放量启动" in prompt
+        assert "RPS" in prompt
 
-    def test_build_prompt_without_trade_date(self, mock_stock_scores):
+    def test_build_prompt_without_trade_date(self, mock_stock_profiles):
         """不传 trade_date 时不应抛出异常。"""
-        prompt = AIAdvisor._build_prompt(mock_stock_scores)
+        prompt = AIAdvisor._build_prompt(mock_stock_profiles)
         assert "000001" in prompt
 
     def test_build_prompt_empty_candidates(self):
@@ -479,7 +527,7 @@ class TestAnalyzeWithMocks:
 
     @patch("analysis.advisor.AIAdvisor._call_and_parse")
     def test_analyze_fallback_to_single_model(
-        self, mock_call, mock_stock_scores, mock_qwen_response
+        self, mock_call, mock_stock_profiles, mock_qwen_response
     ):
         """一个模型失败时，回退到另一个模型的结果。"""
         # 手动构建一个 analyzer 列表，模拟只有一个可用
@@ -507,17 +555,17 @@ class TestAnalyzeWithMocks:
             )
         ]
 
-        signals = advisor_inst.analyze(mock_stock_scores, "2025-01-15")
+        signals = advisor_inst.analyze(mock_stock_profiles, "2025-01-15")
         assert len(signals) == 1
         assert signals[0].stock_code == "000001"
 
     @patch("analysis.advisor.AIAdvisor._create_analyzer")
-    def test_analyze_both_fail_returns_empty(self, mock_create, mock_stock_scores):
+    def test_analyze_both_fail_returns_empty(self, mock_create, mock_stock_profiles):
         """两个模型都失败时返回空列表。"""
         mock_create.return_value = MagicMock()
         advisor = AIAdvisor()
         advisor._analyzers = []  # 模拟无分析器
-        signals = advisor.analyze(mock_stock_scores)
+        signals = advisor.analyze(mock_stock_profiles)
         assert signals == []
 
 

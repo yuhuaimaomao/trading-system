@@ -1,10 +1,13 @@
 #!/bin/bash
 # 股票量化系统 - 盘后复盘报告启动脚本
-# 执行时间：每个交易日 17:30
+# 执行时间：每个交易日 18:00
 
 set -e
 
-# 确保 openclaw 命令可用（修复 cron 环境问题）
+# cron 环境文件描述符限制很低，AI 多轮调用会耗尽
+ulimit -n 4096
+
+# 确保 homebrew 命令可用（修复 cron 环境问题）
 export PATH="/opt/homebrew/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,9 +34,9 @@ log ""
 cd "$PROJECT_DIR"
 
 # 激活虚拟环境
-if [ -d "venv" ]; then
+if [ -d ".venv" ]; then
     log "激活虚拟环境..."
-    source venv/bin/activate
+    source .venv/bin/activate
 fi
 
 # 加载环境变量

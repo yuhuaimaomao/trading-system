@@ -33,6 +33,7 @@ class FunctionCallingEngine:
             "get_market_cap": self.stock_tools.get_market_cap,
             "get_stock_info": self.stock_tools.get_stock_info,
             "get_sector_stocks": self.stock_tools.get_sector_stocks,
+            "get_sector_zhongjun": self.stock_tools.get_sector_zhongjun,
             "get_lhb_seats": self.stock_tools.get_lhb_seats,
             "get_regulatory_risks": self.stock_tools.get_regulatory_risks,
             "get_yesterday_limit_ups": self.stock_tools.get_yesterday_limit_ups,
@@ -41,6 +42,8 @@ class FunctionCallingEngine:
             "get_yesterday_review": self.stock_tools.get_yesterday_review,
             "get_yesterday_picks_performance": self.stock_tools.get_yesterday_picks_performance,
             "get_historical_calibration": self.stock_tools.get_historical_calibration,
+            "search_stock": self.stock_tools.search_stock,
+            "search_sector": self.stock_tools.search_sector,
         }
 
         logger.info(f"✅ Function Calling 引擎初始化完成（{len(self.tool_functions)}个工具）")
@@ -103,7 +106,7 @@ class FunctionCallingEngine:
             # 解析参数
             try:
                 arguments = json.loads(arguments_str)
-            except:
+            except (json.JSONDecodeError, TypeError):
                 arguments = {}
 
             logger.info(f"🔧 收到工具调用：{tool_name}({arguments})")

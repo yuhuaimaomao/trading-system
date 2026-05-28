@@ -28,8 +28,8 @@ def mock_telegram():
 def mock_qmt():
     client = MagicMock()
     client.get_realtime.return_value = {
-        "000001": {"last_price": 12.50, "price": 12.50},
-        "000002": {"last_price": 25.00, "price": 25.00},
+        "000001": {"lastPrice": 12.50, "price": 12.50},
+        "000002": {"lastPrice": 25.00, "price": 25.00},
     }
     return client
 
@@ -38,6 +38,7 @@ def mock_qmt():
 def watcher(mock_telegram, mock_qmt):
     w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
     w._trade_date = "2026-05-22"
+    w._load_review_picks = MagicMock(return_value=[])
     return w
 
 
@@ -179,11 +180,11 @@ class TestCheckSignals:
         watcher.repo.get_pending_signals.return_value = mock_signals
 
         prices = {"000001": 12.50}
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         mock_telegram.send.assert_called_once()
         msg = mock_telegram.send.call_args[0][0]
-        assert "买入提醒" in msg
+        assert "买入信号" in msg
         assert "000001" in msg
         assert "平安银行" in msg
         assert "12.50" in msg
@@ -207,7 +208,7 @@ class TestCheckSignals:
         watcher.repo.get_pending_signals.return_value = mock_signals
 
         prices = {"000001": 11.50}
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         mock_telegram.send.assert_not_called()
 
@@ -229,9 +230,9 @@ class TestCheckSignals:
 
         prices = {"000001": 12.50}
         # First scan - should alert
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
         # Second scan - should NOT alert
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         assert mock_telegram.send.call_count == 1
 
@@ -261,7 +262,7 @@ class TestCheckSignals:
         watcher.repo.get_pending_signals.return_value = mock_signals
 
         prices = {"000001": 12.50, "000002": 25.00}
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         assert mock_telegram.send.call_count == 2
 
@@ -280,7 +281,7 @@ class TestCheckSignals:
         watcher.repo.get_pending_signals.return_value = mock_signals
 
         prices = {"000001": 12.50}
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         mock_telegram.send.assert_not_called()
 
@@ -299,7 +300,7 @@ class TestCheckSignals:
         watcher.repo.get_pending_signals.return_value = mock_signals
 
         prices = {"000002": 25.00}  # 000001 不在行情中
-        watcher._check_signals(prices)
+        watcher._check_signals(prices, True)
 
         mock_telegram.send.assert_not_called()
 
@@ -499,37 +500,31 @@ class TestCheckPositions:
 class TestGetPrices:
     def test_qmt_returns_prices(self, watcher, mock_qmt):
         """QMT 正常返回行情"""
-        prices = watcher._get_prices(["000001", "000002"])
+        prices = watcher._get_realtime_prices(["000001", "000002"])
         assert prices == {"000001": 12.50, "000002": 25.00}
 
-    def test_qmt_fails_fallback_to_db(self, watcher):
-        """QMT 失败后回退到 DB 收盘价"""
-        watcher.qmt = None  # No QMT available
-        with patch.object(watcher, "_get_close_prices") as mock_close:
-            mock_close.return_value = {"000001": 12.30, "000002": 24.80}
-            prices = watcher._get_prices(["000001", "000002"])
-            assert prices == {"000001": 12.30, "000002": 24.80}
-            mock_close.assert_called_once_with(["000001", "000002"])
+    def test_qmt_fails_no_fallback(self, watcher):
+        """QMT 不可用时直接返回空，不 fallback DB"""
+        watcher.qmt = None
+        prices = watcher._get_realtime_prices(["000001", "000002"])
+        assert prices == {}
 
-    def test_qmt_exception_fallback(self, watcher, mock_qmt):
-        """QMT 抛出异常后回退到 DB"""
+    def test_qmt_exception_no_fallback(self, watcher, mock_qmt):
+        """QMT 抛出异常后返回空，不 fallback DB"""
         mock_qmt.get_realtime.side_effect = ConnectionError("QMT offline")
-        with patch.object(watcher, "_get_close_prices") as mock_close:
-            mock_close.return_value = {"000001": 12.30}
-            prices = watcher._get_prices(["000001"])
-            assert prices == {"000001": 12.30}
-            mock_close.assert_called_once()
+        prices = watcher._get_realtime_prices(["000001"])
+        assert prices == {}
 
     def test_empty_codes(self, watcher):
         """空列表返回空字典"""
-        assert watcher._get_prices([]) == {}
+        assert watcher._get_realtime_prices([]) == {}
 
     def test_qmt_partial_prices(self, watcher, mock_qmt):
         """QMT 返回部分数据"""
         mock_qmt.get_realtime.return_value = {
-            "000001": {"last_price": 12.50},
+            "000001": {"lastPrice": 12.50},
         }
-        prices = watcher._get_prices(["000001", "000002"])
+        prices = watcher._get_realtime_prices(["000001", "000002"])
         assert "000001" in prices
         assert "000002" not in prices  # Missing from QMT response
 
@@ -604,31 +599,33 @@ class TestScan:
     def test_scan_checks_signals_and_positions(self, watcher):
         """一次扫描同时检查信号和持仓"""
         watcher._get_watch_codes = MagicMock(return_value=["000001"])
-        watcher._get_prices = MagicMock(return_value={"000001": 12.50})
+        watcher._get_realtime_prices = MagicMock(return_value={"000001": 12.50})
+        watcher._check_market_state = MagicMock(return_value=True)
         watcher._check_signals = MagicMock()
         watcher._check_positions = MagicMock()
+        watcher._check_review_picks = MagicMock()
 
         watcher._scan()
 
-        watcher._check_signals.assert_called_once_with({"000001": 12.50})
+        watcher._check_signals.assert_called_once_with({"000001": 12.50}, True)
         watcher._check_positions.assert_called_once_with({"000001": 12.50})
 
     def test_scan_empty_codes_skipped(self, watcher):
         """没有需要监控的代码，跳过"""
         watcher._get_watch_codes = MagicMock(return_value=[])
-        watcher._get_prices = MagicMock()
+        watcher._get_realtime_prices = MagicMock()
         watcher._check_signals = MagicMock()
         watcher._check_positions = MagicMock()
 
         watcher._scan()
 
-        watcher._get_prices.assert_not_called()
+        watcher._get_realtime_prices.assert_not_called()
         watcher._check_signals.assert_not_called()
 
     def test_scan_no_prices_skipped(self, watcher):
         """没有行情数据，跳过"""
         watcher._get_watch_codes = MagicMock(return_value=["000001"])
-        watcher._get_prices = MagicMock(return_value={})
+        watcher._get_realtime_prices = MagicMock(return_value={})
         watcher._check_signals = MagicMock()
         watcher._check_positions = MagicMock()
 

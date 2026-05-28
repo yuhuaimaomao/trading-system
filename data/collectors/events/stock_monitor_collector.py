@@ -8,6 +8,7 @@
 import sqlite3
 import time
 import random
+import requests
 from datetime import datetime
 from typing import Optional, Dict, List
 from system.utils.stock_code_utils import normalize_stock_code
@@ -37,8 +38,6 @@ class StockMonitorCollector:
     
     def _init_session(self):
         """初始化 Session（带反爬配置）"""
-        import requests
-        
         self.session = requests.Session()
         
         # 随机选择 User-Agent

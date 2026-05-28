@@ -25,17 +25,40 @@ class TradeRepository:
         conn.close()
         return row_id
 
-    def get_pending_signals(self, trade_date: str) -> list[dict]:
+    def get_pending_signals(self, trade_date: str = None) -> list[dict]:
         conn = self._conn()
-        rows = conn.execute(
-            "SELECT * FROM trade_signals WHERE trade_date=? AND status='pending'",
-            (trade_date,),
-        ).fetchall()
+        if trade_date:
+            rows = conn.execute(
+                "SELECT * FROM trade_signals WHERE trade_date=? AND status='pending'",
+                (trade_date,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM trade_signals WHERE status='pending'"
+            ).fetchall()
         conn.close()
         cols = ["id", "trade_date", "created_at", "signal_type", "signal_source",
                 "stock_code", "stock_name", "buy_zone_min", "buy_zone_max",
                 "target_position", "stop_loss", "take_profit", "trailing_stop",
                 "signal_score", "strategy_name", "reason", "status", "executed_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def get_expired_signals(self, before_date: str) -> list[dict]:
+        """获取指定日期之前过期且未被重新推荐过的 AI 信号。"""
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT * FROM trade_signals
+               WHERE status='expired' AND trade_date < ?
+                 AND strategy_name LIKE 'ai_advisor%'
+               ORDER BY trade_date DESC""",
+            (before_date,),
+        ).fetchall()
+        conn.close()
+        cols = ["id", "trade_date", "created_at", "signal_type", "signal_source",
+                "stock_code", "stock_name", "buy_zone_min", "buy_zone_max",
+                "target_position", "stop_loss", "take_profit", "trailing_stop",
+                "signal_score", "strategy_name", "reason", "status", "executed_at",
+                "account", "expected_trend"]
         return [dict(zip(cols, row)) for row in rows]
 
     def update_signal_status(self, signal_id: int, status: str):
@@ -60,18 +83,24 @@ class TradeRepository:
         conn.close()
         return row_id
 
-    def get_orders_by_date(self, trade_date: str) -> list[dict]:
+    def get_orders_by_date(self, trade_date: str, account: str = None) -> list[dict]:
         conn = self._conn()
-        rows = conn.execute(
-            "SELECT * FROM trade_orders WHERE trade_date=? ORDER BY order_time",
-            (trade_date,),
-        ).fetchall()
+        if account:
+            rows = conn.execute(
+                "SELECT * FROM trade_orders WHERE trade_date=? AND account=? ORDER BY order_time",
+                (trade_date, account),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM trade_orders WHERE trade_date=? ORDER BY order_time",
+                (trade_date,),
+            ).fetchall()
         conn.close()
         cols = ["id", "signal_id", "trade_date", "order_time", "stock_code",
                 "order_type", "order_price", "order_volume", "price_type",
                 "order_status", "filled_volume", "filled_price", "filled_amount",
                 "commission", "qmt_order_id", "reject_reason", "strategy_name",
-                "updated_at"]
+                "updated_at", "account"]
         return [dict(zip(cols, row)) for row in rows]
 
     # ---- trade_portfolio_snapshots ----

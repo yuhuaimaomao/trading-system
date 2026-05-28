@@ -3,19 +3,27 @@
 
 import sys
 
-COMMANDS = ["review", "morning", "monitor", "collect", "cleanup",
-            "portfolio", "trade", "backtest", "test", "track"]
+# 全局：绕过 Shadowrocket/Surge/Clash 的 DNS 劫持
+# 必须在所有网络请求之前安装
+from system.utils.dns_bypass import install as _install_dns_bypass
+_install_dns_bypass()
+
+COMMANDS = ["review", "morning", "strategy", "monitor", "collect",
+            "cleanup", "portfolio", "compare", "trade",
+            "backtest", "test", "track", "listen"]
 
 
 def cmd_review():
-    """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送"""
+    """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送，成功后自动跑策略管线"""
     import sys
     from analysis.review.service import ReviewService
 
     analyze_only = '--analyze-only' in sys.argv
 
     service = ReviewService()
-    service.generate_and_send(analyze_only=analyze_only)
+    ok = service.generate_and_send(analyze_only=analyze_only)
+    if ok:
+        cmd_strategy()
 
 def cmd_morning():
     """盘前简报：隔夜宏观 + 候选池确认 + 推送"""
@@ -36,7 +44,20 @@ def cmd_morning():
     brief.generate_and_send()
 
 def cmd_monitor():
-    """盘中盯盘 — 拉起 Watcher 进程"""
+    """盘中盯盘 — 拉起 Watcher 进程（PID 文件防多实例）"""
+    import os
+    import atexit
+    from system.config.settings import PROJECT_ROOT
+
+    # stdout/stderr 重定向必须在 import Watcher 之前（logger 初始化时会捕获 sys.stdout）
+    import sys as _sys
+    from datetime import datetime as _dt
+    _log_dir = PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _monitor_fh = open(str(_log_dir / "monitor_output.log"), "a", encoding="utf-8", buffering=1)
+    _sys.stdout = _monitor_fh
+    _sys.stderr = _monitor_fh
+
     from trade.monitor.watcher import Watcher
     from data.live.quotes import QuoteClient
     from system.utils.telegram import MessageSender
@@ -44,6 +65,30 @@ def cmd_monitor():
 
     set_current_task('monitor')
     logger = get_task_logger('monitor')
+
+    PID_FILE = str(PROJECT_ROOT / "storage" / "watcher.pid")
+
+    # 检查已有实例
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, 0)
+            logger.error(f"盯盘已在运行 (PID {old_pid})，拒绝重复启动")
+            print(f"盯盘已在运行 (PID {old_pid})，如确认已停请删除 {PID_FILE}")
+            sys.exit(1)
+        except (OSError, ValueError):
+            os.remove(PID_FILE)
+
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    def _cleanup():
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
+    atexit.register(_cleanup)
 
     telegram = None
     try:
@@ -55,12 +100,12 @@ def cmd_monitor():
     try:
         qmt_quote = QuoteClient()
     except Exception as e:
-        logger.warning(f"QMT 行情客户端初始化失败（将使用DB收盘价）: {e}")
+        logger.warning(f"QMT 行情客户端初始化失败（无实时行情）: {e}")
 
     watcher = Watcher(
         telegram_bot=telegram,
         qmt_quote=qmt_quote,
-        scan_interval=60,
+        scan_interval=0,
     )
     try:
         watcher.run()
@@ -69,6 +114,8 @@ def cmd_monitor():
     except Exception as e:
         logger.error(f"盯盘异常退出: {e}")
         raise
+    finally:
+        _cleanup()
 
 def cmd_collect():
     """数据采集 — 16个采集器，独立 try/except"""
@@ -144,8 +191,64 @@ def cmd_portfolio():
     p = Portfolio()
     print(f"  现金: {p.cash:.2f}  总资产: {p.total_value:.2f}  持仓数: {len(p.positions)}")
 
+def cmd_strategy():
+    """盘前管线：趋势筛选 → AI 分析 → 信号入库"""
+    from analysis.strategy import StrategyPipeline
+    from system.utils.telegram import MessageSender
+    from system.utils.logger import set_current_task, get_task_logger
+
+    set_current_task('strategy')
+    logger = get_task_logger('strategy')
+
+    trade_date = sys.argv[2] if len(sys.argv) > 2 else None
+
+    telegram = None
+    try:
+        telegram = MessageSender()
+    except Exception as e:
+        logger.warning(f"Telegram 初始化失败（将只输出日志）: {e}")
+
+    pipeline = StrategyPipeline(telegram_bot=telegram)
+    pipeline.run(trade_date=trade_date)
+
+def cmd_compare():
+    """收盘后双线比对：实盘 vs 模拟盘成交"""
+    from trade.execution.comparator import OrderComparator
+    from system.utils.telegram import MessageSender
+    from system.utils.logger import set_current_task, get_task_logger
+    from datetime import datetime
+
+    set_current_task('compare')
+    logger = get_task_logger('compare')
+
+    telegram = None
+    try:
+        telegram = MessageSender()
+    except Exception as e:
+        logger.warning(f"Telegram 初始化失败（将只输出日志）: {e}")
+
+    trade_date = datetime.now().strftime("%Y-%m-%d")
+    comparator = OrderComparator(telegram_bot=telegram)
+    report = comparator.compare(trade_date)
+    output = comparator.format_report(report)
+    logger.info(output)
+    print(output)
+
 def cmd_trade():
-    print("[trade] 待实现 — 手动录入交易")
+    """手动录入交易 — 解析用户回复并记录成交"""
+    print("[trade] 用法: python main.py trade --text '模拟盘 000001 1000股 12.50'")
+    from trade.execution.manual import ManualExecutor
+    from system.utils.telegram import MessageSender
+
+    import sys
+    if '--text' in sys.argv:
+        idx = sys.argv.index('--text')
+        if idx + 1 < len(sys.argv):
+            text = sys.argv[idx + 1]
+            result = ManualExecutor.parse_reply(text)
+            print(f"解析结果: {result}")
+    else:
+        print("请用 --text 传入消息内容")
 
 def cmd_backtest():
     """回测"""
@@ -173,6 +276,47 @@ def cmd_track():
     stats = tracker.get_statistics()
     logger.info(f"总推荐: {stats['total']} | 胜率: {stats['win_rate']:.1f}% | 平均收益: {stats['avg_return']:.2f}%")
 
+def cmd_listen():
+    """监听 Telegram 用户回复（前台阻塞运行）。
+    由 cron 在 9:00 启动、18:00 停止，不需要手动管理生命周期。
+    """
+    import time
+    from system.utils.telegram import MessageReceiver, MessageSender
+    from trade.execution.manual import ManualExecutor
+    from system.utils.logger import set_current_task, get_task_logger
+
+    set_current_task('listen')
+    logger = get_task_logger('listen')
+
+    telegram = None
+    try:
+        telegram = MessageSender()
+    except Exception as e:
+        logger.warning(f"Telegram 发送初始化失败: {e}")
+
+    receiver = MessageReceiver()
+    executor = ManualExecutor()
+
+    logger.info("开始监听 Telegram 消息")
+
+    try:
+        while True:
+            updates = receiver.fetch_updates(timeout=30)
+            for msg in updates:
+                text = msg.get("text", "")
+                if not text:
+                    continue
+                logger.info(f"收到: {msg['user']}: {text}")
+                reply = executor.handle_user_reply(text)
+                if reply:
+                    logger.info(f"回复: {reply}")
+                    if telegram:
+                        telegram.send(reply)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("监听被中断")
+
+
 def cmd_test():
     print("[test] 配置检查...")
     from system.config.settings import DATABASE_PATH, LOGS_DIR, DASHSCOPE_API_KEY
@@ -191,9 +335,11 @@ def main():
     cmd = sys.argv[1]
     {
         "review": cmd_review, "morning": cmd_morning,
-        "monitor": cmd_monitor, "collect": cmd_collect,
-        "cleanup": cmd_cleanup, "portfolio": cmd_portfolio,
-        "trade": cmd_trade, "backtest": cmd_backtest, "test": cmd_test, "track": cmd_track,
+        "strategy": cmd_strategy, "monitor": cmd_monitor,
+        "collect": cmd_collect, "cleanup": cmd_cleanup,
+        "portfolio": cmd_portfolio, "compare": cmd_compare,
+        "trade": cmd_trade, "backtest": cmd_backtest,
+        "test": cmd_test, "track": cmd_track, "listen": cmd_listen,
     }.get(cmd, lambda: print(f"Unknown: {cmd}"))()
 
 

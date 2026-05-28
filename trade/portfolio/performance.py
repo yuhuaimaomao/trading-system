@@ -73,6 +73,6 @@ def calc_metrics(trades: List[dict], equity_curve: List[float]) -> dict:
         "profit_loss_ratio": calc_profit_loss_ratio(trades),
         "total_trades": len([t for t in trades if t.get("type") == "sell"]),
         "volatility": (sum((r - sum(daily_returns) / len(daily_returns)) ** 2
-                           for r in daily_returns) / len(daily_returns)) ** 0.5
-        if daily_returns else 0,
+                           for r in daily_returns) / (len(daily_returns) - 1)) ** 0.5
+        if len(daily_returns) > 1 else 0,
     }

@@ -4,7 +4,7 @@ from typing import List, Optional
 from dataclasses import dataclass
 
 from trade.portfolio.portfolio import Portfolio, Position
-from trade.risk.rules.stop_loss import check_stop_loss
+from trade.risk.rules.stop_loss import check_stop_loss, check_time_stop
 from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop
 from trade.risk.rules.max_drawdown import check_daily_loss_limit
 from trade.risk.rules.concentration import check_concentration
@@ -59,12 +59,13 @@ class RiskEngine:
 
         return RiskResult(True, "通过")
 
-    def check_positions(self, prices: dict, portfolio: Portfolio) -> List[dict]:
-        """盘中持仓巡检（优先级 4-7），返回需要平仓的信号列表"""
+    def check_positions(self, prices: dict, portfolio: Portfolio,
+                         trade_date: str = "") -> List[dict]:
+        """盘中持仓巡检（优先级 4-8），返回需要平仓的信号列表"""
         close_signals = []
 
         # 优先级 4：日内熔断
-        if portfolio.daily_pnl < 0:
+        if portfolio.daily_pnl < 0 and portfolio.total_value > 0:
             daily_loss_ratio = abs(portfolio.daily_pnl) / portfolio.total_value
             if daily_loss_ratio > self.daily_loss_limit:
                 for code, pos in list(portfolio.positions.items()):
@@ -75,7 +76,7 @@ class RiskEngine:
                             "priority": 4,
                         })
 
-        # 优先级 5-7：逐只检查
+        # 优先级 5-8：逐只检查
         for code, pos in list(portfolio.positions.items()):
             price = prices.get(code) or pos.current_price
             pos.update_price(price)
@@ -109,6 +110,24 @@ class RiskEngine:
                     "priority": 7,
                 })
                 continue
+
+            # 优先级 8：时间止损（持有超 10 天仍在亏损）
+            if trade_date and pos.entry_date:
+                try:
+                    from datetime import date
+                    ed = date.fromisoformat(pos.entry_date)
+                    td = date.fromisoformat(trade_date)
+                    hold_days = (td - ed).days
+                    tstop = check_time_stop(pos, hold_days)
+                    if tstop:
+                        close_signals.append({
+                            "stock_code": code,
+                            "reason": tstop,
+                            "priority": 8,
+                        })
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
         return close_signals
 

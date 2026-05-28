@@ -246,7 +246,7 @@ class StockTracker:
                     market_cap_str = ai_market_cap.replace('亿', '').strip()
                     market_cap = float(market_cap_str)
                     logger.info(f"✅ 使用 AI 提供的市值：{stock_name} - {market_cap}亿")
-                except:
+                except (ValueError, TypeError):
                     # 解析失败，查询数据库
                     market_cap = self.get_market_cap(stock_code, push_date)
                     logger.info(f"🔍 AI 市值解析失败，查询数据库：{stock_name} - {market_cap:.1f}亿" if market_cap else "查询失败")

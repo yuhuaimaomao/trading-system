@@ -819,6 +819,7 @@ class ReviewAnalyzer:
                 "8. 工具调用策略：调用 get_telegraph_news / get_regulatory_risks / get_lhb_seats 核查标的后，有监管风险的直接剔除不展示，有利好消息的才在个股下方标注"
                 "9. 报告中不要出现任何工具名称（如 get_cls_digest_news、get_telegraph_news 等），不要写「数据来源：XX工具返回」，直接用分析结论"
                 "10. 第七节「趋势交易者精选」角色切换为趋势交易者，从趋势股和板块中军候选数据中选 5 只趋势票。优先选蓄力期/主升初期的票（均线刚多头排列、还没大幅拉升），按趋势思维分析买点和止损。波段交易思维，持仓周期以交易日计"
+                "11. 技术指标只使用报告中明确标注的数据。指数提供的均线为 MA5/MA10/MA20（共3条），个股提供的均线为 MA5/MA20（共2条，不含MA10），不要自行补充缺失的均线。报告中不存在 MA60/MACD/KDJ/BOLL 等其他指标，不要自己编造。"
             )
 
             models_to_run = [
@@ -1275,6 +1276,7 @@ class AIAnalyzer:
         if not (self.api_key.startswith('sk-') or self.api_key.startswith('sk-sp-')):
             self.logger.warning("API Key 格式可能不正确（应以 sk-或 sk-sp-开头）")
 
+        self.session = requests.Session()
         self.logger.info("AI 分析引擎初始化完成（模型：{}，支持 Function Calling）".format(self.model))
 
     def _call_ai(self, prompt: str, system_prompt: str = "你是一个专业的 A 股量化分析师。请务必使用阿拉伯数字格式输出所有数值，不要转换为中文数字。例如：85%而不是百分之八十五，2.5万亿而不是二点五万亿，2026-04-29而不是二零二六年四月二十九日。", enable_search: bool = False, max_tokens: int = 2000) -> Optional[str]:
@@ -1315,11 +1317,11 @@ class AIAnalyzer:
             if enable_search and not self.model.startswith('deepseek'):
                 payload['enable_search'] = True
 
-            logger.info("开始调用 AI API（模型：{}，端点：{}，超时：600 秒）...".format(self.model, endpoint))
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
+            self.logger.info("开始调用 AI API（模型：{}，端点：{}，超时：600 秒）...".format(self.model, endpoint))
+            response = self.session.post(endpoint, json=payload, headers=headers, timeout=600)
             response.raise_for_status()
 
-            logger.info("AI API 响应成功（状态码：{}）".format(response.status_code))
+            self.logger.info("AI API 响应成功（状态码：{}）".format(response.status_code))
             result = response.json()
 
             # 百炼 API 响应格式：{choices: [{message: {content: "..."}}]}
@@ -1334,14 +1336,14 @@ class AIAnalyzer:
             content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
 
             if not content:
-                logger.warning("AI 返回空内容，完整响应：{}".format(result))
+                self.logger.warning("AI 返回空内容，完整响应：{}".format(result))
             else:
-                logger.info("AI 分析完成（返回 {} 字）".format(len(content)))
+                self.logger.info("AI 分析完成（返回 {} 字）".format(len(content)))
 
             return content
 
         except Exception as e:
-            logger.error("AI 调用失败：{}".format(e))
+            self.logger.error("AI 调用失败：{}".format(e))
             raise RuntimeError("AI API 调用失败: {}".format(e)) from e
 
     def _call_ai_with_tools(self, messages: List[Dict], max_tokens: int = 2000,
@@ -1362,6 +1364,8 @@ class AIAnalyzer:
             }
         """
         try:
+            from system.utils.stock_tools import TOOLS_DEFINITION
+
             # 根据模型名选择 provider
             if self.model.startswith('deepseek'):
                 api_key = os.getenv('DEEPSEEK_API_KEY', '')
@@ -1386,8 +1390,8 @@ class AIAnalyzer:
                 'max_tokens': max_tokens
             }
 
-            logger.info("调用 AI（支持工具，消息数：{}，tool_choice={}）...".format(len(messages), tool_choice))
-            response = requests.post(endpoint, json=payload, headers=headers, timeout=600)
+            self.logger.info("调用 AI（支持工具，消息数：{}，tool_choice={}）...".format(len(messages), tool_choice))
+            response = self.session.post(endpoint, json=payload, headers=headers, timeout=600)
             response.raise_for_status()
 
             result = response.json()
@@ -1398,7 +1402,7 @@ class AIAnalyzer:
             tool_calls = message.get('tool_calls', [])
 
             if content:
-                logger.info("AI 返回内容（{}字）".format(len(content)))
+                self.logger.info("AI 返回内容（{}字）".format(len(content)))
 
             return {
                 'content': content,
@@ -1406,5 +1410,5 @@ class AIAnalyzer:
             }
 
         except Exception as e:
-            logger.error("AI 调用失败：{}".format(e))
+            self.logger.error("AI 调用失败：{}".format(e))
             raise RuntimeError("AI API 调用失败: {}".format(e)) from e

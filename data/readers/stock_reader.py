@@ -132,7 +132,7 @@ class StockReader:
                            sb.medium_net/10000 as md_wan,
                            sb.small_net/10000 as sm_wan,
                            sb.main_force_ratio, sb.turnover_rate, sb.volume_ratio, sb.amplitude,
-                           sb.price, sb.ma5, sb.ma20, sb.ma5_angle
+                           sb.price, sb.ma5, sb.ma10, sb.ma20, sb.ma5_angle
                     FROM strong_stock ss
                     JOIN stock_basic sb ON ss.stock_code = sb.stock_code AND sb.trade_date = ?
                     JOIN sector_stocks sk ON ss.stock_code = sk.stock_code

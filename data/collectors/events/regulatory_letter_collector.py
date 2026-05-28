@@ -62,9 +62,8 @@ class RegulatoryLetterCollector:
     
     def _init_db(self):
         """初始化数据库连接"""
-        import sqlite3
         from system.config.settings import DATABASE_PATH
-        
+
         self.db_path = DATABASE_PATH
         logger.info(f"数据库路径：{self.db_path}")
     
@@ -79,7 +78,6 @@ class RegulatoryLetterCollector:
             公告 ID，失败返回 None
         """
         try:
-            import sqlite3
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
@@ -149,7 +147,6 @@ class RegulatoryLetterCollector:
             analysis_result: 分析结果
         """
         try:
-            import sqlite3
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
@@ -428,7 +425,6 @@ class RegulatoryLetterCollector:
                             downloaded_count += 1
                             
                             # 更新数据库（标记 PDF 已下载）
-                            import sqlite3
                             conn = sqlite3.connect(self.db_path)
                             cursor = conn.cursor()
                             cursor.execute(
@@ -535,7 +531,6 @@ class RegulatoryLetterCollector:
                         downloaded_count += 1
                         
                         # 更新数据库（标记 PDF 已下载）
-                        import sqlite3
                         conn = sqlite3.connect(self.db_path)
                         cursor = conn.cursor()
                         cursor.execute(

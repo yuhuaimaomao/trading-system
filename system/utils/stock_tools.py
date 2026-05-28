@@ -511,6 +511,104 @@ class StockTools:
             logger.error(f"❌ 查询异动股失败：{e}")
             return {"trade_date": trade_date, "total": 0, "stocks": [], "error": str(e)}
 
+    def get_sector_zhongjun(self, sector_code: str = None, sector_name: str = None,
+                            trade_date: str = None) -> Dict:
+        """
+        查询指定板块的中军候选（4维打分：市值30% + 流动性25% + 趋势25% + 相对强度20%）
+
+        返回每只股票的：code, name, score, mcap(亿), turnover_5d(亿), trend_status,
+        rel_strength(%), change_pct(%), ma5, ma10, ma20, boards, industry
+
+        使用场景：
+        - 在「核心标的拆解」中需要确定某板块的中军标的时，**必须**调用此工具
+        - 从得分最高的前3名中选取中军，不要凭感觉选
+        - 传入 sector_code（如 BK1036）精确查询
+        单次返回 TOP5，约 200-400 token
+        """
+        try:
+            from data.readers.sector_reader import SectorReader
+
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+
+            if not trade_date:
+                cursor = conn.cursor()
+                cursor.execute("SELECT MAX(trade_date) FROM stock_basic")
+                trade_date = cursor.fetchone()[0]
+
+            # 解析 sector_code
+            resolved_code = sector_code
+            resolved_name = sector_name or ''
+            if not resolved_code and sector_name:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT sector_code, sector_name FROM sector_info WHERE sector_name = ?",
+                    (sector_name,))
+                row = cursor.fetchone()
+                if row:
+                    resolved_code, resolved_name = row['sector_code'], row['sector_name']
+                else:
+                    conn.close()
+                    return {"sector_code": "", "sector_name": sector_name,
+                            "trade_date": trade_date, "stocks": [],
+                            "error": f"未找到板块：{sector_name}"}
+
+            if not resolved_code:
+                conn.close()
+                return {"sector_code": "", "sector_name": "",
+                        "trade_date": trade_date, "stocks": [],
+                        "error": "请提供 sector_code 或 sector_name"}
+
+            # 判断板块类型
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT sector_code FROM sector_industry WHERE sector_code = ? AND trade_date = ?",
+                (resolved_code, trade_date))
+            if cursor.fetchone():
+                sector_table = 'sector_industry'
+            else:
+                sector_table = 'sector_concept'
+
+            result = SectorReader.get_sector_zhongjun(
+                conn, trade_date, [resolved_code], sector_table, top_n=5
+            )
+
+            conn.close()
+
+            stocks = result.get(resolved_code, [])
+            sector_name_out = stocks[0].get('sector_name', resolved_name) if stocks else resolved_name
+
+            logger.info(f"✅ 中军候选查询成功：{sector_name_out}({resolved_code}) - {len(stocks)}只")
+            return {
+                "sector_code": resolved_code,
+                "sector_name": sector_name_out,
+                "trade_date": trade_date,
+                "total": len(stocks),
+                "stocks": [
+                    {
+                        "code": s['code'], "name": s['name'],
+                        "score": round(s['score'], 0),
+                        "mcap": round(s['mcap'], 0),
+                        "turnover_5d": round(s['avg_turnover_5d'], 1),
+                        "trend": s.get('trend_status', ''),
+                        "rel_strength": round(s['rel_strength'], 1),
+                        "change": round(s['change_pct'], 1),
+                        "boards": s.get('boards', 0),
+                        "industry": s.get('industry', ''),
+                        "ma5": round(s.get('ma5', 0), 2),
+                        "ma10": round(s.get('ma10', 0), 2),
+                        "ma20": round(s.get('ma20', 0), 2),
+                    }
+                    for s in stocks
+                ],
+                "error": None
+            }
+
+        except Exception as e:
+            logger.error(f"❌ 查询中军候选失败：{e}")
+            return {"sector_code": sector_code or "", "sector_name": sector_name or "",
+                    "trade_date": trade_date, "total": 0, "stocks": [], "error": str(e)}
+
     def get_hotspot_stocks(self, sector_name: str = None, sector_code: str = None,
                            trade_date: str = None, limit: int = 15) -> Dict:
         """
@@ -658,12 +756,61 @@ class StockTools:
             logger.error(f"❌ 读取 CLS 复盘新闻失败：{e}")
             return {"trade_date": trade_date, "error": str(e)}
 
+    def search_stock(self, name: str) -> Dict:
+        """
+        根据股票简称模糊搜索股票代码。
+
+        在 stock_basic 表中 LIKE 匹配，返回候选列表供 AI 精选。
+        """
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            like = f'%{name}%'
+            cursor = conn.execute("""
+                SELECT DISTINCT stock_code, stock_name FROM stock_basic
+                WHERE stock_name LIKE ? LIMIT 20
+            """, (like,))
+            results = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            logger.info(f"search_stock('{name}') → {len(results)} 个候选")
+            return {"name": name, "candidates": results, "count": len(results)}
+        except Exception as e:
+            logger.error(f"search_stock('{name}') 失败: {e}")
+            return {"name": name, "candidates": [], "count": 0, "error": str(e)}
+
+    def search_sector(self, keyword: str) -> Dict:
+        """
+        根据板块关键词模糊搜索板块编码。
+
+        同时查询 sector_info（行业板块）和 sector_concept（概念板块），
+        返回候选列表（含 sector_name、sector_code、type）供 AI 精选。
+        """
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            like = f'%{keyword}%'
+            cursor = conn.execute("""
+                SELECT DISTINCT sector_code, sector_name, 'industry' as type FROM sector_info
+                WHERE sector_name LIKE ?
+                UNION
+                SELECT DISTINCT sector_code, sector_name, 'concept' as type FROM sector_concept
+                WHERE sector_name LIKE ?
+                LIMIT 20
+            """, (like, like))
+            results = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+            logger.info(f"search_sector('{keyword}') → {len(results)} 个候选")
+            return {"keyword": keyword, "candidates": results, "count": len(results)}
+        except Exception as e:
+            logger.error(f"search_sector('{keyword}') 失败: {e}")
+            return {"keyword": keyword, "candidates": [], "count": 0, "error": str(e)}
+
     def get_telegraph_news(self, stock_code: str, trade_date: str = None) -> Dict:
         """
         查询某只股票在今日盘中电报里是否有相关新闻。
 
-        直接从 DB 查询，只返回真正涉及该股的新闻（stock_tags 匹配），
-        不返回大盘描述、板块普涨等泛泛内容。
+        优先查 ai_stocks 字段（AI 结构化后的标签，覆盖率接近 100%），
+        无 AI 标签时回退查 stock_tags（CLS 原始标签，覆盖率约 15%）。
         """
         import json as _json
         from datetime import datetime as _dt
@@ -675,59 +822,74 @@ class StockTools:
             conn = sqlite3.connect(str(self.db_path))
             conn.row_factory = sqlite3.Row
 
-            # 查当日高评分电报，在 Python 中解析 stock_tags 做精准匹配
+            # 查当日电报：AI 结构化的用 ai_stocks 匹配，否则用 stock_tags
             cursor = conn.execute("""
                 SELECT * FROM cls_telegraph
-                WHERE trade_date = ? AND score >= 2
-                ORDER BY score DESC, reading_num DESC
+                WHERE trade_date = ?
+                  AND (
+                    ai_stocks LIKE ? OR
+                    (ai_stocks IS NULL AND stock_tags LIKE ?) OR
+                    (ai_stocks = '' AND stock_tags LIKE ?)
+                  )
+                ORDER BY COALESCE(ai_importance, score) DESC, reading_num DESC
                 LIMIT 200
-            """, (trade_date,))
+            """, (trade_date, f'%"{stock_code}"%', f'%"{stock_code}"%', f'%"{stock_code}"%'))
             rows = [dict(r) for r in cursor.fetchall()]
             conn.close()
 
-            # 过滤：只保留 stock_tags 中匹配 stock_code 的
-            # 同时跳过无 stock_tags 的大盘描述
+            # 过滤 + 格式化
             matched = []
             seen_titles = set()
             for r in rows:
-                tags_raw = r.get('stock_tags')
-                try:
-                    tags = _json.loads(tags_raw) if tags_raw else []
-                except (_json.JSONDecodeError, TypeError):
-                    tags = []
-
-                if not tags:
-                    continue  # 无股票标签 = 大盘描述，跳过
-
-                # 检查是否匹配目标股票
-                hit = False
-                for tag in tags:
-                    if isinstance(tag, dict) and tag.get('code') == stock_code:
-                        hit = True
-                        break
-
-                if not hit:
-                    continue
-
-                # 去重
                 title = r.get('title', '')
                 title_key = title[:20]
                 if title_key in seen_titles:
                     continue
                 seen_titles.add(title_key)
 
+                source = 'ai'
+                tags = []
+                ai_stocks_raw = r.get('ai_stocks')
+                if ai_stocks_raw:
+                    try:
+                        tags = _json.loads(ai_stocks_raw) if ai_stocks_raw else []
+                        source = 'ai'
+                    except (_json.JSONDecodeError, TypeError):
+                        tags = []
+
+                if not tags:
+                    stock_tags_raw = r.get('stock_tags')
+                    try:
+                        tags = _json.loads(stock_tags_raw) if stock_tags_raw else []
+                        source = 'cls'
+                    except (_json.JSONDecodeError, TypeError):
+                        tags = []
+
+                sectors = []
+                ai_sectors_raw = r.get('ai_sectors')
+                if ai_sectors_raw:
+                    try:
+                        sectors = _json.loads(ai_sectors_raw) if ai_sectors_raw else []
+                    except (_json.JSONDecodeError, TypeError):
+                        sectors = []
+
                 matched.append({
                     'level': r.get('level', 'C'),
-                    'category': r.get('category', ''),
+                    'category': r.get('ai_direction') or r.get('category', ''),
                     'title': title,
                     'content': (r.get('content') or '')[:200],
                     'reading_num': r.get('reading_num', 0),
-                    'score': r.get('score', 0),
+                    'score': r.get('ai_importance') or r.get('score', 0),
+                    'sentiment': r.get('ai_sentiment', ''),
+                    'impact': r.get('ai_impact', ''),
+                    'sectors': sectors,
                     'stock_tags': tags,
+                    'source': source,
                 })
 
             if matched:
-                logger.info(f"✅ 查询 {stock_code} 电报：{len(matched)} 条匹配")
+                ai_count = sum(1 for m in matched if m['source'] == 'ai')
+                logger.info(f"✅ 查询 {stock_code} 电报：{len(matched)} 条匹配（AI:{ai_count} CLS:{len(matched)-ai_count}）")
                 return {"stock_code": stock_code, "trade_date": trade_date,
                         "has_news": True, "count": len(matched), "items": matched}
             else:
@@ -969,6 +1131,40 @@ TOOLS_DEFINITION = [
     {
         "type": "function",
         "function": {
+            "name": "search_stock",
+            "description": "根据股票简称模糊搜索6位股票代码。传入名称（如'宝鼎科技'），返回候选列表（含code和name）。用于电报AI结构化时精确匹配个股代码。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "股票简称，如'宝鼎科技'、'中芯国际'"
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_sector",
+            "description": "根据板块关键词模糊搜索板块编码。传入板块名（如'存储芯片'、'PCB'），在sector_info和sector_concept中匹配，返回候选列表（含sector_name、sector_code、type）。用于电报AI结构化时精确匹配板块编码。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "板块关键词，如'存储芯片'、'光模块'、'PCB'"
+                    }
+                },
+                "required": ["keyword"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_market_cap",
             "description": "查询股票实时市值（单位：亿）。返回字段：code, name, market_cap(亿), update_time。\n\n使用场景：\n- 在「核心标的拆解」中，需要确认某只股票的市值规模（中军 vs 小盘弹性票）时使用\n- 当你需要区分市值梯队、判断标的是否为容量中军时使用\n\n单次返回 1 只股票数据，约 80 token",
             "parameters": {
@@ -1174,6 +1370,31 @@ TOOLS_DEFINITION = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sector_zhongjun",
+            "description": "查询指定板块的中军候选标的（4维量化打分：市值30%+流动性25%+趋势25%+相对强度20%，TOP5）。返回每只：code, name, score(综合得分), mcap(亿), turnover_5d(5日均成交额亿), trend(多头排列/MA5>MA20/弱势), rel_strength(相对强度%), change(今日涨幅%), ma5, ma10, ma20, boards(连板数), industry。\n\n使用场景：\n- 在「核心标的拆解」中确定某板块中军时，**必须先调用此工具**，从得分最高的前3名中选取\n- 传入 sector_code 精确查询某个板块（所需板块编码从热点板块数据中获取）\n- **注意：中军选择不能凭感觉，必须参考此工具的4维打分**\n\n单次返回约 200-400 token",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sector_code": {
+                        "type": "string",
+                        "description": "板块编码，如 'BK1036'。优先使用"
+                    },
+                    "sector_name": {
+                        "type": "string",
+                        "description": "板块名称，如 '半导体'。与 sector_code 二选一"
+                    },
+                    "trade_date": {
+                        "type": "string",
+                        "description": "交易日期 YYYY-MM-DD，默认当日"
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]
 
@@ -1190,6 +1411,8 @@ def _get_tools():
 TOOL_FUNCTIONS = {
     "get_cls_digest_news": lambda **kw: _get_tools().get_cls_digest_news(**kw),
     "get_telegraph_news": lambda **kw: _get_tools().get_telegraph_news(**kw),
+    "search_stock": lambda **kw: _get_tools().search_stock(**kw),
+    "search_sector": lambda **kw: _get_tools().search_sector(**kw),
     "get_market_cap": lambda **kw: _get_tools().get_market_cap(**kw),
     "get_stock_info": lambda **kw: _get_tools().get_stock_info(**kw),
     "get_sector_stocks": lambda **kw: _get_tools().get_sector_stocks(**kw),
@@ -1201,4 +1424,5 @@ TOOL_FUNCTIONS = {
     "get_yesterday_review": lambda **kw: _get_tools().get_yesterday_review(**kw),
     "get_yesterday_picks_performance": lambda **kw: _get_tools().get_yesterday_picks_performance(**kw),
     "get_historical_calibration": lambda **kw: _get_tools().get_historical_calibration(**kw),
+    "get_sector_zhongjun": lambda **kw: _get_tools().get_sector_zhongjun(**kw),
 }

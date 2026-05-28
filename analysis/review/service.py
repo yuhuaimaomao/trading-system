@@ -326,8 +326,8 @@ class ReviewService:
             conn.close()
         return missing
 
-    def generate_and_send(self, analyze_only: bool = False):
-        """完整流程：采集 → 分析 → 推送 → 补充 Excel"""
+    def generate_and_send(self, analyze_only: bool = False) -> bool:
+        """完整流程：采集 → 分析 → 推送 → 补充 Excel，返回 AI 分析是否成功"""
         set_current_task('review')
         logger.info("=" * 70)
         tag = "分析" if analyze_only else "盘后复盘报告"
@@ -348,11 +348,14 @@ class ReviewService:
                 msg = f"⚠️ {trade_date} 复盘数据不全，以下模块采集失败：{'、'.join(missing)}\n跳过 AI 复盘分析，请检查后重试。"
                 logger.warning(msg)
                 self.send(msg)
-                return
+                return False
 
             # AI 分析（从 DB 读取 + 实时抓新闻）
             logger.info("\n【阶段 2/4】AI 分析")
             analysis, stock_pool = self.analyze()
+
+            # 判断 AI 分析是否成功
+            ai_success = bool(stock_pool) and not analysis.startswith("AI 分析失败")
 
             # 推送消息
             logger.info("\n【阶段 3/4】消息推送")
@@ -387,14 +390,16 @@ class ReviewService:
 
             except Exception as e:
                 logger.error(f"⚠️ 股票追踪数据补充失败：{e}")
-            
+
             logger.info("=" * 70)
             logger.info("✅ 复盘执行完成")
             logger.info("=" * 70)
-            
+            return ai_success
+
         except Exception as e:
             logger.error("=" * 70)
             logger.error(f"❌ 复盘执行失败：{e}")
             logger.error("=" * 70)
+            return False
             raise
 

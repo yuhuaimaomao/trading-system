@@ -118,5 +118,43 @@ def ensure_tables():
         except sqlite3.OperationalError:
             pass
 
+    # cls_telegraph AI 结构化字段（幂等迁移）
+    for col, col_type in [
+        ("ai_summary", "TEXT"),
+        ("ai_sentiment", "TEXT"),
+        ("ai_impact", "TEXT"),
+        ("ai_stocks", "TEXT"),
+        ("ai_sectors", "TEXT"),
+        ("ai_importance", "INTEGER DEFAULT 0"),
+        ("ai_direction", "TEXT"),
+        ("ai_status", "TEXT DEFAULT 'pending'"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE cls_telegraph ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # market_breadth 表（涨跌家数 + 大盘状态）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS market_breadth (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL UNIQUE,
+            up_count INTEGER,
+            down_count INTEGER,
+            flat_count INTEGER,
+            limit_up_count INTEGER,
+            limit_down_count INTEGER,
+            index_change_pct REAL,
+            market_state TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # stock_basic 唯一索引（支持 INSERT OR REPLACE upsert）
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_basic_date_code
+        ON stock_basic(trade_date, stock_code);
+    """)
+
     conn.commit()
     conn.close()

@@ -15,8 +15,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
 
 from system.config.prompts.ai_advisor import AI_ADVISOR_PROMPT
-from analysis.signals import StockScore, OrderSignal, SignalType, SignalSource
+from analysis.signals import StockProfile, OrderSignal, SignalType, SignalSource, HoldingInfo, AccountSummary
 from system.utils.logger import get_system_logger
+
+logger = get_system_logger("advisor")
 
 logger = get_system_logger('ai_advisor')
 
@@ -95,14 +97,16 @@ class AIAdvisor:
 
     def analyze(
         self,
-        candidates: List[StockScore],
+        candidates: List[StockProfile],
         trade_date: Optional[str] = None,
+        holdings: Optional[List[HoldingInfo]] = None,
+        account_summaries: Optional[List[AccountSummary]] = None,
     ) -> List[OrderSignal]:
         """
-        分析候选股票池，返回 OrderSignal 列表。
+        分析候选股票画像，返回 OrderSignal 列表。
 
         流程：
-        1. 将 StockScore 列表格式化为 prompt
+        1. 将 StockProfile 列表格式化为 prompt（使用 to_text()）
         2. 并行调用所有可用模型
         3. 解析 JSON 响应
         4. 合并多模型结果
@@ -115,7 +119,8 @@ class AIAdvisor:
             logger.error("没有可用 AI 分析器，无法分析")
             return []
 
-        prompt = self._build_prompt(candidates, trade_date)
+        prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries)
+        self._save_prompt(prompt, trade_date)
 
         # 并行调用各个模型
         raw_results: List[List[OrderSignal]] = []
@@ -151,30 +156,123 @@ class AIAdvisor:
 
     @staticmethod
     def _build_prompt(
-        candidates: List[StockScore],
+        candidates: List[StockProfile],
         trade_date: Optional[str] = None,
+        holdings: Optional[List[HoldingInfo]] = None,
+        account_summaries: Optional[List[AccountSummary]] = None,
     ) -> str:
-        """将 StockScore 列表格式化为结构化的文本表格。"""
+        """使用 StockProfile.to_text() 生成每只股票的完整画像文本。"""
         header_date = f"交易日期: {trade_date}" if trade_date else ""
-        lines = [f"## 候选股票池 {header_date}".strip(), ""]
 
-        # 每个 candidate 一行
-        for i, s in enumerate(candidates, 1):
-            mode_label = "强趋势" if s.trend_mode == "strong" else "稳健趋势"
-            line = (
-                f"{i}. {s.stock_code} {s.stock_name} {s.industry}\n"
-                f"   价格: {s.price:.2f}  涨跌幅: {s.change_pct:+.2f}%\n"
-                f"   趋势模式: {mode_label}({s.score:.0f}分)\n"
-                f"   MA5: {s.ma5:.2f}  MA10: {s.ma10:.2f}  MA20: {s.ma20:.2f}  MA5角度: {s.ma5_angle:.1f}\n"
-                f"   偏离MA5: {s.bias_ma5:+.2f}%  偏离MA20: {s.bias_ma20:+.2f}%\n"
-                f"   总市值: {s.mcap:.1f}亿  流通市值: {s.circ_mcap:.1f}亿\n"
-                f"   换手率: {s.turnover_rate:.2f}%  量比: {s.volume_ratio:.2f}\n"
-                f"   主力净流入: {s.mf_wan:.0f}万  主力占比: {s.mf_ratio:+.2%}\n"
-            )
-            lines.append(line)
+        # 持仓数据
+        holdings_text = AIAdvisor._format_holdings(holdings, account_summaries)
 
-        prompt = AI_ADVISOR_PROMPT.format(candidates_data="\n".join(lines))
+        # 候选股票池
+        header = f"## 候选股票池 {header_date}".strip()
+        market_state = candidates[0].market_state if candidates else ""
+        if market_state:
+            header += f"\n大盘环境: {market_state}"
+
+        profile_texts = [header, ""]
+        for p in candidates:
+            profile_texts.append(p.to_text())
+            profile_texts.append("")
+
+        candidates_text = "\n".join(profile_texts)
+
+        prompt = AI_ADVISOR_PROMPT.format(
+            holdings_data=holdings_text,
+            candidates_data=candidates_text,
+        )
         return prompt
+
+    @staticmethod
+    def _format_holdings(
+        holdings: Optional[List[HoldingInfo]],
+        summaries: Optional[List[AccountSummary]],
+    ) -> str:
+        """格式化持仓数据为 prompt 文本。"""
+        if not holdings:
+            return ""
+
+        lines = ["## 当前持仓（需要你审查）", ""]
+
+        # 账户概况
+        if summaries:
+            for s in summaries:
+                emoji = "📊" if s.account == "paper" else "💰"
+                lines.append(
+                    f"{emoji} {s.label}账户: 总资产 {s.total_value:,.0f} | "
+                    f"现金 {s.cash:,.0f} | 仓位 {s.position_ratio:.1%} | "
+                    f"今日盈亏 {s.daily_pnl:+,.0f} | 持仓 {s.position_count} 只"
+                )
+            lines.append("")
+
+        # 按账户分组展示
+        for account in ("real", "paper"):
+            acct_holdings = [h for h in holdings if h.account == account]
+            if not acct_holdings:
+                continue
+
+            label = "实盘" if account == "real" else "模拟盘"
+            lines.append(f"--- {label}持仓 ---")
+
+            for h in acct_holdings:
+                pnl_emoji = "🟢" if h.pnl_pct > 2 else "🟡" if h.pnl_pct > -2 else "🔴"
+                t1_lock = " 🔒T+1" if h.is_today_buy else ""
+                time_warn = " ⚠️时间止损预警" if (h.holding_days > 10 and h.pnl_pct < 0) else ""
+
+                lines.append(
+                    f"  {h.stock_code} {h.stock_name} | {h.industry or '未知行业'} | "
+                    f"持有{h.holding_days}天{t1_lock}{time_warn}"
+                )
+                lines.append(
+                    f"    成本 {h.avg_cost:.2f} | 现价 {h.current_price:.2f} | "
+                    f"盈亏 {pnl_emoji}{h.pnl_pct:+.1f}% | 市值 {h.market_value:,.0f}"
+                )
+                detail_parts = []
+                if h.stop_loss > 0:
+                    sl_dist = (h.current_price - h.stop_loss) / h.current_price * 100
+                    detail_parts.append(f"止损 {h.stop_loss:.2f} (距现价{sl_dist:.1f}%)")
+                if h.take_profit > 0:
+                    tp_dist = (h.take_profit - h.current_price) / h.current_price * 100
+                    detail_parts.append(f"止盈 {h.take_profit:.2f} (距现价{tp_dist:+.1f}%)")
+                if h.ma5 > 0:
+                    detail_parts.append(f"MA5={h.ma5:.2f}")
+                if h.ma20 > 0:
+                    detail_parts.append(f"MA20={h.ma20:.2f}")
+                if h.highest_price > 0:
+                    detail_parts.append(f"日内最高 {h.highest_price:.2f}")
+                lines.append(f"    {' | '.join(detail_parts)}")
+
+            lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Prompt 落盘
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _save_prompt(prompt: str, trade_date: Optional[str] = None):
+        """保存发给 AI 的完整 prompt 到日志目录，方便调试"""
+        from pathlib import Path
+        from datetime import datetime
+        from system.config.settings import LOGS_DIR
+
+        date_str = trade_date or datetime.now().strftime("%Y-%m-%d")
+        prompt_dir = Path(LOGS_DIR) / date_str / "prompts"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = prompt_dir / "strategy_prompt.txt"
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"策略管线 AI Prompt - {current_time}\n")
+            f.write("=" * 80 + "\n\n")
+            f.write(prompt)
+            f.write("\n\n" + "=" * 80 + "\n")
+            f.write(f"Prompt 总字数：{len(prompt)}字\n")
+        logger.info(f"Prompt 已落盘: {prompt_path}")
 
     # ------------------------------------------------------------------
     # 调用 & 解析
@@ -278,6 +376,8 @@ class AIAdvisor:
             signal_score=float(confidence),
             strategy_name=f"ai_advisor_{model_name}",
             reason=str(item.get("reason", "")),
+            expected_trend=str(item.get("expected_trend", "")),
+            sector_name=str(item.get("sector_name", "")),
         )
 
     @staticmethod
@@ -359,6 +459,7 @@ class AIAdvisor:
                 signal_score=round(score, 1),
                 strategy_name="ai_advisor_merged",
                 reason=reason,
+                sector_name=s1.sector_name or s2.sector_name,
             ))
 
         return merged

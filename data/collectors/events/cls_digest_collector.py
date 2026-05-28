@@ -198,28 +198,31 @@ class CLSDigestCollector:
             文章 ID
         """
         try:
+            import os
             import subprocess
             import time
             import shutil
-            
-            # 检查 agent-browser 是否可用
-            if not shutil.which('agent-browser'):
+
+            agent_browser = shutil.which('agent-browser')
+            if not agent_browser:
+                for p in ['/opt/homebrew/bin/agent-browser', '/usr/local/bin/agent-browser']:
+                    if os.path.isfile(p):
+                        agent_browser = p
+                        break
+            if not agent_browser:
                 self.logger.error("❌ agent-browser 未安装或不在 PATH 中，无法搜索文章")
                 return None
-            
-            # 1. 打开搜索页面（关键词必须带【】）
+
             search_url = f"https://www.cls.cn/searchPage?keyword={keyword}&type={search_type}"
             self.logger.info(f"打开搜索页面：{search_url}")
-            
-            open_cmd = ["agent-browser", "open", search_url]
-            subprocess.run(open_cmd, capture_output=True, timeout=15)
+
+            subprocess.run([agent_browser, "open", search_url], capture_output=True, timeout=15)
             
             # 2. 等待页面加载
             time.sleep(5)
             
             # 3. 获取快照
-            snapshot_cmd = ["agent-browser", "snapshot"]
-            result = subprocess.run(snapshot_cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run([agent_browser, "snapshot"], capture_output=True, text=True, timeout=10)
             snapshot = result.stdout
             
             if not snapshot:

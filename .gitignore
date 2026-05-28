@@ -7,5 +7,7 @@ storage/logs/
 storage/cache/
 storage/reports/
 *.db
+*.db-shm
+*.db-wal
 storage/pdf/
 docs/*.xlsx

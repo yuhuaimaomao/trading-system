@@ -179,7 +179,7 @@ class StockBasicCollector(ProxyBaseCollector):
 
     def _save_to_db(self, data: list):
         """
-        批量保存到数据库(不 DELETE,使用 INSERT OR REPLACE)
+        批量保存到数据库（INSERT OR REPLACE，不 DELETE，靠唯一索引防重复）
         """
         if not data or len(data) == 0:
             self.logger.warning("⚠️ 数据为空,跳过保存")
@@ -196,18 +196,17 @@ class StockBasicCollector(ProxyBaseCollector):
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
 
-            # 包裹在事务中：DELETE + INSERT 原子化
-            cursor.execute("BEGIN")
-
-            # 删除当天数据
-            cursor.execute(f"DELETE FROM {self.TABLE_NAME} WHERE trade_date = ?", (trade_date,))
-
-            # 批量插入
+            # 批量插入（唯一索引 idx_stock_basic_date_code 保证不重复）
             insert_data = []
+            seen = set()  # 同一批次去重
             for row in data:
+                code = row.get('stock_code', '')
+                if code in seen:
+                    continue
+                seen.add(code)
                 insert_data.append((
                     trade_date,
-                    row.get('stock_code', ''),
+                    code,
                     row.get('stock_name', ''),
                     row.get('price', 0),
                     row.get('change_pct', 0),
@@ -247,7 +246,7 @@ class StockBasicCollector(ProxyBaseCollector):
                     row.get('concepts', ''),
                     row.get('bps', 0),
                     row.get('listing_date', ''),
-                    row.get('avg_price', 0),  # 新增:平均股价
+                    row.get('avg_price', 0),
                     updated_at
                 ))
 
@@ -268,14 +267,24 @@ class StockBasicCollector(ProxyBaseCollector):
             """, insert_data)
 
             conn.commit()
-            self.logger.info(f"✅ 保存到数据库成功:{len(insert_data)}条数据")
+
+            # 验证: 今天实际保存了多少只
+            actual = conn.execute(
+                f"SELECT COUNT(DISTINCT stock_code) FROM {self.TABLE_NAME} WHERE trade_date = ?",
+                (trade_date,),
+            ).fetchone()[0]
+            api_total = self.cache_data.get('total', 0)
+            if api_total and actual < api_total * 0.99:
+                self.logger.warning(f"⚠️ 覆盖率不足: 已保存 {actual} 只, API total {api_total} 只 ({actual/api_total*100:.1f}%)")
+            else:
+                self.logger.info(f"✅ 保存到数据库成功: {actual} 只 (API total: {api_total})")
 
         except Exception as e:
             if 'conn' in locals() and conn:
                 conn.rollback()
             self.logger.error(f"❌ 保存到数据库失败：{e}")
             raise
-        
+
         finally:
             if 'conn' in locals() and conn:
                 conn.close()
@@ -340,6 +349,138 @@ class StockBasicCollector(ProxyBaseCollector):
         finally:
             conn.close()
 
+    def _compute_indicators(self):
+        """计算 MA60/MA120/BBI/MACD/RSI/KDJ，写入 stock_indicators"""
+        self.logger.info("计算技术指标 (MA60/120/BBI/MACD/RSI/KDJ/BOLL)...")
+        from system.config.settings import DATABASE_PATH
+        from analysis.screening.indicators import calc_macd, calc_rsi, calc_kdj, calc_bollinger
+        import sqlite3 as _sql
+
+        conn = _sql.connect(DATABASE_PATH)
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT stock_code, trade_date, price, open, high, low
+                FROM stock_basic
+                WHERE trade_date <= ?
+                ORDER BY stock_code, trade_date ASC
+            """, (self.trade_date,))
+
+            # 按 stock_code 分组，日期升序
+            from collections import defaultdict as _dd
+            data_by_code = _dd(list)
+            for row in cur.fetchall():
+                code = row[0]
+                data_by_code[code].append({
+                    'date': row[1],
+                    'close': row[2] or 0,
+                    'open': row[3] or 0,
+                    'high': row[4] or 0,
+                    'low': row[5] or 0,
+                })
+
+            inserts = []
+            for code, rows in data_by_code.items():
+                closes = [r['close'] for r in rows]
+                highs = [r['high'] for r in rows]
+                lows = [r['low'] for r in rows]
+                n = len(closes)
+
+                if n < 3 or closes[-1] == 0:
+                    continue
+
+                # ---- 日线均线 ----
+                ma60 = round(sum(closes[-60:]) / min(60, n), 2)
+                ma120 = round(sum(closes[-120:]) / min(120, n), 2) if n >= 120 else None
+
+                # ---- 日线 BBI ----
+                ma3  = sum(closes[-3:])  / min(3, n)
+                ma6  = sum(closes[-6:])  / min(6, n)
+                ma12 = sum(closes[-12:]) / min(12, n)
+                ma24 = sum(closes[-24:]) / min(24, n)
+                bbi_daily = round((ma3 + ma6 + ma12 + ma24) / 4, 2)
+
+                # ---- 周线 BBI ----
+                bbi_weekly = self._compute_weekly_bbi(rows)
+
+                # ---- MACD / RSI / KDJ ----
+                macd = calc_macd(closes)
+                rsi6 = calc_rsi(closes, 6)
+                rsi12 = calc_rsi(closes, 12)
+                rsi24 = calc_rsi(closes, 24)
+                kdj = calc_kdj(highs, lows, closes)
+                bb = calc_bollinger(closes)
+
+                inserts.append((
+                    code, self.trade_date,
+                    ma60, ma120,
+                    bbi_daily, bbi_weekly,
+                    macd['dif'], macd['dea'], macd['bar'],
+                    rsi6, rsi12, rsi24,
+                    kdj['k'], kdj['d'], kdj['j'],
+                    bb['upper'], bb['mid'], bb['lower'],
+                    bb['width'], bb['pct_b'],
+                ))
+
+            if inserts:
+                cur.executemany("""
+                    INSERT OR REPLACE INTO stock_indicators
+                    (stock_code, trade_date,
+                     ma60, ma120, bbi_daily, bbi_weekly,
+                     macd_dif, macd_dea, macd_bar,
+                     rsi6, rsi12, rsi24,
+                     kdj_k, kdj_d, kdj_j,
+                     bb_upper, bb_mid, bb_lower,
+                     bb_width, bb_pct_b)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, inserts)
+                conn.commit()
+                self.logger.info(f"✅ 技术指标计算完成: {len(inserts)} 只个股")
+            else:
+                self.logger.warning("没有需要计算技术指标的数据")
+
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _compute_weekly_bbi(daily_rows: list) -> float | None:
+        """从日线合成周K，计算周线 BBI = (MA3+MA6+MA12+MA24)/4"""
+        if len(daily_rows) < 25:  # 至少需要 ~5 周数据
+            return None
+
+        # 按 ISO 周分组
+        weeks: dict[tuple, dict] = {}
+        for r in daily_rows:
+            if r['close'] == 0:
+                continue
+            iso = datetime.strptime(r['date'], '%Y-%m-%d').isocalendar()
+            key = (iso[0], iso[1])
+            if key not in weeks:
+                weeks[key] = {
+                    'open': r['open'] or r['close'],
+                    'close': r['close'],
+                    'high': r['high'] or r['close'],
+                    'low': r['low'] or r['close'],
+                }
+            else:
+                w = weeks[key]
+                w['close'] = r['close']
+                w['high'] = max(w['high'], r['high'] or r['close'])
+                w['low'] = min(w['low'], r['low'] or r['close'])
+
+        weekly_closes = [w['close'] for w in weeks.values()]
+
+        n = len(weekly_closes)
+        if n < 4:
+            return None
+
+        ma3w  = sum(weekly_closes[-3:])  / min(3, n)
+        ma6w  = sum(weekly_closes[-6:])  / min(6, n)
+        ma12w = sum(weekly_closes[-12:]) / min(12, n)
+        ma24w = sum(weekly_closes[-24:]) / min(24, n)
+
+        return round((ma3w + ma6w + ma12w + ma24w) / 4, 2)
+
     def collect_all(self):
         """采集全市场个股行情(使用基类的 fetch_all)"""
         self.logger.info("="*60)
@@ -385,6 +526,9 @@ class StockBasicCollector(ProxyBaseCollector):
 
             # 计算均线 (MA5/MA20/MA5_angle)
             self._compute_moving_averages()
+
+            # 计算技术指标 (MA60/120/BBI/MACD/RSI/KDJ)
+            self._compute_indicators()
 
             # 获取应采集总数
             total = self.cache_data.get('total', len(data))
