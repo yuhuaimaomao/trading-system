@@ -107,8 +107,8 @@ class ManualExecutor:
             text_for_name = text
             for kw in _NON_NAME_KEYWORDS:
                 text_for_name = text_for_name.replace(kw, "")
-            # 匹配 2-3 字中文名称（排除纯数字和标点）
-            name_match = re.search(r"([一-鿿]{2,3})", text_for_name)
+            # 匹配 2-4 字中文名称（排除纯数字和标点）
+            name_match = re.search(r"([一-鿿]{2,4})", text_for_name)
             if name_match:
                 result["stock_name"] = name_match.group(1)
 

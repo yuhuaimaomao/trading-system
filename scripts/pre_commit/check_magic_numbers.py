@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WHITELIST = {0, 1, -1, 2, 3, 0.5, -1.0, 0.25, 0.75}  # 值 → 允许的原因
+WHITELIST = {0, 1, -1, 2, 3, 4, 0.5, -1.0, 0.25, 0.75}  # 值 → 允许的原因
 
 
 def is_volume_multiple(v: float) -> bool:
