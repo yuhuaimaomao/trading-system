@@ -1,21 +1,21 @@
-# -*- coding: utf-8 -*-
 """大盘状态检测：模式分类、量价背离、技术拐点、熔断/波动预警。
 
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
+
 import logging
 import sqlite3
-from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, date, time as dt_time
+from datetime import datetime
+from datetime import time as dt_time
 
 from system.config import settings
 
 logger = logging.getLogger(__name__)
 
 # 大盘熔断阈值 — 上证跌幅超过此值暂停所有买入
-INDEX_HALT_PCT = -0.02       # 上证跌幅 > 2%
-INDEX_DANGER_PCT = -0.01     # 上证跌破 MA20 且跌幅 > 1%
+INDEX_HALT_PCT = -0.02  # 上证跌幅 > 2%
+INDEX_DANGER_PCT = -0.01  # 上证跌破 MA20 且跌幅 > 1%
 
 # 交易时段
 MORNING_START = dt_time(9, 30)
@@ -34,23 +34,26 @@ class MarketRegime:
     不再用 bool market_ok 压扁模式信息，而是把模式+上下文→评估→决策全链路
     编码到一个对象里，下游按需读取。
     """
-    pattern: str = "normal"          # DETECT: 价格形态名
-    risk_level: str = "safe"         # ASSESS: safe/cautious/dangerous/extreme
-    risk_bias: str = "neutral"       # ASSESS: upside/downside/both/neutral
-    confidence: str = "medium"       # ASSESS: high/medium/low
-    opportunity: str = "trend_follow"  # ASSESS: trend_follow/reversal/chase/defensive/stand_aside
-    allow_buy: bool = True           # DECIDE: 新开仓
-    position_mult: float = 1.0       # DECIDE: 仓位乘数 (0=禁止, 1=满仓)
-    entry_rule: str = "standard"     # DECIDE: standard/pullback/confirm/next_day/none
-    stop_mult: float = 1.0           # DECIDE: 止损宽度乘数
-    urgent_action: str = ""          # DECIDE: ""/tighten_stops/reduce_positions/emergency_exit
-    alert_level: str = "info"        # DECIDE: info/warn/critical
-    alert_msg: str = ""              # DECIDE: 告警内容
+
+    pattern: str = "normal"  # DETECT: 价格形态名
+    risk_level: str = "safe"  # ASSESS: safe/cautious/dangerous/extreme
+    risk_bias: str = "neutral"  # ASSESS: upside/downside/both/neutral
+    confidence: str = "medium"  # ASSESS: high/medium/low
+    opportunity: str = (
+        "trend_follow"  # ASSESS: trend_follow/reversal/chase/defensive/stand_aside
+    )
+    allow_buy: bool = True  # DECIDE: 新开仓
+    position_mult: float = 1.0  # DECIDE: 仓位乘数 (0=禁止, 1=满仓)
+    entry_rule: str = "standard"  # DECIDE: standard/pullback/confirm/next_day/none
+    stop_mult: float = 1.0  # DECIDE: 止损宽度乘数
+    urgent_action: str = ""  # DECIDE: ""/tighten_stops/reduce_positions/emergency_exit
+    alert_level: str = "info"  # DECIDE: info/warn/critical
+    alert_msg: str = ""  # DECIDE: 告警内容
     # Session context
-    session_phase: str = "morning"   # morning/midday/afternoon/late
-    gap_direction: str = ""          # ""/gap_up/gap_down
-    breadth_healthy: bool = True     # 涨跌比健康
-    ma20_above: bool = True          # 指数在MA20上方
+    session_phase: str = "morning"  # morning/midday/afternoon/late
+    gap_direction: str = ""  # ""/gap_up/gap_down
+    breadth_healthy: bool = True  # 涨跌比健康
+    ma20_above: bool = True  # 指数在MA20上方
     multi_day_downtrend: bool = False  # 连续多日下跌
 
 
@@ -60,37 +63,39 @@ class MarketRegime:
 @dataclass
 class MicroSignals:
     """每轮扫描的微观信号 — 情景引擎的输入层。"""
-    price_velocity: float = 0.0       # 短期速率 (%/scan)
-    price_accel: float = 0.0          # 加速度（速率的变化）
-    ema12_pos: str = "on"             # above / below / on
-    ema12_just_crossed: str = ""      # crossed_up / crossed_down / ""
-    vol_pulse: str = "normal"         # expanding / contracting / normal
-    vol_price_confirm: str = "yes"    # yes=同向 / no=背离 / neutral
-    breadth_pct: float = 0.5          # 涨家占比
-    breadth_trend: str = "stable"     # improving / deteriorating / stable
-    bounce_from_low: float = 0.0      # 从日内低点反弹幅度 (%)
-    bounce_quality: str = ""          # strong / weak / failed / ""
-    lower_highs: bool = False         # 高点下移
-    higher_lows: bool = False         # 低点上移
-    rsi_signal: str = ""              # oversold / overbought / divergence / ""
-    testing_support: bool = False     # 正在测试支撑位
+
+    price_velocity: float = 0.0  # 短期速率 (%/scan)
+    price_accel: float = 0.0  # 加速度（速率的变化）
+    ema12_pos: str = "on"  # above / below / on
+    ema12_just_crossed: str = ""  # crossed_up / crossed_down / ""
+    vol_pulse: str = "normal"  # expanding / contracting / normal
+    vol_price_confirm: str = "yes"  # yes=同向 / no=背离 / neutral
+    breadth_pct: float = 0.5  # 涨家占比
+    breadth_trend: str = "stable"  # improving / deteriorating / stable
+    bounce_from_low: float = 0.0  # 从日内低点反弹幅度 (%)
+    bounce_quality: str = ""  # strong / weak / failed / ""
+    lower_highs: bool = False  # 高点下移
+    higher_lows: bool = False  # 低点上移
+    rsi_signal: str = ""  # oversold / overbought / divergence / ""
+    testing_support: bool = False  # 正在测试支撑位
     testing_resistance: bool = False  # 正在测试阻力位
-    range_expanding: bool = False     # 振幅在扩大
-    range_contracting: bool = False   # 振幅在缩小
+    range_expanding: bool = False  # 振幅在扩大
+    range_contracting: bool = False  # 振幅在缩小
 
 
 @dataclass
 class MarketScenario:
     """单个情景：名称 + 概率 + 确认/否定关卡 + 预设行动。"""
+
     name: str
-    label: str                        # 中文标签
+    label: str  # 中文标签
     probability: float = 0.0
-    confidence: str = "low"           # high / medium / low
-    direction: str = "neutral"        # bullish / bearish / neutral
-    confirm_at: float | None = None   # 确认关卡
+    confidence: str = "low"  # high / medium / low
+    direction: str = "neutral"  # bullish / bearish / neutral
+    confirm_at: float | None = None  # 确认关卡
     invalidate_at: float | None = None  # 否定关卡
-    signals: list = None              # 当前观察到的支持信号
-    pre_action: str = ""              # 概率过阈值时的预设行动
+    signals: list = None  # 当前观察到的支持信号
+    pre_action: str = ""  # 概率过阈值时的预设行动
 
     def __post_init__(self):
         if self.signals is None:
@@ -100,13 +105,14 @@ class MarketScenario:
 @dataclass
 class MarketOutlook:
     """每轮更新的情景分布 + 关键关卡 + 行动建议。"""
+
     primary: MarketScenario
     alternatives: list  # [MarketScenario]
-    key_support: list   # [float] 下方支撑位
+    key_support: list  # [float] 下方支撑位
     key_resistance: list  # [float] 上方阻力位
-    bias: str = "neutral"       # bearish / neutral / bullish
-    urgency: str = "none"       # none / watch / act / critical
-    summary: str = ""           # 一句话总结
+    bias: str = "neutral"  # bearish / neutral / bullish
+    urgency: str = "none"  # none / watch / act / critical
+    summary: str = ""  # 一句话总结
     last_alert_scan: int = 0
 
 
@@ -134,7 +140,10 @@ SCENARIO_SIGNALS = {
         "direction": "bearish",
         "confirm": [
             ("加速下跌", lambda m: m.price_accel < -0.02),
-            ("放量下跌", lambda m: m.vol_pulse == "expanding" and m.vol_price_confirm == "yes"),
+            (
+                "放量下跌",
+                lambda m: m.vol_pulse == "expanding" and m.vol_price_confirm == "yes",
+            ),
             ("宽度恶化", lambda m: m.breadth_pct < 0.35),
             ("振幅扩大", lambda m: m.range_expanding),
             ("价格在低位", lambda m: m.ema12_pos == "below"),
@@ -205,7 +214,10 @@ SCENARIO_SIGNALS = {
         ],
         "reject": [
             ("突破阻力", lambda m: m.bounce_quality == "strong"),
-            ("量价确认", lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.03),
+            (
+                "量价确认",
+                lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.03,
+            ),
         ],
         "threshold": 0.30,
         "pre_action": "减仓观望，不宜追高",
@@ -220,7 +232,10 @@ SCENARIO_SIGNALS = {
             ("宽度不配合", lambda m: m.breadth_trend != "improving"),
         ],
         "reject": [
-            ("放量突破", lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.05),
+            (
+                "放量突破",
+                lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.05,
+            ),
             ("站上EMA12", lambda m: m.ema12_just_crossed == "crossed_up"),
         ],
         "threshold": 0.35,
@@ -255,54 +270,182 @@ PROBABILITY_URGENCY = [
 # ━━━━━━━━ 模式→Regime 基础映射 ━━━━━━━━
 
 PATTERN_REGIME = {
-    "normal":       dict(risk_level="safe",      risk_bias="neutral",   opportunity="trend_follow",
-                         allow_buy=True,  position_mult=1.0,  stop_mult=1.0,  entry_rule="standard",
-                         urgent_action="",        alert_level="info"),
-    "uptrend":      dict(risk_level="safe",      risk_bias="upside",    opportunity="trend_follow",
-                         allow_buy=True,  position_mult=1.0,  stop_mult=1.0,  entry_rule="pullback",
-                         urgent_action="",        alert_level="info"),
-    "v_reversal":   dict(risk_level="cautious",  risk_bias="upside",    opportunity="reversal",
-                         allow_buy=True,  position_mult=0.5,  stop_mult=0.8,  entry_rule="confirm",
-                         urgent_action="",        alert_level="warn"),
-    "w_bottom":     dict(risk_level="cautious",  risk_bias="upside",    opportunity="reversal",
-                         allow_buy=True,  position_mult=0.7,  stop_mult=1.0,  entry_rule="confirm",
-                         urgent_action="",        alert_level="warn"),
-    "melt_up":      dict(risk_level="dangerous", risk_bias="both",      opportunity="chase",
-                         allow_buy=True,  position_mult=0.3,  stop_mult=0.7,  entry_rule="pullback",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "gap_down_recover": dict(risk_level="cautious", risk_bias="upside", opportunity="reversal",
-                         allow_buy=True,  position_mult=0.5,  stop_mult=0.8,  entry_rule="confirm",
-                         urgent_action="",        alert_level="warn"),
-    "late_rally":   dict(risk_level="dangerous", risk_bias="upside",    opportunity="chase",
-                         allow_buy=True,  position_mult=0.3,  stop_mult=0.8,  entry_rule="next_day",
-                         urgent_action="",        alert_level="warn"),
-    "wide_choppy":  dict(risk_level="dangerous", risk_bias="both",      opportunity="defensive",
-                         allow_buy=True,  position_mult=0.3,  stop_mult=1.3,  entry_rule="range_boundary",
-                         urgent_action="",        alert_level="warn"),
-    "one_sided":    dict(risk_level="dangerous", risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.2,  entry_rule="none",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "inverted_v":   dict(risk_level="dangerous", risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.2,  entry_rule="none",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "panic":        dict(risk_level="extreme",   risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.5,  entry_rule="none",
-                         urgent_action="reduce_positions",  alert_level="critical"),
-    "dead_cat":     dict(risk_level="dangerous", risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.2,  entry_rule="none",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "m_top":        dict(risk_level="dangerous", risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.2,  entry_rule="none",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "gap_up_fade":  dict(risk_level="dangerous", risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.2,  entry_rule="none",
-                         urgent_action="tighten_stops",  alert_level="warn"),
-    "late_dump":    dict(risk_level="extreme",   risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.5,  entry_rule="none",
-                         urgent_action="emergency_exit",  alert_level="critical"),
-    "fishing_line": dict(risk_level="extreme",   risk_bias="downside",  opportunity="stand_aside",
-                         allow_buy=False, position_mult=0.0,  stop_mult=1.5,  entry_rule="none",
-                         urgent_action="emergency_exit",  alert_level="critical"),
+    "normal": dict(
+        risk_level="safe",
+        risk_bias="neutral",
+        opportunity="trend_follow",
+        allow_buy=True,
+        position_mult=1.0,
+        stop_mult=1.0,
+        entry_rule="standard",
+        urgent_action="",
+        alert_level="info",
+    ),
+    "uptrend": dict(
+        risk_level="safe",
+        risk_bias="upside",
+        opportunity="trend_follow",
+        allow_buy=True,
+        position_mult=1.0,
+        stop_mult=1.0,
+        entry_rule="pullback",
+        urgent_action="",
+        alert_level="info",
+    ),
+    "v_reversal": dict(
+        risk_level="cautious",
+        risk_bias="upside",
+        opportunity="reversal",
+        allow_buy=True,
+        position_mult=0.5,
+        stop_mult=0.8,
+        entry_rule="confirm",
+        urgent_action="",
+        alert_level="warn",
+    ),
+    "w_bottom": dict(
+        risk_level="cautious",
+        risk_bias="upside",
+        opportunity="reversal",
+        allow_buy=True,
+        position_mult=0.7,
+        stop_mult=1.0,
+        entry_rule="confirm",
+        urgent_action="",
+        alert_level="warn",
+    ),
+    "melt_up": dict(
+        risk_level="dangerous",
+        risk_bias="both",
+        opportunity="chase",
+        allow_buy=True,
+        position_mult=0.3,
+        stop_mult=0.7,
+        entry_rule="pullback",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "gap_down_recover": dict(
+        risk_level="cautious",
+        risk_bias="upside",
+        opportunity="reversal",
+        allow_buy=True,
+        position_mult=0.5,
+        stop_mult=0.8,
+        entry_rule="confirm",
+        urgent_action="",
+        alert_level="warn",
+    ),
+    "late_rally": dict(
+        risk_level="dangerous",
+        risk_bias="upside",
+        opportunity="chase",
+        allow_buy=True,
+        position_mult=0.3,
+        stop_mult=0.8,
+        entry_rule="next_day",
+        urgent_action="",
+        alert_level="warn",
+    ),
+    "wide_choppy": dict(
+        risk_level="dangerous",
+        risk_bias="both",
+        opportunity="defensive",
+        allow_buy=True,
+        position_mult=0.3,
+        stop_mult=1.3,
+        entry_rule="range_boundary",
+        urgent_action="",
+        alert_level="warn",
+    ),
+    "one_sided": dict(
+        risk_level="dangerous",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.2,
+        entry_rule="none",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "inverted_v": dict(
+        risk_level="dangerous",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.2,
+        entry_rule="none",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "panic": dict(
+        risk_level="extreme",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.5,
+        entry_rule="none",
+        urgent_action="reduce_positions",
+        alert_level="critical",
+    ),
+    "dead_cat": dict(
+        risk_level="dangerous",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.2,
+        entry_rule="none",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "m_top": dict(
+        risk_level="dangerous",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.2,
+        entry_rule="none",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "gap_up_fade": dict(
+        risk_level="dangerous",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.2,
+        entry_rule="none",
+        urgent_action="tighten_stops",
+        alert_level="warn",
+    ),
+    "late_dump": dict(
+        risk_level="extreme",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.5,
+        entry_rule="none",
+        urgent_action="emergency_exit",
+        alert_level="critical",
+    ),
+    "fishing_line": dict(
+        risk_level="extreme",
+        risk_bias="downside",
+        opportunity="stand_aside",
+        allow_buy=False,
+        position_mult=0.0,
+        stop_mult=1.5,
+        entry_rule="none",
+        urgent_action="emergency_exit",
+        alert_level="critical",
+    ),
 }
 
 PATTERN_ALERT = {
@@ -331,7 +474,7 @@ def _session_phase() -> str:
     if now < MORNING_START:
         return "pre_open"
     if now < dt_time(10, 0):
-        return "opening"       # 开盘30分钟
+        return "opening"  # 开盘30分钟
     if now < dt_time(11, 0):
         return "morning"
     if now < MORNING_END:
@@ -342,7 +485,7 @@ def _session_phase() -> str:
         return "afternoon"
     if now < LATE_SESSION:
         return "late_afternoon"
-    return "closing"           # 尾盘30分钟
+    return "closing"  # 尾盘30分钟
 
 
 class MarketStateMixin:
@@ -354,7 +497,7 @@ class MarketStateMixin:
         """双重回撤保护：日亏损超 3% 或总账户回撤超 15% 时发出警报。"""
         if self._max_drawdown_alerted:
             return
-        p = self.portfolio
+        p = self.paper_account
         if p.daily_pnl < 0 and p.total_value > 0:
             daily_loss_ratio = abs(p.daily_pnl) / p.total_value
             if daily_loss_ratio > settings.MAX_DAILY_LOSS:
@@ -447,10 +590,12 @@ class MarketStateMixin:
 
         # 短期窗口
         short_recent = px[-short_n:]
-        short_prev = px[-2*short_n:-short_n] if n >= 2*short_n else px[:short_n]
+        short_prev = px[-2 * short_n : -short_n] if n >= 2 * short_n else px[:short_n]
         avg_short = sum(short_recent) / (len(short_recent) or 1)
         avg_short_prev = sum(short_prev) / (len(short_prev) or 1)
-        short_chg = (avg_short - avg_short_prev) / avg_short_prev if avg_short_prev > 0 else 0
+        short_chg = (
+            (avg_short - avg_short_prev) / avg_short_prev if avg_short_prev > 0 else 0
+        )
 
         # 中期窗口
         medium_recent = px[-medium_n:]
@@ -478,9 +623,17 @@ class MarketStateMixin:
         if range_pct > 0.01 and pos_in_range < 0.2:
             drop_short = abs(short_chg) if short_chg < -0.002 else 0
             if n >= 2 * medium_n:
-                medium_prev_px = px[-2*medium_n:-medium_n]
-                avg_medium_prev = sum(medium_prev_px) / len(medium_prev_px) if medium_prev_px else avg_medium
-                drop_medium = max(0, (avg_medium_prev - avg_medium) / avg_medium_prev) if avg_medium_prev > 0 else 0
+                medium_prev_px = px[-2 * medium_n : -medium_n]
+                avg_medium_prev = (
+                    sum(medium_prev_px) / len(medium_prev_px)
+                    if medium_prev_px
+                    else avg_medium
+                )
+                drop_medium = (
+                    max(0, (avg_medium_prev - avg_medium) / avg_medium_prev)
+                    if avg_medium_prev > 0
+                    else 0
+                )
                 if drop_short > drop_medium * 0.8 and drop_short > 0.003:
                     return "panic"
             elif drop_short > 0.004:
@@ -491,9 +644,17 @@ class MarketStateMixin:
         if range_pct > 0.01 and pos_in_range > 0.8:
             rise_short = short_chg if short_chg > 0.002 else 0
             if n >= 2 * medium_n:
-                medium_prev_px = px[-2*medium_n:-medium_n]
-                avg_medium_prev = sum(medium_prev_px) / len(medium_prev_px) if medium_prev_px else avg_medium
-                rise_medium = max(0, (avg_medium - avg_medium_prev) / avg_medium_prev) if avg_medium_prev > 0 else 0
+                medium_prev_px = px[-2 * medium_n : -medium_n]
+                avg_medium_prev = (
+                    sum(medium_prev_px) / len(medium_prev_px)
+                    if medium_prev_px
+                    else avg_medium
+                )
+                rise_medium = (
+                    max(0, (avg_medium - avg_medium_prev) / avg_medium_prev)
+                    if avg_medium_prev > 0
+                    else 0
+                )
                 if rise_short > rise_medium * 0.8 and rise_short > 0.002:
                     return "melt_up"
             elif rise_short > 0.003:
@@ -513,8 +674,12 @@ class MarketStateMixin:
         # ━━ 单边下跌 ━━
         if ema12 > 0 and cur < ema12 and short_chg < 0:
             if n >= 2 * medium_n:
-                medium_prev_px = px[-2*medium_n:-medium_n]
-                avg_medium_prev = sum(medium_prev_px) / len(medium_prev_px) if medium_prev_px else avg_medium
+                medium_prev_px = px[-2 * medium_n : -medium_n]
+                avg_medium_prev = (
+                    sum(medium_prev_px) / len(medium_prev_px)
+                    if medium_prev_px
+                    else avg_medium
+                )
                 if avg_medium < avg_medium_prev:
                     decline = (avg_medium_prev - avg_medium) / avg_medium_prev
                     if decline > 0.005:
@@ -524,7 +689,7 @@ class MarketStateMixin:
 
         # ━━ 倒V/A型 ━━
         if range_pct > 0.01 and pos_in_range < 0.3 and short_chg < -0.002:
-            open_zone = px[:min(short_n, len(px))]
+            open_zone = px[: min(short_n, len(px))]
             avg_open = sum(open_zone) / len(open_zone) if open_zone else lo
             if hi - avg_open > (hi - lo) * 0.35:
                 return "inverted_v"
@@ -532,8 +697,12 @@ class MarketStateMixin:
         # ━━ 单边上涨 ━━
         if ema12 > 0 and cur > ema12 and short_chg > 0:
             if n >= 2 * medium_n:
-                medium_prev_px = px[-2*medium_n:-medium_n]
-                avg_medium_prev = sum(medium_prev_px) / len(medium_prev_px) if medium_prev_px else avg_medium
+                medium_prev_px = px[-2 * medium_n : -medium_n]
+                avg_medium_prev = (
+                    sum(medium_prev_px) / len(medium_prev_px)
+                    if medium_prev_px
+                    else avg_medium
+                )
                 if avg_medium > avg_medium_prev:
                     rise = (avg_medium - avg_medium_prev) / avg_medium_prev
                     if rise > 0.003:
@@ -568,7 +737,7 @@ class MarketStateMixin:
         def find_valleys(arr):
             valleys = []
             for i in range(1, len(arr) - 1):
-                if arr[i] <= arr[i-1] and arr[i] < arr[i+1]:
+                if arr[i] <= arr[i - 1] and arr[i] < arr[i + 1]:
                     valleys.append((i, arr[i]))
             return valleys
 
@@ -586,7 +755,7 @@ class MarketStateMixin:
             return False
 
         # 中间有一波反弹（两底之间的高点>底部的0.8%）
-        mid_section = px[bottom1[0]:mid + bottom2[0]]
+        mid_section = px[bottom1[0] : mid + bottom2[0]]
         if not mid_section:
             return False
         peak = max(mid_section)
@@ -610,7 +779,7 @@ class MarketStateMixin:
         def find_peaks(arr):
             peaks = []
             for i in range(1, len(arr) - 1):
-                if arr[i] >= arr[i-1] and arr[i] > arr[i+1]:
+                if arr[i] >= arr[i - 1] and arr[i] > arr[i + 1]:
                     peaks.append((i, arr[i]))
             return peaks
 
@@ -628,7 +797,7 @@ class MarketStateMixin:
             return False
 
         # 中间有回落（两顶之间的低点<顶部的0.6%）
-        mid_section = px[top1[0]:mid + top2[0]]
+        mid_section = px[top1[0] : mid + top2[0]]
         if not mid_section:
             return False
         valley = min(mid_section)
@@ -665,7 +834,9 @@ class MarketStateMixin:
 
     # ━━━━━━━━ 低开高走 ━━━━━━━━
 
-    def _detect_gap_down_recover(self, px, n, short_chg, pos_in_range, range_pct) -> bool:
+    def _detect_gap_down_recover(
+        self, px, n, short_chg, pos_in_range, range_pct
+    ) -> bool:
         """跳空低开后持续回升，开盘价接近日内低点，当前价接近日内高点。"""
         if range_pct < 0.008:
             return False
@@ -693,9 +864,9 @@ class MarketStateMixin:
         if n < short_n * 2:
             return False
         recent = px[-short_n:]
-        prev   = px[-2*short_n:-short_n]
+        prev = px[-2 * short_n : -short_n]
         avg_recent = sum(recent) / len(recent)
-        avg_prev   = sum(prev) / len(prev)
+        avg_prev = sum(prev) / len(prev)
         drop = (avg_recent - avg_prev) / avg_prev if avg_prev > 0 else 0
         return drop < -0.003
 
@@ -706,15 +877,15 @@ class MarketStateMixin:
         if n < short_n * 2:
             return False
         # 前80%价格变动不能超过0.5%（排除全天上涨/V型反弹）
-        early = px[:int(n * 0.8)]
+        early = px[: int(n * 0.8)]
         if len(early) >= 10:
             early_chg = (early[-1] - early[0]) / early[0] if early[0] > 0 else 0
             if early_chg > 0.005:
                 return False
         recent = px[-short_n:]
-        prev   = px[-2*short_n:-short_n]
+        prev = px[-2 * short_n : -short_n]
         avg_recent = sum(recent) / len(recent)
-        avg_prev   = sum(prev) / len(prev)
+        avg_prev = sum(prev) / len(prev)
         rise = (avg_recent - avg_prev) / avg_prev if avg_prev > 0 else 0
         return rise > 0.002
 
@@ -725,17 +896,23 @@ class MarketStateMixin:
         if n < 40 or phase not in ("late_afternoon", "closing"):
             return False
         # 前半段：缓慢上涨
-        first_80pct = px[:int(n * 0.8)]
+        first_80pct = px[: int(n * 0.8)]
         if len(first_80pct) < 15:
             return False
-        first_chg = (first_80pct[-1] - first_80pct[0]) / first_80pct[0] if first_80pct[0] > 0 else 0
+        first_chg = (
+            (first_80pct[-1] - first_80pct[0]) / first_80pct[0]
+            if first_80pct[0] > 0
+            else 0
+        )
         if first_chg < 0.005:  # 前半段涨幅不够
             return False
         # 后半段：急剧下跌
-        last_20pct = px[int(n * 0.8):]
+        last_20pct = px[int(n * 0.8) :]
         if len(last_20pct) < 5:
             return False
-        last_chg = (last_20pct[-1] - last_20pct[0]) / last_20pct[0] if last_20pct[0] > 0 else 0
+        last_chg = (
+            (last_20pct[-1] - last_20pct[0]) / last_20pct[0] if last_20pct[0] > 0 else 0
+        )
         return last_chg < -0.005
 
     # ━━━━━━━━ 宽幅震荡 ━━━━━━━━
@@ -755,7 +932,11 @@ class MarketStateMixin:
                 crosses += 1
             prev_above = cur_above
         # 多次穿越+最终价格靠近中心
-        pos_in_range = (px[-1] - self._index_low) / (self._index_high - self._index_low) if self._index_high > self._index_low else 0.5
+        pos_in_range = (
+            (px[-1] - self._index_low) / (self._index_high - self._index_low)
+            if self._index_high > self._index_low
+            else 0.5
+        )
         return crosses >= 3 and 0.3 < pos_in_range < 0.7
 
     # ━━━━━━━━ V型反转技术确认 ━━━━━━━━
@@ -772,14 +953,14 @@ class MarketStateMixin:
             highs = []
             lows = []
             for i in range(0, len(px) - window + 1, window):
-                chunk = px[i:i + window]
+                chunk = px[i : i + window]
                 closes.append(chunk[-1])
                 highs.append(max(chunk))
                 lows.append(min(chunk))
             if len(closes) < 26:
                 return False
 
-            from analysis.screening.indicators import calc_macd, calc_rsi, calc_kdj
+            from analysis.screening.indicators import calc_kdj, calc_macd, calc_rsi
 
             macd = calc_macd(closes)
             rsi6 = calc_rsi(closes, 6)
@@ -800,10 +981,16 @@ class MarketStateMixin:
 
     # ━━━━━━━━ ASSESS：上下文评估 ━━━━━━━━
 
-    def _assess_regime(self, pattern: str, index_price: float,
-                       prev_close: float, change_pct: float,
-                       ma20: float = 0, ma60: float = 0,
-                       outlook: MarketOutlook | None = None) -> MarketRegime:
+    def _assess_regime(
+        self,
+        pattern: str,
+        index_price: float,
+        prev_close: float,
+        change_pct: float,
+        ma20: float = 0,
+        ma60: float = 0,
+        outlook: MarketOutlook | None = None,
+    ) -> MarketRegime:
         """Layer 2-3: 模式 + 技术/宽度/时间/板块 → 完整 MarketRegime。
 
         同一个模式在不同上下文下可能有不同的风险等级和置信度。
@@ -868,7 +1055,10 @@ class MarketStateMixin:
             primary = outlook.primary
             prob = primary.probability
 
-            if primary.direction == "bearish" and outlook.urgency in ("critical", "act"):
+            if primary.direction == "bearish" and outlook.urgency in (
+                "critical",
+                "act",
+            ):
                 # 高概率下跌 → 提前收紧
                 base["risk_level"] = _upgrade_risk(base["risk_level"])
                 base["stop_mult"] = base.get("stop_mult", 1.0) * 1.2
@@ -892,7 +1082,11 @@ class MarketStateMixin:
                     if not base["urgent_action"]:
                         base["urgent_action"] = "tighten_stops"
 
-            elif primary.direction == "bearish" and outlook.urgency == "watch" and prob > 0.35:
+            elif (
+                primary.direction == "bearish"
+                and outlook.urgency == "watch"
+                and prob > 0.35
+            ):
                 # 需关注级别 → 轻微收紧
                 base["stop_mult"] = base.get("stop_mult", 1.0) * 1.1
                 if base["entry_rule"] == "standard":
@@ -940,7 +1134,7 @@ class MarketStateMixin:
                 c2 = sqlite3.connect(self.db_path)
                 r = c2.execute(
                     "SELECT price FROM index_snapshots WHERE trade_date=? ORDER BY ts DESC LIMIT 1",
-                    (td,)
+                    (td,),
                 ).fetchone()
                 c2.close()
                 if r:
@@ -966,9 +1160,9 @@ class MarketStateMixin:
             "dead_bounce": 0.10,
         }
         self._scenario_scan_count: int = 0
-        self._scenario_last_alert_scan: int = -100   # 首次可告警
+        self._scenario_last_alert_scan: int = -100  # 首次可告警
         self._scenario_prev_velocity: float = 0.0
-        self._scenario_recent_lows: list[float] = []   # 近期低点
+        self._scenario_recent_lows: list[float] = []  # 近期低点
         self._scenario_recent_highs: list[float] = []  # 近期高点
         self._scenario_prev_breadth: float = 0.5
         self._scenario_prev_vol: float = 0.0
@@ -1018,7 +1212,7 @@ class MarketStateMixin:
             if vol_pulse == "expanding" and abs(velocity) > 0.02:
                 vol_confirm = "yes"  # 放量同向
             elif vol_pulse == "contracting" and abs(velocity) > 0.02:
-                vol_confirm = "no"   # 缩量异动=背离
+                vol_confirm = "no"  # 缩量异动=背离
 
         # 宽度
         breadth = self._compute_breadth()
@@ -1046,7 +1240,9 @@ class MarketStateMixin:
             # 反弹是否有持续性（最近5个点都在上行）
             if len(px) >= 5:
                 recent_5 = px[-5:]
-                up_count = sum(1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i-1])
+                up_count = sum(
+                    1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i - 1]
+                )
                 if up_count >= 4 and bounce_pct > 0.5:
                     bounce_quality = "strong"
                 elif up_count >= 2:
@@ -1078,6 +1274,7 @@ class MarketStateMixin:
                     closes.append(px[i + window - 1])
                 if len(closes) >= 14:
                     from analysis.screening.indicators import calc_rsi
+
                     rsi6 = calc_rsi(closes, 6)
                     if rsi6 < 25:
                         rsi_signal = "oversold"
@@ -1086,7 +1283,9 @@ class MarketStateMixin:
                     # 简易底背离：价格新低但RSI没有新低
                     if len(closes) >= 20:
                         prev_closes = closes[:-5]
-                        prev_rsi = calc_rsi(prev_closes, 6) if len(prev_closes) >= 14 else 50
+                        prev_rsi = (
+                            calc_rsi(prev_closes, 6) if len(prev_closes) >= 14 else 50
+                        )
                         if closes[-1] < prev_closes[-1] and rsi6 > prev_rsi:
                             rsi_signal = "divergence_up"
                         elif closes[-1] > prev_closes[-1] and rsi6 < prev_rsi:
@@ -1198,7 +1397,7 @@ class MarketStateMixin:
             scores[name] = score
 
         # 从上一轮概率做贝叶斯式更新
-        prev_probs = getattr(self, '_scenario_probs', {})
+        prev_probs = getattr(self, "_scenario_probs", {})
         if not prev_probs:
             self._init_scenario_state()
             prev_probs = self._scenario_probs
@@ -1212,9 +1411,7 @@ class MarketStateMixin:
 
         # 时间衰减：没有确认信号的场景缓慢回归均值
         for name, cfg in SCENARIO_SIGNALS.items():
-            has_confirm = any(
-                cond(micro) for _, cond in cfg["confirm"]
-            )
+            has_confirm = any(cond(micro) for _, cond in cfg["confirm"])
             if not has_confirm and raw[name] > 0.10:
                 raw[name] *= 0.92  # 每轮衰减 8%
 
@@ -1232,10 +1429,7 @@ class MarketStateMixin:
 
         def build_scenario(name, prob):
             cfg = SCENARIO_SIGNALS[name]
-            signals = [
-                label for label, cond in cfg["confirm"]
-                if cond(micro)
-            ]
+            signals = [label for label, cond in cfg["confirm"] if cond(micro)]
             conf = "high" if prob > 0.50 else "medium" if prob > 0.25 else "low"
             return MarketScenario(
                 name=name,
@@ -1339,7 +1533,9 @@ class MarketStateMixin:
         if outlook.key_support and outlook.key_resistance:
             price = self._index_prices[-1] if self._index_prices else 0
             nearest_support = outlook.key_support[0] if outlook.key_support else 0
-            nearest_resistance = outlook.key_resistance[0] if outlook.key_resistance else 0
+            nearest_resistance = (
+                outlook.key_resistance[0] if outlook.key_resistance else 0
+            )
             if nearest_support > 0 and (price - nearest_support) / price < 0.003:
                 should_alert = True
                 reason = f"接近支撑 {nearest_support:.2f}"
@@ -1364,18 +1560,28 @@ class MarketStateMixin:
 
         level_lines = []
         if outlook.key_support:
-            level_lines.append(f"   支撑: {', '.join(f'{s:.2f}' for s in outlook.key_support)}")
+            level_lines.append(
+                f"   支撑: {', '.join(f'{s:.2f}' for s in outlook.key_support)}"
+            )
         if outlook.key_resistance:
-            level_lines.append(f"   阻力: {', '.join(f'{r:.2f}' for r in outlook.key_resistance)}")
+            level_lines.append(
+                f"   阻力: {', '.join(f'{r:.2f}' for r in outlook.key_resistance)}"
+            )
 
-        confirm_str = f"{outlook.primary.confirm_at:.2f}" if outlook.primary.confirm_at else "—"
-        invalidate_str = f"{outlook.primary.invalidate_at:.2f}" if outlook.primary.invalidate_at else "—"
+        confirm_str = (
+            f"{outlook.primary.confirm_at:.2f}" if outlook.primary.confirm_at else "—"
+        )
+        invalidate_str = (
+            f"{outlook.primary.invalidate_at:.2f}"
+            if outlook.primary.invalidate_at
+            else "—"
+        )
 
         self._alert(
             f"🔮 市场预判  {datetime.now().strftime('%H:%M')}\n"
             f"   {outlook.primary.label} ({outlook.primary.probability:.0%})  "
             f"确认: {confirm_str}  否定: {invalidate_str}"
-            + (f"\n   ─────────────────────────" if alt_lines else "")
+            + ("\n   ─────────────────────────" if alt_lines else "")
             + ("\n" + "\n".join(alt_lines) if alt_lines else "")
             + ("\n" + "\n".join(level_lines) if level_lines else "")
             + f"\n   → {outlook.primary.pre_action or '保持观察'}"
@@ -1401,11 +1607,16 @@ class MarketStateMixin:
             buy_zone_shift: 买入区下移比例（默认 0 = 不动）
             reason: 调整理由（中文）
         """
-        outlook = getattr(self, '_scenario_prev_outlook', None)
+        outlook = getattr(self, "_scenario_prev_outlook", None)
         if outlook is None:
-            return {"direction": "neutral", "urgency": "none",
-                    "tp_ceil_factor": 1.0, "sl_tighten": 1.0,
-                    "buy_zone_shift": 0.0, "reason": ""}
+            return {
+                "direction": "neutral",
+                "urgency": "none",
+                "tp_ceil_factor": 1.0,
+                "sl_tighten": 1.0,
+                "buy_zone_shift": 0.0,
+                "reason": "",
+            }
 
         primary = outlook.primary
         direction = primary.direction
@@ -1415,9 +1626,9 @@ class MarketStateMixin:
         # ━━ 基础因子：从情景引擎 ━━
         if direction == "bearish":
             if urgency == "critical":
-                tp_ceil = 0.85   # 止盈目标打 85 折
+                tp_ceil = 0.85  # 止盈目标打 85 折
                 sl_tighten = 1.30  # 止损收紧 30%
-                buy_shift = 0.08   # 买入区下移 8%
+                buy_shift = 0.08  # 买入区下移 8%
             elif urgency == "act":
                 tp_ceil = 0.90
                 sl_tighten = 1.20
@@ -1458,34 +1669,34 @@ class MarketStateMixin:
             if is_sector_accel_down:
                 # 大盘偏空 + 板块加速走弱 = 共振放大
                 sector_amplify = 1.40
-                sector_reason = f"板块加速走弱，与大盘共振"
+                sector_reason = "板块加速走弱，与大盘共振"
             elif is_sector_weak:
                 sector_amplify = 1.20
-                sector_reason = f"板块走弱，叠加市场偏空"
+                sector_reason = "板块走弱，叠加市场偏空"
             elif is_sector_strong:
                 # 大盘偏空但板块走强 → 减弱大盘影响
                 sector_amplify = 0.60
-                sector_reason = f"板块走强，部分抵消大盘偏空"
+                sector_reason = "板块走强，部分抵消大盘偏空"
             elif is_sector_accel_up:
                 sector_amplify = 0.40
-                sector_reason = f"板块持续走强，抵抗大盘下跌"
+                sector_reason = "板块持续走强，抵抗大盘下跌"
 
         elif direction == "bullish":
             if is_sector_strong:
                 sector_amplify = 0.0  # 无额外调整
-                sector_reason = f"板块走强，顺应大盘"
+                sector_reason = "板块走强，顺应大盘"
             elif is_sector_weak:
                 # 大盘涨但板块弱 → 个股天花板降低
                 sector_amplify = 0.70
-                sector_reason = f"板块走弱，拖累个股上行空间"
+                sector_reason = "板块走弱，拖累个股上行空间"
 
         elif direction == "neutral":
             if is_sector_accel_down:
                 sector_amplify = 0.80
-                sector_reason = f"板块加速走弱"
+                sector_reason = "板块加速走弱"
             elif is_sector_weak:
                 sector_amplify = 0.50
-                sector_reason = f"板块走弱"
+                sector_reason = "板块走弱"
 
         # ━━ 应用板块放大/缩小 ━━
         if sector_amplify > 0 and tp_ceil < 1.0:
@@ -1536,7 +1747,7 @@ class MarketStateMixin:
         # 追踪成交额（累计值每次不同，两处追加不影响正确性）
 
         # —— 情景预测引擎（先于模式分类，提供前瞻性判断）——
-        if not hasattr(self, '_scenario_probs'):
+        if not hasattr(self, "_scenario_probs"):
             self._init_scenario_state()
         micro = self._detect_micro_signals()
         outlook = self._update_scenario_engine(micro)
@@ -1547,7 +1758,7 @@ class MarketStateMixin:
             return MarketRegime(pattern="unknown", confidence="low")
 
         _, _, ma20 = self._get_index_baseline()
-        ma60 = self._get_index_ma60() if hasattr(self, '_get_index_ma60') else 0
+        ma60 = self._get_index_ma60() if hasattr(self, "_get_index_ma60") else 0
 
         # —— 跳空检测（首轮扫描） ——
         if len(self._index_prices) == 1:
@@ -1567,19 +1778,29 @@ class MarketStateMixin:
 
         # —— 熔断 ——
         if change_pct < INDEX_HALT_PCT:
-            self._alert(
-                f"🚨 大盘熔断\n"
-                f"   上证跌幅: {change_pct:.1%}  暂停所有买入信号"
+            self._alert(f"🚨 大盘熔断\n   上证跌幅: {change_pct:.1%}  暂停所有买入信号")
+            return MarketRegime(
+                pattern="halt",
+                risk_level="extreme",
+                allow_buy=False,
+                position_mult=0.0,
+                entry_rule="none",
+                urgent_action="reduce_positions",
+                alert_level="critical",
+                confidence="high",
             )
-            return MarketRegime(pattern="halt", risk_level="extreme",
-                               allow_buy=False, position_mult=0.0,
-                               entry_rule="none", urgent_action="reduce_positions",
-                               alert_level="critical", confidence="high")
 
         # —— 模式识别 + 评估 ——
         pattern = self._classify_market_pattern()
-        regime = self._assess_regime(pattern, index_price, prev_close, change_pct,
-                                     ma20=ma20, ma60=ma60, outlook=outlook)
+        regime = self._assess_regime(
+            pattern,
+            index_price,
+            prev_close,
+            change_pct,
+            ma20=ma20,
+            ma60=ma60,
+            outlook=outlook,
+        )
 
         # —— 推送告警 ——
         self._push_regime_alert(regime, pattern, index_price, change_pct, prev_close)
@@ -1598,7 +1819,7 @@ class MarketStateMixin:
                         self._index_alerted_downtrend = True
                         self._alert(
                             f"⚠️ 两极分化\n"
-                            f"   上证: {index_price:.2f}  {change_pct:+.2%}  下跌家数: {down}/{total} ({down/total:.0%})\n"
+                            f"   上证: {index_price:.2f}  {change_pct:+.2%}  下跌家数: {down}/{total} ({down / total:.0%})\n"
                             f"   → 指数平稳但多数个股下跌，暂停买入"
                         )
                     regime.allow_buy = False
@@ -1643,14 +1864,16 @@ class MarketStateMixin:
                     self._index_last_fluctuation_price = index_price
                     direction = "急拉" if fluctuation > 0 else "急跌"
                     mins = self.scan_interval * 3 // 60
-                    base_msg = (
-                        f"⚡ 上证: {index_price:.2f}  近{mins}分钟{direction}: {fluctuation:+.2%}"
-                    )
+                    base_msg = f"⚡ 上证: {index_price:.2f}  近{mins}分钟{direction}: {fluctuation:+.2%}"
                     ai_analysis = self._analyze_index_fluctuation()
                     if ai_analysis:
                         self._alert(f"{base_msg}\n   → 🤖 {ai_analysis}")
                     else:
-                        advice = "急拉追高风险大，等回落确认再考虑；急跌关注企稳信号" if direction == "急拉" else "急跌关注是否加速赶底，等缩量止跌再考虑低吸"
+                        advice = (
+                            "急拉追高风险大，等回落确认再考虑；急跌关注企稳信号"
+                            if direction == "急拉"
+                            else "急跌关注是否加速赶底，等缩量止跌再考虑低吸"
+                        )
                         self._alert(f"{base_msg}\n   → {advice}")
 
         # —— 量价背离 ——
@@ -1658,9 +1881,14 @@ class MarketStateMixin:
 
         return regime
 
-    def _push_regime_alert(self, regime: MarketRegime, pattern: str,
-                           index_price: float, change_pct: float,
-                           prev_close: float):
+    def _push_regime_alert(
+        self,
+        regime: MarketRegime,
+        pattern: str,
+        index_price: float,
+        change_pct: float,
+        prev_close: float,
+    ):
         """按 regime 的告警级别推送消息，避免重复推送。"""
         if not regime.alert_msg:
             return
@@ -1728,7 +1956,7 @@ class MarketStateMixin:
                 self._volume_alerted_divergence = True
                 self._alert(
                     f"⚠️ 量价背离 · 诱多\n"
-                    f"   上证 {minutes}分钟  涨: {price_change*100:.1f}%  成交额: {vol_change*100:.0f}%\n"
+                    f"   上证 {minutes}分钟  涨: {price_change * 100:.1f}%  成交额: {vol_change * 100:.0f}%\n"
                     f"   → 上涨缺量，谨防诱多"
                 )
 
@@ -1737,7 +1965,7 @@ class MarketStateMixin:
                 self._volume_alerted_divergence = True
                 self._alert(
                     f"⚠️ 量价背离 · 恐慌\n"
-                    f"   上证 {minutes}分钟  跌: {abs(price_change)*100:.1f}%  成交额: +{vol_change*100:.0f}%\n"
+                    f"   上证 {minutes}分钟  跌: {abs(price_change) * 100:.1f}%  成交额: +{vol_change * 100:.0f}%\n"
                     f"   → 恐慌盘涌出，关注是否加速赶底"
                 )
 
@@ -1784,7 +2012,7 @@ class MarketStateMixin:
         window = 5
         closes, highs, lows = [], [], []
         for i in range(0, len(prices) - window + 1, window):
-            chunk = prices[i:i + window]
+            chunk = prices[i : i + window]
             closes.append(chunk[-1])
             highs.append(max(chunk))
             lows.append(min(chunk))
@@ -1792,8 +2020,12 @@ class MarketStateMixin:
             return
 
         from analysis.screening.indicators import (
-            calc_macd, calc_rsi, calc_kdj,
-            calc_macd_series, detect_macd_cross, detect_divergence,
+            calc_kdj,
+            calc_macd,
+            calc_macd_series,
+            calc_rsi,
+            detect_divergence,
+            detect_macd_cross,
         )
 
         macd = calc_macd(closes)
@@ -1815,7 +2047,9 @@ class MarketStateMixin:
                 st["macd_cross"] = cross_type
                 days = recent_cross["days_ago"]
                 label = "金叉" if cross_type == "golden" else "死叉"
-                alerts.append(f"MACD{label}({days}根前) DIF={macd['dif']:.2f} DEA={macd['dea']:.2f}")
+                alerts.append(
+                    f"MACD{label}({days}根前) DIF={macd['dif']:.2f} DEA={macd['dea']:.2f}"
+                )
 
         for period, val, key in [(6, rsi6, "rsi6_zone"), (12, rsi12, "rsi12_zone")]:
             if val < 20:
@@ -1857,7 +2091,9 @@ class MarketStateMixin:
             if kd_cross and st["kdj_cross"] != kd_cross:
                 st["kdj_cross"] = kd_cross
                 label = "KDJ金叉" if kd_cross == "golden" else "KDJ死叉"
-                alerts.append(f"{label} K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}")
+                alerts.append(
+                    f"{label} K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}"
+                )
 
         recent_div = divergences[-1] if divergences else None
         if recent_div:
@@ -1868,7 +2104,9 @@ class MarketStateMixin:
 
         if alerts:
             current = prices[-1]
-            trend_desc = self._index_trend_desc(prices, self._last_index_quote.get("pre_close", 0))
+            trend_desc = self._index_trend_desc(
+                prices, self._last_index_quote.get("pre_close", 0)
+            )
             advice = self._index_tech_advice(alerts, st)
             self._alert(
                 f"📈 上证技术指标\n"
@@ -1896,8 +2134,12 @@ class MarketStateMixin:
     def _index_tech_advice(self, alerts: list[str], st: dict) -> str:
         has_div_bottom = any("底背离" in a for a in alerts)
         has_div_top = any("顶背离" in a for a in alerts)
-        has_rsi_os = st.get("rsi6_zone") == "oversold" or st.get("rsi12_zone") == "oversold"
-        has_rsi_ob = st.get("rsi6_zone") == "overbought" or st.get("rsi12_zone") == "overbought"
+        has_rsi_os = (
+            st.get("rsi6_zone") == "oversold" or st.get("rsi12_zone") == "oversold"
+        )
+        has_rsi_ob = (
+            st.get("rsi6_zone") == "overbought" or st.get("rsi12_zone") == "overbought"
+        )
         macd_cross = st.get("macd_cross")
 
         if has_div_bottom:
@@ -1950,7 +2192,7 @@ class MarketStateMixin:
         highs = []
         lows = []
         for i in range(0, len(prices) - window + 1, window):
-            chunk = prices[i:i + window]
+            chunk = prices[i : i + window]
             closes.append(chunk[-1])
             highs.append(max(chunk))
             lows.append(min(chunk))
@@ -1959,8 +2201,12 @@ class MarketStateMixin:
             return None
 
         from analysis.screening.indicators import (
-            calc_macd, calc_rsi, calc_kdj,
-            calc_macd_series, detect_macd_cross, detect_divergence,
+            calc_kdj,
+            calc_macd,
+            calc_macd_series,
+            calc_rsi,
+            detect_divergence,
+            detect_macd_cross,
         )
 
         macd = calc_macd(closes)
@@ -1982,41 +2228,53 @@ class MarketStateMixin:
         if pre_close > 0:
             change_from_first = (current - pre_close) / pre_close * 100
         else:
-            change_from_first = (prices[-1] - prices[0]) / prices[0] * 100 if prices[0] else 0
+            change_from_first = (
+                (prices[-1] - prices[0]) / prices[0] * 100 if prices[0] else 0
+            )
 
         bar_count = min(10, len(closes))
         recent_bars = []
         for i in range(len(closes) - bar_count + 1, len(closes)):
-            chg = (closes[i] - closes[i - 1]) / closes[i - 1] * 100 if closes[i - 1] else 0
+            chg = (
+                (closes[i] - closes[i - 1]) / closes[i - 1] * 100
+                if closes[i - 1]
+                else 0
+            )
             recent_bars.append(f"{closes[i]:.2f}({chg:+.1f}%)")
 
         ma_parts = []
         for label, ma_val in [("MA5", ma5), ("MA10", ma10), ("MA20", ma20)]:
             if ma_val and ma_val > 0:
                 pos = "上方" if current > ma_val else "下方"
-                ma_parts.append(f"{label}={ma_val:.0f}({pos}{abs(current - ma_val):.0f})")
+                ma_parts.append(
+                    f"{label}={ma_val:.0f}({pos}{abs(current - ma_val):.0f})"
+                )
 
-        cross_info = ", ".join(
-            [f"{c['days_ago']}根前{c['type']}" for c in crosses]
-        ) if crosses else "近期无交叉"
-        div_info = ", ".join([d['type'] for d in divergences]) if divergences else "无背离"
+        cross_info = (
+            ", ".join([f"{c['days_ago']}根前{c['type']}" for c in crosses])
+            if crosses
+            else "近期无交叉"
+        )
+        div_info = (
+            ", ".join([d["type"] for d in divergences]) if divergences else "无背离"
+        )
 
         prompt = f"""分析上证指数当前走势，预判方向和企稳点位。
 
 ## 当前状态
 指数现价: {current:.2f}
 近{len(prices)}轮(约{len(closes)}分钟)总变动: {change_from_first:+.2f}%
-日线均线: {', '.join(ma_parts) if ma_parts else '无数据'}
+日线均线: {", ".join(ma_parts) if ma_parts else "无数据"}
 
 ## 分钟级技术指标
-MACD: DIF={macd['dif']:.2f} DEA={macd['dea']:.2f} BAR={macd['bar']:.2f}
+MACD: DIF={macd["dif"]:.2f} DEA={macd["dea"]:.2f} BAR={macd["bar"]:.2f}
 RSI(6/12/24): {rsi6:.1f}/{rsi12:.1f}/{rsi24:.1f}
-KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
+KDJ: K={kdj["k"]:.1f} D={kdj["d"]:.1f} J={kdj["j"]:.1f}
 交叉: {cross_info}
 背离: {div_info}
 
 ## 近{bar_count}分钟走势
-{', '.join(recent_bars)}
+{", ".join(recent_bars)}
 
 请分析:
 1. 这波急跌/急拉会继续还是会反转?
@@ -2031,6 +2289,7 @@ KDJ: K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}
 
         try:
             from analysis.review.analyzer import AIAnalyzer
+
             ai = AIAnalyzer()
             result = ai._call_ai(
                 prompt,

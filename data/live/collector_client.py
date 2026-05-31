@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """非阻塞 TCP 客户端，连接 QMT Collector 接收实时市场数据。"""
 
 import json

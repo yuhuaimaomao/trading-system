@@ -3,9 +3,15 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
+import json
 import logging
+import os
+import re
+import sqlite3
 import time
 from datetime import datetime
+
+import requests
 
 from system.config import settings
 
@@ -59,8 +65,7 @@ class AbnormalMonitorMixin:
 
     def _evaluate_swaps(self, prices: dict[str, float]):
         """每15分钟主动评估换仓：AI 实时判断是否卖出某持仓换入候选。"""
-        pt = self._get_paper_trader()
-        if not pt or len(pt.portfolio.positions) < 3:
+        if len(self.paper_account.positions) < 3:
             return
 
         try:
@@ -134,10 +139,11 @@ class AbnormalMonitorMixin:
 
         price_info = {}
         if self._market_snapshot:
-            for code, pos in pt.portfolio.positions.items():
+            for code, pos in self.paper_account.positions.items():
                 snap = self._market_snapshot.get(code, {})
                 info = {"change_pct": snap.get("changePct", 0)}
-                industry = pos.sector_code
+                meta = self._pos_meta.get(code, {})
+                industry = meta.get("sector", "")
                 if industry and hasattr(self, "_sector_trend_history"):
                     history = self._sector_trend_history.get(industry, [])
                     if history:
@@ -155,15 +161,15 @@ class AbnormalMonitorMixin:
                 price_info[code] = info
 
         all_codes = set(c["code"] for c in candidates) | set(
-            pt.portfolio.positions.keys()
+            self.paper_account.positions.keys()
         )
         sector_context = self._build_sector_context(all_codes)
 
         logger.info(
-            f"主动换仓评估: {len(candidates)} 个候选, {len(pt.portfolio.positions)} 个持仓"
+            f"主动换仓评估: {len(candidates)} 个候选, {len(self.paper_account.positions)} 个持仓"
         )
         try:
-            swapped = pt.evaluate_swaps(
+            swapped = self._do_evaluate_swaps(
                 candidates,
                 market_context=ctx,
                 price_info=price_info,
@@ -231,3 +237,253 @@ class AbnormalDetector:
             alerts.append(f"🔥 逼近涨停 {now}\n   " + " ".join(limit_list))
 
         return alerts
+
+
+# ======================== 换仓评估（从 PaperTrader 迁入）========================
+
+
+def _do_evaluate_swaps(
+    self,
+    candidates: list[dict],
+    market_context: str = "",
+    price_info: dict = None,
+    sector_context: str = "",
+) -> bool:
+    """换仓评估入口：AI 优先，规则兜底。"""
+    result = _ai_evaluate_swap(
+        self, candidates, market_context, price_info, sector_context
+    )
+    if not result:
+        best_cand = max(candidates, key=lambda c: c.get("score", 0))
+        sell_code = _rule_swap_target(
+            self, best_cand["code"], best_cand.get("score", 0)
+        )
+        if not sell_code:
+            return False
+        buy_code = best_cand["code"]
+    else:
+        sell_code = result["sell"]
+        buy_code = result["buy"]
+
+    buy_cand = next((c for c in candidates if c["code"] == buy_code), None)
+    if not buy_cand:
+        return False
+
+    sell_price = self.paper_account.positions.get(sell_code)
+    sell_price = sell_price.current_price if sell_price else (buy_cand.get("price", 0))
+    logger.info(f"换仓: 卖出 {sell_code} → 买入 {buy_code} {buy_cand.get('name', '')}")
+
+    result = self.paper_account.sell(sell_code, sell_price, f"主动换仓→{buy_code}")
+    if result.success:
+        self._pos_meta.pop(sell_code, None)
+    else:
+        return False
+
+    price = buy_cand["price"]
+    max_affordable = int(self.paper_account.cash * 0.9 / price / 100) * 100
+    volume = min(
+        int(
+            self.paper_account.total_value * settings.DEFAULT_POSITION_PCT / price / 100
+        )
+        * 100,
+        max_affordable,
+    )
+    if volume < 100:
+        return False
+
+    buy_result = self.paper_account.buy(
+        buy_cand["code"],
+        buy_cand.get("name", ""),
+        price,
+        volume,
+        source="swap",
+    )
+    if buy_result.success:
+        self._pos_meta[buy_code] = {
+            "sl": buy_cand.get("sl", 0),
+            "tp": buy_cand.get("tp", 0),
+            "trailing_stop": 0.05,
+            "highest_price": price,
+            "sector": buy_cand.get("sector", ""),
+            "score": buy_cand.get("score", 0),
+            "signal_id": None,
+        }
+    return buy_result.success
+
+
+def _ai_evaluate_swap(
+    self,
+    candidates: list[dict],
+    market_context: str = "",
+    price_info: dict = None,
+    sector_context: str = "",
+) -> dict | None:
+    """AI 评估换仓，返回 {"sell": code, "buy": code} 或 None。"""
+    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return None
+
+    pinfo = price_info or {}
+    pos_lines = []
+    for code, pos in self.paper_account.positions.items():
+        meta = self._pos_meta.get(code, {})
+        extra = pinfo.get(code, {})
+        chg_str = (
+            f" 日内{extra.get('change_pct', 0):+.1f}%"
+            if extra.get("change_pct")
+            else ""
+        )
+        sector = meta.get("sector", "")
+        sec_str = f" [{sector}]" if sector else ""
+        sec_trend = extra.get("sector_trend", "")
+        if sec_trend:
+            sec_str += f" 板块{sec_trend}"
+        concepts = extra.get("concepts", [])
+        if concepts:
+            sec_str += f" 概念:{','.join(concepts)}"
+        sl = meta.get("sl", 0)
+        tp = meta.get("tp", 0)
+        dist_sl = (
+            (pos.current_price - sl) / pos.current_price * 100
+            if sl > 0 and pos.current_price > 0
+            else 0
+        )
+        dist_tp = (
+            (tp - pos.current_price) / pos.current_price * 100
+            if tp > 0 and pos.current_price > 0
+            else 0
+        )
+        pos_lines.append(
+            f"{code} {pos.stock_name}{sec_str} | 成本{pos.avg_cost:.2f} 现价{pos.current_price:.2f}{chg_str} "
+            f"盈亏{pos.pnl_pct:+.1f}% | 市值{pos.market_value:.0f} | "
+            f"止损{sl}(距现价{dist_sl:.1f}%) 止盈{tp}(距现价{dist_tp:+.1f}%)"
+        )
+    pos_text = "\n".join(pos_lines)
+
+    cand_lines = []
+    for c in candidates:
+        sec_str = f" [{c.get('sector', '')}]" if c.get("sector") else ""
+        sec_trend = c.get("sector_trend", "")
+        if sec_trend:
+            sec_str += f" 板块{sec_trend}"
+        cand_lines.append(
+            f"{c['code']} {c.get('name', '')}{sec_str} | 现价{c['price']:.2f} "
+            f"今日{c.get('change_pct', 0):+.1f}% | 评分{c.get('score', 0):.0f} | "
+            f"买入区{c.get('buy_min', 0):.2f}-{c.get('buy_max', 0):.2f}"
+        )
+    cand_text = "\n".join(cand_lines)
+
+    ctx_line = f"\n大盘: {market_context}" if market_context else ""
+    sec_ctx = f"\n{sector_context}" if sector_context else ""
+
+    prompt = f"""当前模拟盘持仓（{len(self.paper_account.positions)}只，上限5只）：
+
+{pos_text}
+
+买点区候选信号：
+{cand_text}{ctx_line}{sec_ctx}
+
+请评估是否应该换仓。考虑：
+1. 持仓盈亏、止损止盈距离、走势强弱
+2. 候选信号的评分、今日涨跌、买点区间
+3. 候选所处行业/概念是否比持仓更强
+4. 如果候选显著优于某只持仓，建议换仓
+
+只回复JSON：{{"sell": "要卖的代码", "buy": "要买的代码"}} 或 {{"sell": null, "buy": null}}。"""
+
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "你是A股短线交易员。基于实时盘面判断换仓，只输出JSON。",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": 150,
+            },
+            timeout=20,
+        )
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        content = re.sub(r"```\w*\n?|```", "", content).strip()
+        result = json.loads(content)
+        sell_code = result.get("sell")
+        buy_code = result.get("buy")
+        if sell_code and buy_code:
+            pos_codes = set(self.paper_account.positions.keys())
+            cand_codes = {c["code"] for c in candidates}
+            if sell_code in pos_codes and buy_code in cand_codes:
+                logger.info(f"AI 换仓决策: 卖{sell_code} 买{buy_code}")
+                return {"sell": sell_code, "buy": buy_code}
+            logger.warning(f"AI 换仓返回无效代码: sell={sell_code} buy={buy_code}")
+        logger.info("AI 换仓决策: 不换仓")
+        return None
+    except Exception as e:
+        logger.warning(f"AI 换仓评估异常 ({type(e).__name__}: {e})，fallback 规则")
+        return None
+
+
+def _rule_swap_target(self, new_code: str, new_score: float) -> str | None:
+    """规则兜底：优先 AI 审查 close > reduce > 分数差距（跳过当日买入）。"""
+    reviews = _load_reviews(self)
+    best_sell = None
+    best_priority = 99
+    for code, pos in self.paper_account.positions.items():
+        if pos.entry_date == self._trade_date:
+            continue
+        review = reviews.get(code, {})
+        action = review.get("action", "")
+        if action == "close":
+            priority = 0
+        elif action == "reduce":
+            priority = 1
+        elif new_score > (review.get("score", 0) or 0) + settings.SWAP_SCORE_GAP:
+            priority = 2
+        else:
+            continue
+        if priority < best_priority:
+            best_priority = priority
+            best_sell = code
+    if best_sell:
+        logger.info(f"规则换仓: {best_sell} (priority={best_priority})")
+    return best_sell
+
+
+def _load_reviews(self) -> dict:
+    """加载最新 AI 持仓审查建议。"""
+    try:
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            """SELECT stock_code, action, tomorrow_outlook, reason
+               FROM trade_holdings_review
+               WHERE trade_date=(SELECT MAX(trade_date) FROM trade_holdings_review)
+                 AND account='paper'"""
+        ).fetchall()
+        conn.close()
+        conn2 = sqlite3.connect(self.db_path)
+        scores = conn2.execute(
+            """SELECT stock_code, signal_score FROM trade_signals
+               WHERE status='bought'"""
+        ).fetchall()
+        conn2.close()
+        score_map = {r[0]: r[1] or 0 for r in scores}
+        result = {}
+        for r in rows:
+            result[r[0]] = {
+                "action": r[1],
+                "tomorrow_outlook": r[2],
+                "reason": r[3],
+                "score": score_map.get(r[0], 0),
+            }
+        return result
+    except Exception as e:
+        logger.warning(f"加载 AI 审查建议失败: {e}")
+        return {}

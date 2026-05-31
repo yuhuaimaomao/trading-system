@@ -7,6 +7,8 @@ from typing import Dict, List
 
 @dataclass
 class Position:
+    """模拟盘持仓 — 只记录买卖执行结果，不存决策数据（止损止盈板块由盯盘 _pos_meta 维护）"""
+
     stock_code: str
     stock_name: str = ""
     volume: int = 0
@@ -15,12 +17,7 @@ class Position:
     market_value: float = 0.0
     pnl: float = 0.0
     pnl_pct: float = 0.0
-    sector_code: str = ""
     entry_date: str = ""
-    stop_loss: float = 0.0
-    take_profit: float = 0.0
-    trailing_stop: float = 0.05
-    highest_price: float = 0.0
 
     def update_price(self, price: float):
         self.current_price = price
@@ -29,8 +26,6 @@ class Position:
         self.pnl_pct = (
             (price - self.avg_cost) / self.avg_cost if self.avg_cost > 0 else 0.0
         )
-        if price > self.highest_price:
-            self.highest_price = price
 
 
 @dataclass
@@ -51,13 +46,16 @@ class PortfolioSnapshot:
     def market_value(self) -> float:
         return sum(p.market_value for p in self.positions)
 
-    def get_sector_exposure(self) -> Dict[str, float]:
+    def get_sector_exposure(
+        self, sector_map: Dict[str, str] = None
+    ) -> Dict[str, float]:
+        """板块曝光。需外部传入 {code: sector_code} 映射（模拟盘不存板块）。"""
         exposure: Dict[str, float] = {}
-        for p in self.positions:
-            if p.sector_code:
-                exposure[p.sector_code] = (
-                    exposure.get(p.sector_code, 0) + p.market_value
-                )
+        if sector_map:
+            for p in self.positions:
+                sec = sector_map.get(p.stock_code, "")
+                if sec:
+                    exposure[sec] = exposure.get(sec, 0) + p.market_value
         total = self.market_value or 1
         return {k: v / total for k, v in exposure.items()}
 
@@ -117,25 +115,29 @@ class Portfolio:
             return 0.0
         return sum(p.market_value for p in self.positions.values()) / self.total_value
 
-    def get_sector_exposure(self) -> Dict[str, float]:
+    def get_sector_exposure(
+        self, sector_map: Dict[str, str] = None
+    ) -> Dict[str, float]:
+        """板块曝光。需外部传入 {code: sector_code} 映射。"""
         exposure: Dict[str, float] = {}
-        base = self.total_value or 1.0
-        for p in self.positions.values():
-            if p.sector_code:
-                exposure[p.sector_code] = (
-                    exposure.get(p.sector_code, 0) + p.market_value
-                )
-        return {k: v / base for k, v in exposure.items()}
+        if sector_map:
+            base = self.total_value or 1.0
+            for code, pos in self.positions.items():
+                sec = sector_map.get(code, "")
+                if sec:
+                    exposure[sec] = exposure.get(sec, 0) + pos.market_value
+            return {k: v / base for k, v in exposure.items()}
+        return {}
 
     def can_open_position(
         self,
         stock_code: str,
         target_pct: float,
-        sector_code: str = "",
         max_single_pct: float = 0.20,
         max_sector_pct: float = 0.30,
+        sector_exposure: Dict[str, float] = None,
     ) -> tuple[bool, str]:
-        """开仓前检查"""
+        """开仓前检查。sector_exposure 由外部（盯盘 _pos_meta）计算传入。"""
         if stock_code in self.positions:
             return True, ""
 
@@ -145,14 +147,13 @@ class Portfolio:
         if target_pct > max_single_pct:
             return False, f"单票 {target_pct:.0%} 超上限 {max_single_pct:.0%}"
 
-        if sector_code:
-            exposure = self.get_sector_exposure()
-            current = exposure.get(sector_code, 0)
-            if current + target_pct > max_sector_pct:
-                return (
-                    False,
-                    f"板块 {sector_code} {current + target_pct:.0%} 超上限 {max_sector_pct:.0%}",
-                )
+        if sector_exposure:
+            for sec, pct in sector_exposure.items():
+                if pct + target_pct > max_sector_pct:
+                    return (
+                        False,
+                        f"板块 {sec} {pct + target_pct:.0%} 超上限 {max_sector_pct:.0%}",
+                    )
 
         return True, ""
 
@@ -162,11 +163,7 @@ class Portfolio:
         stock_name: str,
         volume: int,
         price: float,
-        sector_code: str = "",
         entry_date: str = "",
-        stop_loss: float = 0.0,
-        take_profit: float = 0.0,
-        trailing_stop: float = 0.05,
         commission: float = 0.0,
     ):
         cost = price * volume + commission
@@ -174,24 +171,36 @@ class Portfolio:
             return False
 
         self.cash -= cost
-        actual_avg_cost = (
-            (price * volume + commission) / volume if volume > 0 else price
-        )
-        pos = Position(
-            stock_code=stock_code,
-            stock_name=stock_name,
-            volume=volume,
-            avg_cost=actual_avg_cost,
-            current_price=price,
-            market_value=price * volume,
-            sector_code=sector_code,
-            entry_date=entry_date,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            trailing_stop=trailing_stop,
-            highest_price=price,
-        )
-        self.positions[stock_code] = pos
+
+        if stock_code in self.positions:
+            # 加仓：合并均价和数量
+            old = self.positions[stock_code]
+            old_total_cost = old.avg_cost * old.volume
+            new_total_cost = price * volume + commission
+            old.volume += volume
+            old.avg_cost = (
+                (old_total_cost + new_total_cost) / old.volume
+                if old.volume > 0
+                else price
+            )
+            old.market_value = old.volume * price
+            old.current_price = price
+            # entry_date 保持最早的
+        else:
+            actual_avg_cost = (
+                (price * volume + commission) / volume if volume > 0 else price
+            )
+            pos = Position(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                volume=volume,
+                avg_cost=actual_avg_cost,
+                current_price=price,
+                market_value=price * volume,
+                entry_date=entry_date,
+            )
+            self.positions[stock_code] = pos
+
         self.trade_log.append(
             {
                 "type": "buy",

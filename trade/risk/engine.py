@@ -181,13 +181,17 @@ class RiskEngine:
 
         return close_signals
 
-    def adjust_stops(self, portfolio: Portfolio, prices: dict):
+    def adjust_stops(self, portfolio, prices: dict, pos_meta: dict = None):
         """按 MarketRegime 的 stop_mult 动态调整持仓止损。
 
         stop_mult > 1 → 放宽止损（宽幅震荡/恐慌中避免被震出）
         stop_mult < 1 → 收紧止损（死猫跳/倒V中快跑）
+
+        pos_meta: {code: {sl, tp, ...}} 盯盘决策数据，止损调整直接写入 pos_meta["sl"]。
         """
         if self._regime is None:
+            return
+        if pos_meta is None:
             return
         mult = self._regime.stop_mult
         if mult == 1.0:
@@ -196,18 +200,14 @@ class RiskEngine:
             price = prices.get(code) or pos.current_price
             if price <= 0:
                 continue
-            # 止损价 = 成本价 × (1 - 止损比例 × mult)
-            # 通过调整止损价来实现收紧/放宽
-            orig_sl = pos.stop_loss
+            meta = pos_meta.get(code, {})
+            orig_sl = meta.get("sl", 0)
             if orig_sl <= 0:
                 continue
-            # 以当前价格重新计算止损距离
-            # mult > 1 → new_distance 变大 → 止损更低（放宽）
-            # mult < 1 → new_distance 变小 → 止损更高（收紧）
             base_distance = abs(price - orig_sl) / price
             new_distance = base_distance * mult
             new_sl = price * (1 - new_distance)
-            pos.stop_loss = round(new_sl, 2)
+            pos_meta[code]["sl"] = round(new_sl, 2)
 
     def evaluate_existing(self, portfolio: Portfolio, prices: dict) -> list[dict]:
         """按 MarketRegime 的 urgent_action 评估持仓处置。
@@ -252,13 +252,25 @@ class RiskEngine:
         return results
 
     def get_risk_status(
-        self, portfolio: Portfolio, prices: Optional[dict] = None
+        self, portfolio, prices: Optional[dict] = None, pos_meta: dict = None
     ) -> dict:
-        """获取当前风控状态摘要"""
+        """获取当前风控状态摘要。pos_meta: {code: {sl, tp, ...}}。"""
         if prices:
             portfolio.update_prices(prices)
 
-        sector_exp = portfolio.get_sector_exposure()
+        pos_meta = pos_meta or {}
+        positions = []
+        for p in portfolio.positions.values():
+            meta = pos_meta.get(p.stock_code, {})
+            positions.append(
+                {
+                    "code": p.stock_code,
+                    "name": p.stock_name,
+                    "pnl_pct": p.pnl_pct,
+                    "stop_loss": meta.get("sl", 0),
+                    "take_profit": meta.get("tp", 0),
+                }
+            )
 
         return {
             "market_env": self.market_env,
@@ -269,15 +281,6 @@ class RiskEngine:
             "daily_pnl": portfolio.daily_pnl,
             "drawdown": portfolio.drawdown,
             "position_count": len(portfolio.positions),
-            "sector_exposure": sector_exp,
-            "positions": [
-                {
-                    "code": p.stock_code,
-                    "name": p.stock_name,
-                    "pnl_pct": p.pnl_pct,
-                    "stop_loss": p.stop_loss,
-                    "take_profit": p.take_profit,
-                }
-                for p in portfolio.positions.values()
-            ],
+            "sector_exposure": portfolio.get_sector_exposure(),
+            "positions": positions,
         }

@@ -16,7 +16,6 @@ from analysis.advisor import AIAdvisor
 from analysis.screening.breadth import MarketBreadth
 from analysis.screening.profiles import ProfileBuilder
 from analysis.screening.trend import TrendScreener
-from system.config import settings
 from analysis.signals import (
     AccountSummary,
     HoldingInfo,
@@ -28,6 +27,7 @@ from analysis.signals import (
     StockScore,
 )
 from data.repo import TradeRepository
+from system.config import settings
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("strategy")
@@ -55,7 +55,7 @@ class StrategyPipeline:
         # 步骤 0: 市场宽度 → 大盘状态
         market_state = self._compute_market_state(trade_date)
 
-        # 步骤 0.5: 加载持仓（实盘 + 模拟盘）+ 保存快照
+        # 步骤 0.5: 加载持仓（从模拟盘快照表读取）
         holdings, account_summaries = self._load_holdings(trade_date)
         if holdings:
             logger.info(
@@ -63,11 +63,6 @@ class StrategyPipeline:
                 f"(模拟盘{sum(1 for h in holdings if h.account == 'paper')}只 "
                 f"实盘{sum(1 for h in holdings if h.account == 'real')}只)"
             )
-
-        # 保存实盘/模拟盘快照到 trade_portfolio_snapshots
-        if account_summaries:
-            self._save_portfolio_snapshots(account_summaries, trade_date)
-            self._save_portfolio_positions(holdings, trade_date)
 
         # 为持仓构建完整技术画像（供 AI 审查用）
         if holdings:
@@ -194,7 +189,11 @@ class StrategyPipeline:
     def _load_holdings(
         self, trade_date: str
     ) -> tuple[list[HoldingInfo], list[AccountSummary]]:
-        """查询当前持仓（实盘+模拟盘），返回 (持仓列表, 账户概况)。"""
+        """查询当前持仓（实盘+模拟盘），返回 (持仓列表, 账户概况)。
+
+        数据来源：模拟盘收盘快照 (trade_portfolio_positions / trade_portfolio_snapshots)
+        + stock_basic 行情 + trade_signals 止损止盈。
+        """
         import sqlite3
         from datetime import date
 
@@ -204,30 +203,23 @@ class StrategyPipeline:
         try:
             conn = sqlite3.connect(self.screener.db_path)
 
-            # 1. 按 stock_code + account 汇总持仓
-            rows = conn.execute(
-                """SELECT o.stock_code, o.account,
-                          MIN(o.order_time) as entry_time,
-                          SUM(CASE WHEN o.order_type='buy' THEN o.filled_volume ELSE -o.filled_volume END) as net_vol,
-                          SUM(CASE WHEN o.order_type='buy' THEN o.filled_price * o.filled_volume ELSE 0 END) as buy_amount,
-                          SUM(CASE WHEN o.order_type='buy' THEN o.filled_volume ELSE 0 END) as buy_vol,
-                          SUM(CASE WHEN o.order_type='buy' THEN o.commission ELSE 0 END) as buy_comm,
-                          SUM(CASE WHEN o.order_type='sell' THEN o.filled_price * o.filled_volume ELSE 0 END) as sell_amount,
-                          SUM(CASE WHEN o.order_type='sell' THEN o.commission ELSE 0 END) as sell_comm
-                   FROM trade_orders o
-                   WHERE o.order_status='filled' AND o.filled_volume > 0
-                   GROUP BY o.stock_code, o.account
-                   HAVING net_vol > 0""",
+            # 1. 从持仓表读取最新持仓（模拟盘收盘快照，实盘从订单推算）
+            pos_rows = conn.execute(
+                """SELECT stock_code, stock_name, volume, avg_cost, current_price,
+                          market_value, pnl_pct, entry_date, account
+                   FROM trade_portfolio_positions
+                   WHERE trade_date=(SELECT MAX(trade_date) FROM trade_portfolio_positions WHERE account='paper')
+                     AND account='paper'"""
             ).fetchall()
 
-            if not rows:
+            if not pos_rows:
                 conn.close()
                 return [], []
 
-            codes = list({r[0] for r in rows})
+            codes = [r[0] for r in pos_rows]
             placeholders = ",".join("?" for _ in codes)
 
-            # 2. 当前行情 + 均线（用最新的 trade_date，盘前可能只有昨天的数据）
+            # 2. 当前行情 + 均线
             price_rows = conn.execute(
                 f"""SELECT stock_code, stock_name, price, ma5, ma10, ma20, industry
                     FROM stock_basic
@@ -254,51 +246,36 @@ class StrategyPipeline:
                         "score": r[3] or 0,
                     }
 
-            # 4. 日内最高价（从 stock_indicators 的高点近似，或从当日行情）
-            hi_rows = conn.execute(
-                f"""SELECT stock_code, high FROM stock_basic
-                    WHERE trade_date=? AND stock_code IN ({placeholders})""",
-                [trade_date] + codes,
-            ).fetchall()
-            hi_map = {r[0]: r[1] or 0 for r in hi_rows}
-
             conn.close()
 
             today = date.today()
             td = date.fromisoformat(trade_date) if trade_date else today
 
-            # 5. 组装 HoldingInfo
-            for row in rows:
+            # 4. 组装 HoldingInfo
+            for row in pos_rows:
                 (
                     code,
+                    name,
+                    vol,
+                    avg_cost,
+                    cur_price,
+                    mkt_val,
+                    pnl_pct,
+                    entry_date,
                     account,
-                    entry_time,
-                    net_vol,
-                    buy_amt,
-                    buy_vol,
-                    buy_comm,
-                    sell_amt,
-                    sell_comm,
                 ) = row
-                if net_vol <= 0 or buy_vol <= 0:
+                if vol <= 0:
                     continue
 
-                avg_cost = (buy_amt + (buy_comm or 0)) / buy_vol if buy_vol > 0 else 0
                 pinfo = price_map.get(code)
-                if not pinfo:
-                    continue
-
-                name = pinfo[1]
-                cur_price = pinfo[2] or 0
+                cur_price = pinfo[2] if pinfo and pinfo[2] else cur_price
                 if cur_price <= 0:
                     continue
 
-                pnl_pct = (cur_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
-                market_val = cur_price * net_vol
-                entry_date_str = str(entry_time)[:10] if entry_time else trade_date
+                entry_date_str = entry_date or trade_date
                 hold_days = (
                     (td - date.fromisoformat(entry_date_str)).days
-                    if entry_date_str
+                    if entry_date_str and entry_date_str != ""
                     else 0
                 )
 
@@ -306,82 +283,64 @@ class StrategyPipeline:
                 holdings.append(
                     HoldingInfo(
                         stock_code=code,
-                        stock_name=name,
-                        account=account,
+                        stock_name=pinfo[1] if pinfo else name,
+                        account=account or "paper",
                         entry_date=entry_date_str,
                         holding_days=hold_days,
                         avg_cost=round(avg_cost, 3),
-                        volume=int(net_vol),
+                        volume=int(vol),
                         current_price=cur_price,
-                        pnl_pct=round(pnl_pct, 2),
-                        market_value=round(market_val, 2),
+                        pnl_pct=round(pnl_pct, 2)
+                        if pnl_pct
+                        else round((cur_price - avg_cost) / avg_cost * 100, 2),
+                        market_value=round(cur_price * vol, 2),
                         stop_loss=sl_info.get("stop_loss", 0),
                         take_profit=sl_info.get("take_profit", 0),
-                        industry=pinfo[6] or "",
-                        ma5=pinfo[3] or 0,
-                        ma10=pinfo[4] or 0,
-                        ma20=pinfo[5] or 0,
-                        highest_price=hi_map.get(code, 0),
+                        industry=pinfo[6] if pinfo else "",
+                        ma5=pinfo[3] if pinfo else 0,
+                        ma10=pinfo[4] if pinfo else 0,
+                        ma20=pinfo[5] if pinfo else 0,
+                        highest_price=0,
                         signal_score=sl_info.get("score", 0),
                         is_today_buy=(entry_date_str == trade_date),
                     )
                 )
 
-            # 6. 账户概况
-            for account, label, initial in [
-                ("paper", "模拟盘", settings.PAPER_INITIAL_CAPITAL),
-                ("real", "实盘", settings.REAL_INITIAL_CAPITAL),
-            ]:
-                acct_holdings = [h for h in holdings if h.account == account]
-                if not acct_holdings:
-                    continue
-
-                # 从 trade_orders 汇总该账户的全部成交
+            # 5. 账户概况（从快照表读）
+            for account, label in [("paper", "模拟盘"), ("real", "实盘")]:
                 conn2 = sqlite3.connect(self.screener.db_path)
-                cash_flow = conn2.execute(
-                    """SELECT SUM(CASE WHEN order_type='buy'
-                                  THEN -filled_price * filled_volume - COALESCE(commission,0)
-                                  ELSE filled_price * filled_volume - COALESCE(commission,0) END)
-                       FROM trade_orders
-                       WHERE order_status='filled' AND filled_volume > 0
-                         AND account=?""",
+                snap = conn2.execute(
+                    """SELECT total_value, cash, market_value, daily_pnl, position_count
+                       FROM trade_portfolio_snapshots
+                       WHERE account=? ORDER BY trade_date DESC LIMIT 1""",
                     (account,),
                 ).fetchone()
                 conn2.close()
 
-                net_flow = cash_flow[0] or 0
-                mkt_val = sum(h.market_value for h in acct_holdings)
-                cash_est = initial + net_flow
-                total_val = cash_est + mkt_val
-                pos_ratio = mkt_val / total_val if total_val > 0 else 0
-
-                # 尝试从 snapshot 取日内盈亏
-                daily_pnl = 0.0
-                try:
-                    conn3 = sqlite3.connect(self.screener.db_path)
-                    snap = conn3.execute(
-                        "SELECT daily_pnl FROM trade_portfolio_snapshots WHERE trade_date=? AND account=? ORDER BY id DESC LIMIT 1",
-                        (trade_date, account),
-                    ).fetchone()
-                    conn3.close()
-                    if snap and snap[0]:
-                        daily_pnl = snap[0]
-                except Exception:
-                    pass
-
-                summaries.append(
-                    AccountSummary(
-                        account=account,
-                        label=label,
-                        initial_capital=initial,
-                        total_value=round(total_val, 2),
-                        cash=round(cash_est, 2),
-                        market_value=round(mkt_val, 2),
-                        position_ratio=round(pos_ratio, 4),
-                        daily_pnl=round(daily_pnl, 2),
-                        position_count=len(acct_holdings),
+                if snap:
+                    total_val, cash, mkt_val, daily_pnl, pos_count = snap
+                    pos_ratio = (
+                        mkt_val / total_val if total_val and total_val > 0 else 0
                     )
-                )
+                    initial = (
+                        settings.PAPER_INITIAL_CAPITAL
+                        if account == "paper"
+                        else settings.REAL_INITIAL_CAPITAL
+                    )
+                    summaries.append(
+                        AccountSummary(
+                            account=account,
+                            label=label,
+                            initial_capital=initial,
+                            total_value=round(total_val, 2),
+                            cash=round(cash, 2),
+                            market_value=round(mkt_val, 2),
+                            position_ratio=round(pos_ratio, 4),
+                            daily_pnl=round(daily_pnl or 0, 2),
+                            position_count=pos_count
+                            or len([h for h in holdings if h.account == account]),
+                        )
+                    )
 
         except Exception as e:
             logger.warning(f"加载持仓失败: {e}")
@@ -870,65 +829,6 @@ class StrategyPipeline:
             return check_hard_gates(data)
         except Exception:
             return True  # 无法验证时放行，避免阻塞管线
-
-    # ------------------------------------------------------------------
-    # 步骤 0.6: 账户快照落库
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _save_portfolio_snapshots(summaries: list, trade_date: str):
-        """保存实盘/模拟盘账户快照到 DB"""
-        from datetime import datetime
-
-        repo = self.repo
-        now = datetime.now().isoformat()
-        for s in summaries:
-            snap_dict = {
-                "trade_date": trade_date,
-                "total_value": s.total_value,
-                "cash": s.cash,
-                "market_value": s.market_value,
-                "daily_pnl": s.daily_pnl,
-                "total_pnl": s.total_value - s.initial_capital,
-                "drawdown": 0,
-                "position_count": s.position_count,
-                "sector_exposure": "{}",
-                "account": s.account,
-                "created_at": now,
-            }
-            repo.insert_snapshot(snap_dict)
-            logger.info(
-                f"{s.label}快照已保存: 总资产{s.total_value:,.0f} 仓位{s.position_ratio:.1%}"
-            )
-
-    @staticmethod
-    def _save_portfolio_positions(holdings: list, trade_date: str):
-        """保存持仓明细到 trade_portfolio_positions（按账户分组落库）。"""
-        repo = self.repo
-        for account in ("paper", "real"):
-            acct_holdings = [h for h in holdings if h.account == account]
-            if not acct_holdings:
-                continue
-            rows = []
-            for h in acct_holdings:
-                rows.append(
-                    {
-                        "stock_code": h.stock_code,
-                        "stock_name": h.stock_name,
-                        "volume": h.volume,
-                        "avg_cost": h.avg_cost,
-                        "current_price": h.current_price,
-                        "market_value": h.market_value,
-                        "pnl": (h.current_price - h.avg_cost) * h.volume,
-                        "pnl_pct": h.pnl_pct,
-                        "stop_loss": h.stop_loss,
-                        "take_profit": h.take_profit,
-                        "holding_days": h.holding_days,
-                        "sector_code": h.industry or "",
-                    }
-                )
-            repo.insert_positions(trade_date, account, rows)
-        logger.info(f"持仓明细已保存: {len(holdings)} 只")
 
     # ------------------------------------------------------------------
     # 步骤 3.1: 持仓审查落库

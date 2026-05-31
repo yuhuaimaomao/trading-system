@@ -230,47 +230,6 @@ class TradeRepository:
         ]
         return [dict(zip(cols, row)) for row in rows]
 
-    # ---- trade_factor_values ----
-
-    def save_factor_values(
-        self, trade_date: str, factor_name: str, values: dict
-    ) -> int:
-        """批量保存因子值 {stock_code: value}"""
-        conn = self._conn()
-        now = datetime.now().isoformat()
-        count = 0
-        for code, value in values.items():
-            conn.execute(
-                """INSERT OR REPLACE INTO trade_factor_values
-                   (trade_date, stock_code, factor_name, factor_value, updated_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (trade_date, code, factor_name, value, now),
-            )
-            count += 1
-        conn.commit()
-        conn.close()
-        return count
-
-    def get_factor_values(self, trade_date: str, factor_name: str) -> dict:
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT stock_code, factor_value FROM trade_factor_values WHERE trade_date=? AND factor_name=?",
-            (trade_date, factor_name),
-        ).fetchall()
-        conn.close()
-        return {row[0]: row[1] for row in rows}
-
-    # ---- trade_strategy_metrics ----
-
-    def save_metrics(self, metrics: dict):
-        conn = self._conn()
-        cols = ", ".join(metrics.keys())
-        placeholders = ", ".join(["?" for _ in metrics])
-        sql = f"INSERT OR REPLACE INTO trade_strategy_metrics ({cols}) VALUES ({placeholders})"
-        conn.execute(sql, list(metrics.values()))
-        conn.commit()
-        conn.close()
-
     # ---- trade_holdings_review ----
 
     def insert_holdings_review(self, review_dict: dict) -> int:
@@ -312,6 +271,30 @@ class TradeRepository:
         conn.close()
 
     # ---- trade_portfolio_positions ----
+
+    def get_latest_snapshot(self, account: str) -> dict | None:
+        """查最新一条快照，用于启动恢复。"""
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """SELECT * FROM trade_portfolio_snapshots
+               WHERE account=? ORDER BY trade_date DESC, id DESC LIMIT 1""",
+            (account,),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def get_positions_by_date(self, trade_date: str, account: str) -> list[dict]:
+        """查某日持仓明细，用于启动恢复。"""
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT * FROM trade_portfolio_positions
+               WHERE account=? AND trade_date=? ORDER BY stock_code""",
+            (account, trade_date),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
     def insert_positions(self, trade_date: str, account: str, positions: list[dict]):
         """批量保存持仓明细（按日按账户覆盖）。"""

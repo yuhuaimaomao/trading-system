@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """规则审计引擎 — 纯 Python 统计层，不调用 AI
 
 分析维度：
@@ -11,6 +10,7 @@
 
 import json
 import sqlite3
+
 from data.repo import TradeRepository
 from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_system_logger
@@ -62,7 +62,11 @@ class RuleAuditor:
             factors = json.loads(factors_json or "[]")
             for factor in factors:
                 if factor not in factor_stats:
-                    factor_stats[factor] = {"buy_returns": [], "skip_returns": [], "count": 0}
+                    factor_stats[factor] = {
+                        "buy_returns": [],
+                        "skip_returns": [],
+                        "count": 0,
+                    }
                 factor_stats[factor]["count"] += 1
                 if chg is not None and verdict == "buy":
                     factor_stats[factor]["buy_returns"].append(chg)
@@ -71,18 +75,28 @@ class RuleAuditor:
 
         findings = []
         for factor, stats in factor_stats.items():
-            buy_avg = sum(stats["buy_returns"]) / len(stats["buy_returns"]) if stats["buy_returns"] else 0
-            skip_avg = sum(stats["skip_returns"]) / len(stats["skip_returns"]) if stats["skip_returns"] else 0
+            buy_avg = (
+                sum(stats["buy_returns"]) / len(stats["buy_returns"])
+                if stats["buy_returns"]
+                else 0
+            )
+            skip_avg = (
+                sum(stats["skip_returns"]) / len(stats["skip_returns"])
+                if stats["skip_returns"]
+                else 0
+            )
 
             if stats["buy_returns"] and stats["skip_returns"] and buy_avg < skip_avg:
-                findings.append({
-                    "type": "factor_misleading",
-                    "severity": "P1",
-                    "factor": factor,
-                    "buy_avg_return": round(buy_avg, 2),
-                    "skip_avg_return": round(skip_avg, 2),
-                    "evidence": f"因子「{factor}」: buy票均收益{buy_avg:.1f}% < skip票均收益{skip_avg:.1f}%",
-                })
+                findings.append(
+                    {
+                        "type": "factor_misleading",
+                        "severity": "P1",
+                        "factor": factor,
+                        "buy_avg_return": round(buy_avg, 2),
+                        "skip_avg_return": round(skip_avg, 2),
+                        "evidence": f"因子「{factor}」: buy票均收益{buy_avg:.1f}% < skip票均收益{skip_avg:.1f}%",
+                    }
+                )
 
         return findings
 
@@ -121,13 +135,15 @@ class RuleAuditor:
             if stats["count"] >= 2:
                 avg = sum(stats["returns"]) / len(stats["returns"])
                 if avg > 2.0:
-                    findings.append({
-                        "type": "combo_effective",
-                        "severity": "P2",
-                        "combo": combo,
-                        "avg_return": round(avg, 2),
-                        "count": stats["count"],
-                    })
+                    findings.append(
+                        {
+                            "type": "combo_effective",
+                            "severity": "P2",
+                            "combo": combo,
+                            "avg_return": round(avg, 2),
+                            "count": stats["count"],
+                        }
+                    )
 
         return findings
 
@@ -163,14 +179,16 @@ class RuleAuditor:
                 passed = factor_data.get("passed", True)
                 if passed and margin is not None and abs(margin) < 5:
                     if verdict == "buy" and chg is not None and chg < 0:
-                        findings.append({
-                            "type": "threshold_sensitive",
-                            "severity": "P2",
-                            "stock_code": code,
-                            "factor": factor_name,
-                            "margin_pct": margin,
-                            "day_change_pct": chg,
-                        })
+                        findings.append(
+                            {
+                                "type": "threshold_sensitive",
+                                "severity": "P2",
+                                "stock_code": code,
+                                "factor": factor_name,
+                                "margin_pct": margin,
+                                "day_change_pct": chg,
+                            }
+                        )
 
         return findings
 
@@ -192,24 +210,28 @@ class RuleAuditor:
         findings = []
         for code, name, reason, chg in rows:
             if chg and chg > 3:
-                findings.append({
-                    "type": "skip_missed_gain",
-                    "severity": "P1",
-                    "stock_code": code,
-                    "stock_name": name,
-                    "skip_reason": reason,
-                    "missed_return": round(chg, 2),
-                    "evidence": f"skip {code} {name}（理由: {reason}），当日涨{chg:.1f}%",
-                })
+                findings.append(
+                    {
+                        "type": "skip_missed_gain",
+                        "severity": "P1",
+                        "stock_code": code,
+                        "stock_name": name,
+                        "skip_reason": reason,
+                        "missed_return": round(chg, 2),
+                        "evidence": f"skip {code} {name}（理由: {reason}），当日涨{chg:.1f}%",
+                    }
+                )
             elif chg and chg < -3:
-                findings.append({
-                    "type": "skip_correct",
-                    "severity": "P3",
-                    "stock_code": code,
-                    "stock_name": name,
-                    "skip_reason": reason,
-                    "avoided_loss": round(abs(chg), 2),
-                })
+                findings.append(
+                    {
+                        "type": "skip_correct",
+                        "severity": "P3",
+                        "stock_code": code,
+                        "stock_name": name,
+                        "skip_reason": reason,
+                        "avoided_loss": round(abs(chg), 2),
+                    }
+                )
 
         return findings
 
@@ -234,7 +256,12 @@ class RuleAuditor:
             scenarios = json.loads(scenarios_json or "[]")
             for sc in scenarios:
                 if sc not in scenario_stats:
-                    scenario_stats[sc] = {"buy_returns": [], "skip_returns": [], "buy_count": 0, "skip_count": 0}
+                    scenario_stats[sc] = {
+                        "buy_returns": [],
+                        "skip_returns": [],
+                        "buy_count": 0,
+                        "skip_count": 0,
+                    }
                 if verdict == "buy":
                     scenario_stats[sc]["buy_returns"].append(chg)
                     scenario_stats[sc]["buy_count"] += 1
@@ -244,7 +271,11 @@ class RuleAuditor:
 
         findings = []
         for sc, stats in scenario_stats.items():
-            buy_avg = sum(stats["buy_returns"]) / len(stats["buy_returns"]) if stats["buy_returns"] else 0
+            buy_avg = (
+                sum(stats["buy_returns"]) / len(stats["buy_returns"])
+                if stats["buy_returns"]
+                else 0
+            )
             if stats["buy_count"] >= 2:
                 f = {
                     "type": "scenario_performance",

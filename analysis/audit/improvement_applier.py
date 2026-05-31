@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 """改进建议应用器 — 支持四层改进的自动/半自动应用"""
 
 import re
+
 from data.repo import TradeRepository
 from system.utils.logger import get_system_logger
 
@@ -57,7 +57,7 @@ class ImprovementApplier:
             logger.warning("因子调优缺少 target_param 或 suggested_change")
             return False
 
-        threshold_match = re.search(r'(\d+\.?\d*)', change)
+        threshold_match = re.search(r"(\d+\.?\d*)", change)
         if not threshold_match:
             logger.warning(f"无法从改进建议中解析阈值: {change}")
             return False
@@ -65,9 +65,9 @@ class ImprovementApplier:
         new_threshold = float(threshold_match.group(1))
         factor_file = "analysis/screening/factors.py"
 
-        func_pattern = rf'def {re.escape(target)}\('
+        func_pattern = rf"def {re.escape(target)}\("
         try:
-            with open(factor_file, "r", encoding="utf-8") as f:
+            with open(factor_file, encoding="utf-8") as f:
                 content = f.read()
 
             if func_pattern not in content:

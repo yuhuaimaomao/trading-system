@@ -18,7 +18,6 @@ COMMANDS = [
     "portfolio",
     "compare",
     "trade",
-    "backtest",
     "test",
     "track",
     "listen",
@@ -369,15 +368,6 @@ def cmd_trade():
         print("请用 --text 传入消息内容")
 
 
-def cmd_backtest():
-    """回测"""
-    print("回测框架（骨架）")
-    print(
-        "Usage: python main.py backtest --start 2025-01-01 --end 2025-12-31 --stocks 000001,000002"
-    )
-    print("模块已就绪: BacktestEngine, DataLoader, calculate_metrics")
-
-
 def cmd_track():
     """股票追踪：更新当日行情 + 次日表现 + 统计"""
     from datetime import datetime, timedelta
@@ -618,7 +608,6 @@ def main():
         "portfolio": cmd_portfolio,
         "compare": cmd_compare,
         "trade": cmd_trade,
-        "backtest": cmd_backtest,
         "test": cmd_test,
         "track": cmd_track,
         "listen": cmd_listen,

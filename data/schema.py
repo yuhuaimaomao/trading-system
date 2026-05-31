@@ -11,17 +11,6 @@ def ensure_tables():
     cursor = conn.cursor()
 
     cursor.executescript("""
-        CREATE TABLE IF NOT EXISTS trade_factor_values (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            trade_date TEXT NOT NULL,
-            stock_code TEXT NOT NULL,
-            factor_name TEXT NOT NULL,
-            factor_value REAL,
-            factor_zscore REAL,
-            updated_at TEXT,
-            UNIQUE(trade_date, stock_code, factor_name)
-        );
-
         CREATE TABLE IF NOT EXISTS trade_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trade_date TEXT NOT NULL,
@@ -93,10 +82,7 @@ def ensure_tables():
             market_value REAL,
             pnl REAL,
             pnl_pct REAL,
-            stop_loss REAL,
-            take_profit REAL,
-            holding_days INTEGER DEFAULT 0,
-            sector_code TEXT,
+            entry_date TEXT DEFAULT '',
             created_at TEXT,
             UNIQUE(trade_date, account, stock_code)
         );
@@ -117,29 +103,6 @@ def ensure_tables():
             UNIQUE(trade_date, stock_code, account)
         );
 
-        CREATE TABLE IF NOT EXISTS trade_strategy_metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            strategy_name TEXT NOT NULL,
-            version TEXT,
-            start_date TEXT,
-            end_date TEXT,
-            total_trades INTEGER,
-            win_rate REAL,
-            avg_profit REAL,
-            avg_loss REAL,
-            profit_loss_ratio REAL,
-            max_drawdown REAL,
-            sharpe_ratio REAL,
-            total_return REAL,
-            benchmark_return REAL,
-            alpha REAL,
-            updated_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_trade_factor_values_date
-            ON trade_factor_values(trade_date);
-        CREATE INDEX IF NOT EXISTS idx_trade_factor_values_stock
-            ON trade_factor_values(trade_date, stock_code);
         CREATE INDEX IF NOT EXISTS idx_trade_signals_date
             ON trade_signals(trade_date);
         CREATE INDEX IF NOT EXISTS idx_trade_orders_date
@@ -153,8 +116,6 @@ def ensure_tables():
         "trade_signals",
         "trade_orders",
         "trade_portfolio_snapshots",
-        "trade_factor_values",
-        "trade_strategy_metrics",
     ]:
         try:
             cursor.execute(

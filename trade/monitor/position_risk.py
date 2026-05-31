@@ -1,14 +1,11 @@
-# -*- coding: utf-8 -*-
 """持仓风控：止损止盈、移动止损、回撤止损、被套/补仓分类.
 
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性.
 """
+
 import logging
 import sqlite3
-from collections import defaultdict
-from datetime import datetime, date, time as dt_time
-
-from system.config import settings
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +15,14 @@ class PositionRiskMixin:
 
     def _check_positions(self, prices: dict[str, float]):
         # 大盘 + 板块环境，用于动态调整止损止盈触发条件
-        regime = getattr(self, '_regime', None)
-        risk_level = getattr(regime, 'risk_level', 'safe') if regime else 'safe'
-        pattern = getattr(regime, 'pattern', 'normal') if regime else 'normal'
+        regime = getattr(self, "_regime", None)
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
 
         # 基础调整因子（每只票从基础值开始，不在循环中累积）
         if risk_level == "extreme":
-            base_sl_tighten = 0.70   # 止损线上移 30%
-            base_tp_lower = 0.80     # 止盈线下移 20%
+            base_sl_tighten = 0.70  # 止损线上移 30%
+            base_tp_lower = 0.80  # 止盈线下移 20%
             base_trail_tighten = 0.70  # 移动止盈回撤容忍缩 30%
         elif risk_level == "dangerous":
             base_sl_tighten = 0.85
@@ -33,14 +30,19 @@ class PositionRiskMixin:
             base_trail_tighten = 0.85
         elif risk_level == "cautious":
             base_sl_tighten = 0.92
-            base_tp_lower = 1.0     # 止盈不动
+            base_tp_lower = 1.0  # 止盈不动
             base_trail_tighten = 0.92
         else:
             base_sl_tighten = 1.0
             base_tp_lower = 1.0
             base_trail_tighten = 1.0
 
-        for code, pos in list(self.portfolio.positions.items()):
+        for code, pos in list(self.paper_account.positions.items()):
+            meta = self._pos_meta.get(code, {})
+            sl = meta.get("sl", 0)
+            tp = meta.get("tp", 0)
+            trailing_stop = meta.get("trailing_stop", 0.05)
+            highest_price = meta.get("highest_price", 0)
             price = prices.get(code)
             if price is None:
                 # fallback: 用持仓记录的当前价格（可能是上一轮的价格或昨收价）
@@ -69,52 +71,95 @@ class PositionRiskMixin:
             # T+1 前不触发止损止盈
             if not is_today_buy:
                 # ── 止损：大盘/板块弱时收紧触发线 ──
-                if pos.stop_loss > 0 and pos.avg_cost > 0:
-                    loss_width = pos.avg_cost - pos.stop_loss
+                if sl > 0 and pos.avg_cost > 0:
+                    loss_width = pos.avg_cost - sl
                     effective_sl = pos.avg_cost - loss_width * sl_tighten
-                    if price <= max(effective_sl, pos.stop_loss * 0.85):
+                    if price <= max(effective_sl, sl * 0.85):
                         # effective_sl 不低于原止损的 85%，避免过于敏感
                         key = f"{code}:sl"
                         extra = ""
                         if sl_tighten < 1.0:
                             extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
-                        self._handle_stop_signal(key, code, pos.stock_name, "止损",
-                            price, effective_sl, pos.avg_cost, trend, limit_down, extra=extra)
+                        self._handle_stop_signal(
+                            key,
+                            code,
+                            pos.stock_name,
+                            "止损",
+                            price,
+                            effective_sl,
+                            pos.avg_cost,
+                            trend,
+                            limit_down,
+                            extra=extra,
+                        )
                         continue
 
                 # ── 止盈：大盘危险时提前锁定利润 ──
-                if pos.take_profit > 0 and pos.avg_cost > 0:
-                    profit_width = pos.take_profit - pos.avg_cost
+                if tp > 0 and pos.avg_cost > 0:
+                    profit_width = tp - pos.avg_cost
                     effective_tp = pos.avg_cost + profit_width * tp_lower
                     if price >= effective_tp and tp_lower < 1.0:
                         key = f"{code}:tp"
-                        self._handle_stop_signal(key, code, pos.stock_name, "止盈(收紧)",
-                            price, effective_tp, pos.avg_cost, trend, limit_down,
-                            extra=f"大盘{risk_level}→止盈下调至{effective_tp:.2f}")
+                        self._handle_stop_signal(
+                            key,
+                            code,
+                            pos.stock_name,
+                            "止盈(收紧)",
+                            price,
+                            effective_tp,
+                            pos.avg_cost,
+                            trend,
+                            limit_down,
+                            extra=f"大盘{risk_level}→止盈下调至{effective_tp:.2f}",
+                        )
                         continue
 
                 # 原版止盈（未调整时走这里）
-                if pos.take_profit > 0 and price >= pos.take_profit:
+                if tp > 0 and price >= tp:
                     key = f"{code}:tp"
-                    self._handle_stop_signal(key, code, pos.stock_name, "止盈",
-                        price, pos.take_profit, pos.avg_cost, trend, limit_down)
+                    self._handle_stop_signal(
+                        key,
+                        code,
+                        pos.stock_name,
+                        "止盈",
+                        price,
+                        tp,
+                        pos.avg_cost,
+                        trend,
+                        limit_down,
+                    )
                     continue
 
                 # ── 移动止盈：大盘危险时缩小回撤容忍 ──
-                if pos.trailing_stop > 0 and pos.highest_price > 0:
-                    effective_trail = pos.trailing_stop * trail_tighten
-                    trail_price = pos.highest_price * (1 - effective_trail)
+                if trailing_stop > 0 and highest_price > 0:
+                    effective_trail = trailing_stop * trail_tighten
+                    trail_price = highest_price * (1 - effective_trail)
                     if price <= trail_price:
                         key = f"{code}:trail"
-                        self._handle_stop_signal(key, code, pos.stock_name, "移动止盈",
-                            price, trail_price, pos.highest_price, trend, limit_down,
-                            extra=f"最高{pos.highest_price:.2f}")
+                        self._handle_stop_signal(
+                            key,
+                            code,
+                            pos.stock_name,
+                            "移动止盈",
+                            price,
+                            trail_price,
+                            highest_price,
+                            trend,
+                            limit_down,
+                            extra=f"最高{highest_price:.2f}",
+                        )
                         continue
 
                 # ── 利润回撤止盈：大盘危险时保留更多利润 ──
                 retrace_key, retrace_signal = self._check_retracement_stop(
-                    code, pos.stock_name, price, pos.avg_cost, trend, limit_down,
-                    risk_level=risk_level)
+                    code,
+                    pos.stock_name,
+                    price,
+                    pos.avg_cost,
+                    trend,
+                    limit_down,
+                    risk_level=risk_level,
+                )
                 if retrace_signal:
                     self._handle_stop_signal(**retrace_signal)
                     continue
@@ -127,10 +172,19 @@ class PositionRiskMixin:
                     watch["max_profit_pct"] = cur_pct
 
             pos.update_price(price)
+            if price > highest_price:
+                self._pos_meta[code]["highest_price"] = price
 
-    def _check_retracement_stop(self, code: str, name: str, price: float,
-                                 entry_price: float, trend: str, limit_down: bool,
-                                 risk_level: str = "safe"):
+    def _check_retracement_stop(
+        self,
+        code: str,
+        name: str,
+        price: float,
+        entry_price: float,
+        trend: str,
+        limit_down: bool,
+        risk_level: str = "safe",
+    ):
         """分级利润回撤止盈，大盘风险高时更保守（保留更多利润）.
 
         分级阈值（从 _bought_watch 读取历史最高浮盈）：
@@ -151,7 +205,7 @@ class PositionRiskMixin:
 
         # 基础保留比例 + 大盘风险加成
         if risk_level == "extreme":
-            bonus = 0.10   # 多保留 10% 利润
+            bonus = 0.10  # 多保留 10% 利润
         elif risk_level == "dangerous":
             bonus = 0.05
         else:
@@ -168,25 +222,44 @@ class PositionRiskMixin:
         if current_profit >= threshold:
             return None, None
 
-        tier_label = "T1" if max_profit >= 0.15 else "T2" if max_profit >= 0.10 else "T3"
-        risk_note = f" 大盘{risk_level}" if risk_level in ("extreme", "dangerous") else ""
+        tier_label = (
+            "T1" if max_profit >= 0.15 else "T2" if max_profit >= 0.10 else "T3"
+        )
+        risk_note = (
+            f" 大盘{risk_level}" if risk_level in ("extreme", "dangerous") else ""
+        )
         key = f"{code}:retrace"
         extra = (
-            f"{tier_label}{risk_note} 最高浮盈{max_profit*100:.1f}% → 当前{current_profit*100:.1f}%"
-            f"（保留{keep_ratio*100:.0f}%利润触发）"
+            f"{tier_label}{risk_note} 最高浮盈{max_profit * 100:.1f}% → 当前{current_profit * 100:.1f}%"
+            f"（保留{keep_ratio * 100:.0f}%利润触发）"
         )
         trigger_price = entry_price * (1 + threshold)
         return key, {
-            "key": key, "code": code, "name": name,
+            "key": key,
+            "code": code,
+            "name": name,
             "stype": "利润回撤止盈",
-            "price": price, "trigger": trigger_price,
+            "price": price,
+            "trigger": trigger_price,
             "ref_price": entry_price,
-            "trend": trend, "limit_down": limit_down, "extra": extra,
+            "trend": trend,
+            "limit_down": limit_down,
+            "extra": extra,
         }
 
-    def _handle_stop_signal(self, key: str, code: str, name: str, stype: str,
-                            price: float, trigger: float, ref_price: float,
-                            trend: str, limit_down: bool, extra: str = ""):
+    def _handle_stop_signal(
+        self,
+        key: str,
+        code: str,
+        name: str,
+        stype: str,
+        price: float,
+        trigger: float,
+        ref_price: float,
+        trend: str,
+        limit_down: bool,
+        extra: str = "",
+    ):
         """止损/止盈触发时的统一处理：推送提醒 + 模拟盘执行（实盘等用户确认）."""
         now = datetime.now()
 
@@ -205,9 +278,14 @@ class PositionRiskMixin:
                     f"   跌停封单中，下轮继续监控"
                 )
                 self._sl_reminders[key] = {
-                    "code": code, "name": name, "type": stype,
-                    "price": price, "trigger": trigger, "ref_price": ref_price,
-                    "last_push": now, "status": "limited_down",
+                    "code": code,
+                    "name": name,
+                    "type": stype,
+                    "price": price,
+                    "trigger": trigger,
+                    "ref_price": ref_price,
+                    "last_push": now,
+                    "status": "limited_down",
                 }
             return
 
@@ -231,15 +309,20 @@ class PositionRiskMixin:
 
         # 加入提醒队列（5分钟后未确认则再推）
         self._sl_reminders[key] = {
-            "code": code, "name": name, "type": stype,
-            "price": price, "trigger": trigger, "ref_price": ref_price,
-            "last_push": now, "status": "pending",
+            "code": code,
+            "name": name,
+            "type": stype,
+            "price": price,
+            "trigger": trigger,
+            "ref_price": ref_price,
+            "last_push": now,
+            "status": "pending",
         }
 
         # 模拟盘直接执行（实盘等用户确认）
-        pt = self._get_paper_trader()
-        if pt:
-            pt.close(code, price, stype)
+        result = self.paper_account.sell(code, price, stype)
+        if result.success:
+            self._pos_meta.pop(code, None)
         self._bought_watch.pop(code, None)  # 卖出后清理盯盘状态
         self._invalidate_watch_codes_cache()
 
@@ -265,7 +348,7 @@ class PositionRiskMixin:
                 trigger = rem["trigger"]
                 self._alert_private(
                     f"⏰ 第{rem['push_count']}次提醒 — {code} {name}  {stype}\n"
-                    f"   触发价: {trigger:.2f}  已过 {elapsed/60:.0f} 分钟未确认\n"
+                    f"   触发价: {trigger:.2f}  已过 {elapsed / 60:.0f} 分钟未确认\n"
                     f"   ✏️ 已执行回复「成交 {code}」\n"
                     f"   ⏳ 延迟回复「再等 5 {code}」"
                 )
@@ -279,6 +362,7 @@ class PositionRiskMixin:
           再等 N CODE — 等待N分钟后再提醒
         """
         import re
+
         text = text.strip()
 
         # 成交确认
@@ -306,7 +390,10 @@ class PositionRiskMixin:
                 keys = list(self._sl_reminders.keys())
 
             from datetime import timedelta
-            wake = datetime.now().replace(second=0, microsecond=0) + timedelta(minutes=minutes)
+
+            wake = datetime.now().replace(second=0, microsecond=0) + timedelta(
+                minutes=minutes
+            )
             for k in keys:
                 self._sl_reminders[k]["status"] = "waiting"
                 self._sl_reminders[k]["wake_at"] = wake
@@ -317,6 +404,7 @@ class PositionRiskMixin:
     def _resolve_sl_reminders(self, text: str):
         """成交消息中提取代码，清理对应的 SL 提醒."""
         import re
+
         m = re.search(r"\b(\d{6})\b", text)
         if not m:
             return
@@ -362,7 +450,7 @@ class PositionRiskMixin:
             price = prices.get(code)
             if price is None:
                 # fallback: 从 portfolio 取当前价格
-                pos = self.portfolio.positions.get(code)
+                pos = self.paper_account.positions.get(code)
                 price = pos.current_price if pos else None
             if price is None or price <= 0:
                 continue
@@ -376,13 +464,16 @@ class PositionRiskMixin:
             trend = self._get_sector_trend(code)
 
             # === 买入后盯盘（每20轮~20分钟推送一次状态） ===
-            watch = self._bought_watch.setdefault(code, {
-                "entry_price": entry_price,
-                "last_alert_scan": 0,
-                "status": "watching",
-                "alert_count": 0,
-                "max_profit_pct": 0,
-            })
+            watch = self._bought_watch.setdefault(
+                code,
+                {
+                    "entry_price": entry_price,
+                    "last_alert_scan": 0,
+                    "status": "watching",
+                    "alert_count": 0,
+                    "max_profit_pct": 0,
+                },
+            )
             if entry_price and not watch.get("entry_price"):
                 watch["entry_price"] = entry_price
 
@@ -393,9 +484,13 @@ class PositionRiskMixin:
                     watch["max_profit_pct"] = cur_pct
 
             scans_since = self._scan_count - watch["last_alert_scan"]
-            pnl_pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            pnl_pct = (
+                (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            )
 
-            new_status = self._classify_holding_status(code, price, entry_price, sl, tp, is_today_buy)
+            new_status = self._classify_holding_status(
+                code, price, entry_price, sl, tp, is_today_buy
+            )
             status_changed = new_status != watch["status"]
             should_alert = scans_since >= 20 or status_changed
 
@@ -404,7 +499,9 @@ class PositionRiskMixin:
                 target = watch.get("exit_target")
                 # 状态刚变成被套 或 目标失效 → 重新计算
                 if target is None or status_changed:
-                    target_price, target_label = self._calc_exit_target(code, price, entry_price, trend)
+                    target_price, target_label = self._calc_exit_target(
+                        code, price, entry_price, trend
+                    )
                     if target_price:
                         watch["exit_target"] = target_price
                         watch["exit_target_label"] = target_label
@@ -418,10 +515,12 @@ class PositionRiskMixin:
                         # 已达到目标，告警并算下一个
                         self._alert(
                             f"🎯 减仓目标达成 — {code} {name}\n"
-                            f"   现价: {price:.2f}  目标: {watch['exit_target']:.2f}  ({watch.get('exit_target_label','')})\n"
+                            f"   现价: {price:.2f}  目标: {watch['exit_target']:.2f}  ({watch.get('exit_target_label', '')})\n"
                             f"   盈亏: {pnl_pct:+.1f}%  → 到达阻力位，建议减仓"
                         )
-                        next_price, next_label = self._calc_exit_target(code, price, entry_price, trend)
+                        next_price, next_label = self._calc_exit_target(
+                            code, price, entry_price, trend
+                        )
                         if next_price:
                             watch["exit_target"] = next_price
                             watch["exit_target_label"] = next_label
@@ -434,7 +533,7 @@ class PositionRiskMixin:
                         watch["exit_target_alert_at"] = self._scan_count
                         self._alert(
                             f"🔔 接近减仓目标 — {code} {name}\n"
-                            f"   现价: {price:.2f}  目标: {watch['exit_target']:.2f}  ({watch.get('exit_target_label','')})\n"
+                            f"   现价: {price:.2f}  目标: {watch['exit_target']:.2f}  ({watch.get('exit_target_label', '')})\n"
                             f"   距目标: {dist_pct:.1f}%  盈亏: {pnl_pct:+.1f}%  → 准备减仓"
                         )
             elif new_status not in ("trapped", "deep_trapped"):
@@ -444,13 +543,15 @@ class PositionRiskMixin:
                 watch.pop("exit_target_alert_at", None)
 
             # —— 动态目标修正：止盈天花板+止损地板，三层联动 ——
-            dyn_fired = self._check_dynamic_targets(code, name, price, entry_price, sl, tp,
-                                         is_today_buy, trend, watch)
+            dyn_fired = self._check_dynamic_targets(
+                code, name, price, entry_price, sl, tp, is_today_buy, trend, watch
+            )
 
             # —— 预测性接近告警：修正已发则跳过，避免重复 ——
             if not dyn_fired:
-                self._check_predictive_proximity(code, name, price, entry_price, sl, tp,
-                                                  is_today_buy, trend, watch)
+                self._check_predictive_proximity(
+                    code, name, price, entry_price, sl, tp, is_today_buy, trend, watch
+                )
 
             if should_alert and entry_price > 0:
                 watch["last_alert_scan"] = self._scan_count
@@ -458,7 +559,14 @@ class PositionRiskMixin:
                 if status_changed:
                     watch["status"] = new_status
 
-                emoji = {"healthy": "✅", "watching": "👀", "at_risk": "🟠", "trapped": "🔴", "deep_trapped": "💀", "add_opportunity": "🟡"}
+                emoji = {
+                    "healthy": "✅",
+                    "watching": "👀",
+                    "at_risk": "🟠",
+                    "trapped": "🔴",
+                    "deep_trapped": "💀",
+                    "add_opportunity": "🟡",
+                }
                 status_labels = {
                     "healthy": "持仓健康",
                     "watching": "持续观察",
@@ -476,10 +584,14 @@ class PositionRiskMixin:
                 )
 
                 if new_status == "deep_trapped":
-                    exit_ctx = self._analyze_exit_context(code, price, entry_price, trend)
+                    exit_ctx = self._analyze_exit_context(
+                        code, price, entry_price, trend
+                    )
                     line += f"\n   💀 深度套牢超10%\n   {exit_ctx}"
                 elif new_status == "trapped":
-                    exit_ctx = self._analyze_exit_context(code, price, entry_price, trend)
+                    exit_ctx = self._analyze_exit_context(
+                        code, price, entry_price, trend
+                    )
                     line += f"\n   ⚠️ 被套5%~10%\n   {exit_ctx}"
                 elif new_status == "at_risk":
                     dist_pct = (price - sl) / price * 100 if sl > 0 and price > 0 else 0
@@ -490,15 +602,26 @@ class PositionRiskMixin:
                         line += f"\n   💡 补仓机会: {add_context}"
 
                 # 被套状态下附加目标价信息
-                if new_status in ("trapped", "deep_trapped") and watch.get("exit_target"):
+                if new_status in ("trapped", "deep_trapped") and watch.get(
+                    "exit_target"
+                ):
                     dist_to_target = (watch["exit_target"] - price) / price * 100
-                    line += f"\n   🎯 减仓目标: {watch['exit_target']:.2f} ({watch.get('exit_target_label','')})  距目标: {dist_to_target:.1f}%"
+                    line += f"\n   🎯 减仓目标: {watch['exit_target']:.2f} ({watch.get('exit_target_label', '')})  距目标: {dist_to_target:.1f}%"
 
                 self._alert(line)
 
-    def _check_predictive_proximity(self, code: str, name: str, price: float,
-                                      entry_price: float, sl: float, tp: float,
-                                      is_today_buy: bool, trend: str, watch: dict):
+    def _check_predictive_proximity(
+        self,
+        code: str,
+        name: str,
+        price: float,
+        entry_price: float,
+        sl: float,
+        tp: float,
+        is_today_buy: bool,
+        trend: str,
+        watch: dict,
+    ):
         """预测性接近告警：结合情景引擎市场方向预判，在触发前给出预警.
 
         与止损/止盈触发（事后）互补：在价格接近关键位时结合情景预测提前行动.
@@ -507,7 +630,7 @@ class PositionRiskMixin:
             return
 
         # 情景引擎预判
-        outlook = getattr(self, '_scenario_prev_outlook', None)
+        outlook = getattr(self, "_scenario_prev_outlook", None)
         market_bearish = outlook.primary.direction == "bearish" if outlook else False
         market_urgency = outlook.urgency if outlook else "none"
         scenario_label = outlook.primary.label if outlook else ""
@@ -521,7 +644,11 @@ class PositionRiskMixin:
             sl_last = watch.get("sl_prox_alert_at", 0)
 
             # 市场偏空+高urgency + 距止损<3% → 提前预警
-            if dist_to_sl < 3.0 and market_bearish and market_urgency in ("critical", "act"):
+            if (
+                dist_to_sl < 3.0
+                and market_bearish
+                and market_urgency in ("critical", "act")
+            ):
                 if self._scan_count - sl_last >= 15:
                     watch["sl_prox_alert_at"] = self._scan_count
                     self._alert(
@@ -533,7 +660,11 @@ class PositionRiskMixin:
                 # 非常接近，即使市场中性也预警
                 if self._scan_count - sl_last >= 15:
                     watch["sl_prox_alert_at"] = self._scan_count
-                    extra = f"  🔮 {scenario_label} ({scenario_prob:.0%})" if market_bearish else ""
+                    extra = (
+                        f"  🔮 {scenario_label} ({scenario_prob:.0%})"
+                        if market_bearish
+                        else ""
+                    )
                     self._alert(
                         f"⚠️ 接近止损 — {code} {name}\n"
                         f"   现价: {price:.2f}  止损: {sl:.2f}  距触发: {dist_to_sl:.1f}%  盈亏: {pnl_pct:+.1f}%{extra}\n"
@@ -546,7 +677,11 @@ class PositionRiskMixin:
             tp_last = watch.get("tp_prox_alert_at", 0)
 
             # 市场可能反转（偏空）+ 接近止盈 → 建议提前锁定
-            if dist_to_tp < 3.0 and market_bearish and market_urgency in ("critical", "act"):
+            if (
+                dist_to_tp < 3.0
+                and market_bearish
+                and market_urgency in ("critical", "act")
+            ):
                 if self._scan_count - tp_last >= 15:
                     watch["tp_prox_alert_at"] = self._scan_count
                     self._alert(
@@ -563,9 +698,18 @@ class PositionRiskMixin:
                         f"   🔮 {scenario_label} ({scenario_prob:.0%})  → 接近止盈目标，关注盘面"
                     )
 
-    def _check_dynamic_targets(self, code: str, name: str, price: float,
-                                entry_price: float, sl: float, tp: float,
-                                is_today_buy: bool, trend: str, watch: dict) -> bool:
+    def _check_dynamic_targets(
+        self,
+        code: str,
+        name: str,
+        price: float,
+        entry_price: float,
+        sl: float,
+        tp: float,
+        is_today_buy: bool,
+        trend: str,
+        watch: dict,
+    ) -> bool:
         """动态目标修正：三层联动（大盘→板块→个股）评估止盈/止损是否需要修正.
 
         核心思路：
@@ -604,9 +748,11 @@ class PositionRiskMixin:
                 new_tp = round(adjusted_ceiling, 2)
                 below_pct = (tp - new_tp) / tp * 100
                 adj_part = f" → {adj['reason']}" if adj["reason"] else ""
-                tp_reason = (f"原止盈 {tp:.2f}，最近阻力 {ceiling:.2f}"
-                             f"{adj_part}"
-                             f" → 建议下调至 {new_tp:.2f} (-{below_pct:.0f}%)")
+                tp_reason = (
+                    f"原止盈 {tp:.2f}，最近阻力 {ceiling:.2f}"
+                    f"{adj_part}"
+                    f" → 建议下调至 {new_tp:.2f} (-{below_pct:.0f}%)"
+                )
 
         # ━━ 止损地板：cost 基准（与 _check_positions 口径一致）━━
         new_sl = None
@@ -629,9 +775,11 @@ class PositionRiskMixin:
             if adjusted_sl > sl * 1.02:
                 new_sl = round(adjusted_sl, 2)
                 adj_part = f" → {adj['reason']}" if adj["reason"] else ""
-                sl_reason = (f"原止损 {sl:.2f}，最近支撑 {floor:.2f}"
-                             f"{adj_part}"
-                             f" → 建议收紧至 {new_sl:.2f}")
+                sl_reason = (
+                    f"原止损 {sl:.2f}，最近支撑 {floor:.2f}"
+                    f"{adj_part}"
+                    f" → 建议收紧至 {new_sl:.2f}"
+                )
 
         if not new_tp and not new_sl:
             return False
@@ -641,8 +789,12 @@ class PositionRiskMixin:
         prev_new_tp = watch.get("dyn_tp")
         prev_new_sl = watch.get("dyn_sl")
 
-        tp_changed = new_tp and (prev_new_tp is None or abs(new_tp - prev_new_tp) / prev_new_tp > 0.01)
-        sl_changed = new_sl and (prev_new_sl is None or abs(new_sl - prev_new_sl) / prev_new_sl > 0.01)
+        tp_changed = new_tp and (
+            prev_new_tp is None or abs(new_tp - prev_new_tp) / prev_new_tp > 0.01
+        )
+        sl_changed = new_sl and (
+            prev_new_sl is None or abs(new_sl - prev_new_sl) / prev_new_sl > 0.01
+        )
 
         if self._scan_count - last_adj_scan < 20 and not (tp_changed or sl_changed):
             return False
@@ -677,8 +829,13 @@ class PositionRiskMixin:
 
             if row:
                 bb_upper, bb_mid, ma20, ma60, bbi = row
-                for label, val in [("布林上轨", bb_upper), ("布林中轨", bb_mid),
-                                    ("MA20", ma20), ("MA60", ma60), ("BBI", bbi)]:
+                for label, val in [
+                    ("布林上轨", bb_upper),
+                    ("布林中轨", bb_mid),
+                    ("MA20", ma20),
+                    ("MA60", ma60),
+                    ("BBI", bbi),
+                ]:
                     if val and val > price * 1.005:  # 至少高于现价 0.5%
                         candidates.append((val, label))
         except Exception:
@@ -704,8 +861,13 @@ class PositionRiskMixin:
 
             if row:
                 bb_lower, bb_mid, ma20, ma60, bbi = row
-                for label, val in [("布林下轨", bb_lower), ("布林中轨", bb_mid),
-                                    ("MA20", ma20), ("MA60", ma60), ("BBI", bbi)]:
+                for label, val in [
+                    ("布林下轨", bb_lower),
+                    ("布林中轨", bb_mid),
+                    ("MA20", ma20),
+                    ("MA60", ma60),
+                    ("BBI", bbi),
+                ]:
                     if val and val < price * 0.995:  # 至少低于现价 0.5%
                         candidates.append((val, label))
         except Exception:
@@ -716,8 +878,15 @@ class PositionRiskMixin:
             return candidates[0][0]  # 最近的支撑位
         return None
 
-    def _classify_holding_status(self, code: str, price: float, entry_price: float,
-                                   sl: float, tp: float, is_today_buy: bool) -> str:
+    def _classify_holding_status(
+        self,
+        code: str,
+        price: float,
+        entry_price: float,
+        sl: float,
+        tp: float,
+        is_today_buy: bool,
+    ) -> str:
         """分类持仓状态：healthy / watching / at_risk / trapped / deep_trapped.
 
         - healthy: 盈利 > 2%
@@ -802,8 +971,9 @@ class PositionRiskMixin:
         parts.append("→ 补仓需确认盘面企稳，建议等反弹确认后再操作")
         return "\n".join(parts)
 
-    def _analyze_exit_context(self, code: str, price: float, entry_price: float,
-                                trend: str = "") -> str:
+    def _analyze_exit_context(
+        self, code: str, price: float, entry_price: float, trend: str = ""
+    ) -> str:
         """分析被套持仓的离场时机：技术指标 + 大盘 + 板块综合判断.
 
         三层视角：个股技术 → 板块趋势 → 大盘环境.
@@ -811,9 +981,9 @@ class PositionRiskMixin:
         pnl_pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
 
         # 大盘/板块环境
-        regime = getattr(self, '_regime', None)
-        risk_level = getattr(regime, 'risk_level', 'safe') if regime else 'safe'
-        pattern = getattr(regime, 'pattern', 'normal') if regime else 'normal'
+        regime = getattr(self, "_regime", None)
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
 
         is_sector_weak = any(w in trend for w in ("持续走弱", "弱于大盘", "普跌"))
         is_sector_strong = any(s in trend for s in ("持续走强", "强于大盘", "普涨"))
@@ -827,7 +997,9 @@ class PositionRiskMixin:
 
         # ── 大盘环境判断 ──
         if is_market_extreme or is_panic:
-            env_parts.append("🌐 大盘恐慌/极端 → 反弹不可靠，不建议等待，任何反弹都应减仓")
+            env_parts.append(
+                "🌐 大盘恐慌/极端 → 反弹不可靠，不建议等待，任何反弹都应减仓"
+            )
         elif is_market_dangerous:
             env_parts.append("🌐 大盘危险 → 反弹空间受限，降低等待预期")
         elif risk_level == "cautious":
@@ -855,7 +1027,18 @@ class PositionRiskMixin:
             conn.close()
 
             if row:
-                bb_lower, bb_mid, bb_pct_b, rsi12, rsi6, macd_bar, macd_dif, kdj_j, ma60, bbi_daily = row
+                (
+                    bb_lower,
+                    bb_mid,
+                    bb_pct_b,
+                    rsi12,
+                    rsi6,
+                    macd_bar,
+                    macd_dif,
+                    kdj_j,
+                    ma60,
+                    bbi_daily,
+                ) = row
 
                 # 接近布林中轨（阻力位）→ 好的离场点
                 if bb_mid is not None and price >= bb_mid * 0.97:
@@ -874,28 +1057,42 @@ class PositionRiskMixin:
                 if bbi_daily is not None and price < bbi_daily:
                     below_pct = (bbi_daily - price) / price * 100
                     if below_pct > 5:
-                        exit_signals.append(f"远低于BBI{bbi_daily:.2f}，弱反弹即为减仓窗口")
+                        exit_signals.append(
+                            f"远低于BBI{bbi_daily:.2f}，弱反弹即为减仓窗口"
+                        )
 
                 # 个股超卖信号 — 但大盘/板块弱时，超卖不等于会反弹
-                if is_market_extreme or is_panic or (is_sector_weak and "加速" in trend):
+                if (
+                    is_market_extreme
+                    or is_panic
+                    or (is_sector_weak and "加速" in trend)
+                ):
                     # 大盘恐慌或板块加速走弱 → 超卖不可靠，不建议等
                     if rsi12 is not None and rsi12 < 30:
-                        exit_signals.append(f"RSI虽超卖({rsi12:.0f})，但大盘弱势，反弹不可靠")
+                        exit_signals.append(
+                            f"RSI虽超卖({rsi12:.0f})，但大盘弱势，反弹不可靠"
+                        )
                 else:
                     if rsi12 is not None and rsi12 < 30:
-                        wait_signals.append(f"RSI(12)={rsi12:.0f}深度超卖，短期反弹概率高")
+                        wait_signals.append(
+                            f"RSI(12)={rsi12:.0f}深度超卖，短期反弹概率高"
+                        )
                     elif rsi6 is not None and rsi6 < 25:
                         wait_signals.append(f"RSI(6)={rsi6:.0f}极度超卖，反弹临近")
 
                 if bb_lower is not None and price <= bb_lower * 1.03:
                     if is_market_extreme or is_panic:
-                        exit_signals.append(f"触及布林下轨{bb_lower:.2f}，但大盘恐慌不宜等反弹")
+                        exit_signals.append(
+                            f"触及布林下轨{bb_lower:.2f}，但大盘恐慌不宜等反弹"
+                        )
                     else:
-                        wait_signals.append(f"触及布林下轨{bb_lower:.2f}支撑，有技术反弹需求")
+                        wait_signals.append(
+                            f"触及布林下轨{bb_lower:.2f}支撑，有技术反弹需求"
+                        )
 
                 if kdj_j is not None and kdj_j < 0:
                     if is_market_extreme or is_panic:
-                        exit_signals.append(f"KDJ虽超卖，但大盘弱势不建议等")
+                        exit_signals.append("KDJ虽超卖，但大盘弱势不建议等")
                     else:
                         wait_signals.append(f"KDJ J={kdj_j:.0f}极度超卖，反弹可能启动")
 
@@ -921,8 +1118,9 @@ class PositionRiskMixin:
             return "\n   ".join(parts)
         return f"亏损{pnl_pct:+.1f}%，继续观察盘面"
 
-    def _calc_exit_target(self, code: str, price: float, entry_price: float,
-                          trend: str = "") -> tuple:
+    def _calc_exit_target(
+        self, code: str, price: float, entry_price: float, trend: str = ""
+    ) -> tuple:
         """计算被套持仓的反弹减仓目标价.
 
         找当前价上方最近的阻力位：布林中轨 > MA60 > BBI > 成本价.
@@ -974,4 +1172,3 @@ class PositionRiskMixin:
         return target_price, target_label
 
     # ======================== 第一层：复盘推荐跟踪 ========================
-

@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """AI 审计引擎 — 审查策略 AI 推理质量"""
 
 import json
 import os
 import re
 from typing import Optional
+
 from analysis.audit.prompts import STRATEGY_AUDIT_PROMPT
 from data.repo import TradeRepository
 from system.utils.logger import get_system_logger
@@ -28,7 +28,9 @@ class AIAuditor:
         funnel = self.repo.get_funnel_records(push_date)
         lessons = self.repo.get_active_lessons()
 
-        prompt = self._build_prompt(push_date, decisions, funnel, rule_findings, lessons)
+        prompt = self._build_prompt(
+            push_date, decisions, funnel, rule_findings, lessons
+        )
 
         response_text = self._call_ai(prompt)
         if not response_text:
@@ -47,16 +49,19 @@ class AIAuditor:
     # ----------------------------------------------------------------
 
     def _build_prompt(
-        self, push_date: str, decisions: list[dict],
-        funnel: list[dict], rule_findings: list[dict],
+        self,
+        push_date: str,
+        decisions: list[dict],
+        funnel: list[dict],
+        rule_findings: list[dict],
         lessons: list[dict],
     ) -> str:
         decisions_text = []
         for d in decisions:
             verdict_emoji = "✅" if d.get("verdict") == "buy" else "❌"
             decisions_text.append(
-                f"{verdict_emoji} {d['stock_code']} {d.get('stock_name','')} "
-                f"({d.get('verdict','')}, conf={d.get('confidence','')})"
+                f"{verdict_emoji} {d['stock_code']} {d.get('stock_name', '')} "
+                f"({d.get('verdict', '')}, conf={d.get('confidence', '')})"
             )
             if d.get("what_i_see"):
                 decisions_text.append(f"  看到: {d['what_i_see'][:200]}")
@@ -67,7 +72,9 @@ class AIAuditor:
             if d.get("skip_reason"):
                 decisions_text.append(f"  跳过原因: {d['skip_reason'][:200]}")
             if d.get("would_reconsider_if"):
-                decisions_text.append(f"  重新考虑条件: {d['would_reconsider_if'][:200]}")
+                decisions_text.append(
+                    f"  重新考虑条件: {d['would_reconsider_if'][:200]}"
+                )
 
         outcomes_text = []
         for d in decisions:
@@ -75,10 +82,14 @@ class AIAuditor:
             if chg is not None:
                 emoji = "🟢" if chg > 0 else "🔴"
                 outcomes_text.append(
-                    f"{emoji} {d['stock_code']} {d.get('stock_name','')}: {chg:+.1f}%"
+                    f"{emoji} {d['stock_code']} {d.get('stock_name', '')}: {chg:+.1f}%"
                 )
 
-        rule_text = json.dumps(rule_findings, ensure_ascii=False, indent=2) if rule_findings else "无"
+        rule_text = (
+            json.dumps(rule_findings, ensure_ascii=False, indent=2)
+            if rule_findings
+            else "无"
+        )
 
         lessons_text = ""
         for l in lessons[-10:]:
@@ -132,7 +143,7 @@ class AIAuditor:
             end = json_str.rfind("}")
             if start != -1 and end > start:
                 try:
-                    return json.loads(json_str[start:end + 1])
+                    return json.loads(json_str[start : end + 1])
                 except json.JSONDecodeError:
                     pass
             logger.error(f"审计结果 JSON 解析失败: {text[:200]}")
@@ -148,27 +159,33 @@ class AIAuditor:
         today = date.today().isoformat()
 
         for lesson in result.get("lessons", []):
-            self.repo.upsert_lesson({
-                "lesson_type": lesson.get("type", ""),
-                "lesson_key": lesson.get("key", ""),
-                "lesson_content": lesson.get("content", ""),
-                "trigger_conditions": json.dumps(lesson.get("trigger_conditions", {}), ensure_ascii=False),
-                "first_date": today,
-                "last_date": today,
-            })
+            self.repo.upsert_lesson(
+                {
+                    "lesson_type": lesson.get("type", ""),
+                    "lesson_key": lesson.get("key", ""),
+                    "lesson_content": lesson.get("content", ""),
+                    "trigger_conditions": json.dumps(
+                        lesson.get("trigger_conditions", {}), ensure_ascii=False
+                    ),
+                    "first_date": today,
+                    "last_date": today,
+                }
+            )
 
         for imp in result.get("improvements", []):
-            self.repo.insert_improvement({
-                "push_date": push_date,
-                "improvement_type": imp.get("type", ""),
-                "target_module": imp.get("target", ""),
-                "target_param": None,
-                "suggested_change": imp.get("suggested_change", ""),
-                "code_diff": None,
-                "rationale": imp.get("rationale", ""),
-                "evidence_ids": json.dumps([]),
-                "status": "pending",
-            })
+            self.repo.insert_improvement(
+                {
+                    "push_date": push_date,
+                    "improvement_type": imp.get("type", ""),
+                    "target_module": imp.get("target", ""),
+                    "target_param": None,
+                    "suggested_change": imp.get("suggested_change", ""),
+                    "code_diff": None,
+                    "rationale": imp.get("rationale", ""),
+                    "evidence_ids": json.dumps([]),
+                    "status": "pending",
+                }
+            )
 
         logger.info(
             f"审计结果已入库: {len(result.get('lessons', []))} 条教训, "

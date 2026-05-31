@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """QMT 实时数据采集进程 — 独立进程，TCP 推送至 Watcher，同时写 DB 容灾。
 
 启动后：
@@ -9,11 +8,11 @@
 import json
 import logging
 import select
-import sqlite3
 import socket
-import sys
+import sqlite3
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime
+from datetime import time as dt_time
 
 from system.config import settings
 from system.qmt.client import QMTClient
@@ -82,9 +81,16 @@ class QMTCollector:
         except Exception as e:
             logger.warning(f"DB migration 失败: {e}")
 
-    def _write_index_snapshot(self, ts: float, price: float, high: float,
-                               low: float, pre_close: float, change_pct: float,
-                               amount: float):
+    def _write_index_snapshot(
+        self,
+        ts: float,
+        price: float,
+        high: float,
+        low: float,
+        pre_close: float,
+        change_pct: float,
+        amount: float,
+    ):
         try:
             conn = sqlite3.connect(self.db_path)
             conn.execute(
@@ -109,8 +115,16 @@ class QMTCollector:
                 chg = 0.0
             price = item.get("price", 0) or 0
             amount = item.get("amount", 0) or 0
-            rows.append((self._trade_date, ts_str, code, round(chg, 4),
-                         round(float(price), 4), round(float(amount), 2)))
+            rows.append(
+                (
+                    self._trade_date,
+                    ts_str,
+                    code,
+                    round(chg, 4),
+                    round(float(price), 4),
+                    round(float(amount), 2),
+                )
+            )
         if not rows:
             return
         try:
@@ -148,7 +162,11 @@ class QMTCollector:
                 # K 线时间戳 — 优先用 bar 的时间，否则用当前时间回推
                 bar_time = bar.get("time") or bar.get("timestamp")
                 if bar_time:
-                    ts = float(bar_time) if isinstance(bar_time, (int, float)) else time.time()
+                    ts = (
+                        float(bar_time)
+                        if isinstance(bar_time, (int, float))
+                        else time.time()
+                    )
                 else:
                     ts = time.time()
 
@@ -156,15 +174,18 @@ class QMTCollector:
                 close_val = float(bar.get("close", 0))
                 change_pct = (close_val - pre_close) / pre_close if pre_close else 0
 
-                bars.append((
-                    self._trade_date, ts,
-                    close_val,
-                    float(bar.get("high", 0)),
-                    float(bar.get("low", 0)),
-                    pre_close,
-                    change_pct,
-                    float(bar.get("amount", 0) or 0),
-                ))
+                bars.append(
+                    (
+                        self._trade_date,
+                        ts,
+                        close_val,
+                        float(bar.get("high", 0)),
+                        float(bar.get("low", 0)),
+                        pre_close,
+                        change_pct,
+                        float(bar.get("amount", 0) or 0),
+                    )
+                )
 
             if bars:
                 conn = sqlite3.connect(self.db_path)
@@ -242,8 +263,14 @@ class QMTCollector:
                     # 归一化：去后缀，标准化字段名
                     stocks = {}
                     for full_code, item in raw.items():
-                        short = full_code.split(".")[0] if "." in full_code else full_code
-                        price = item.get("lastPrice") or item.get("last_price") or item.get("price")
+                        short = (
+                            full_code.split(".")[0] if "." in full_code else full_code
+                        )
+                        price = (
+                            item.get("lastPrice")
+                            or item.get("last_price")
+                            or item.get("price")
+                        )
                         if price is None:
                             continue
                         price_float = float(price)
@@ -278,7 +305,9 @@ class QMTCollector:
                         ts = time.time()
                         pre_close = float(data.get("preClose") or 0)
                         # 不使用 QMT changePct（格式不稳定：/quote 返回百分比值如 3.5，边界情况会误判）
-                        change_pct = (float(price) - pre_close) / pre_close if pre_close else 0
+                        change_pct = (
+                            (float(price) - pre_close) / pre_close if pre_close else 0
+                        )
                         amount = float(data.get("amount") or data.get("turnover") or 0)
                         msg = {
                             "type": "index",
@@ -290,8 +319,13 @@ class QMTCollector:
                         }
                         self._send_json(msg)
                         self._write_index_snapshot(
-                            ts, float(price), float(price), float(price),
-                            pre_close, change_pct, amount,
+                            ts,
+                            float(price),
+                            float(price),
+                            float(price),
+                            pre_close,
+                            change_pct,
+                            amount,
                         )
                         pushed_index = True
                         logger.debug(f"index push: {float(price):.2f}")
@@ -300,17 +334,20 @@ class QMTCollector:
 
         elapsed = time.time() - t0
         if pushed_market or pushed_index:
-            logger.info(f"fetch+push 完成 ({elapsed:.1f}s)"
-                        f"{' market' if pushed_market else ''}"
-                        f"{' index' if pushed_index else ''}")
+            logger.info(
+                f"fetch+push 完成 ({elapsed:.1f}s)"
+                f"{' market' if pushed_market else ''}"
+                f"{' index' if pushed_index else ''}"
+            )
 
     # ======================== 生命周期 ========================
 
     @staticmethod
     def _in_trading_hours() -> bool:
         now = datetime.now().time()
-        return (MORNING_START <= now < MORNING_END or
-                AFTERNOON_START <= now < MARKET_CLOSE)
+        return (
+            MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
+        )
 
     def run(self):
         """主循环 — select 多路复用。"""

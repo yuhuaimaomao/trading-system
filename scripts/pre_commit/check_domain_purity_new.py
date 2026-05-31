@@ -18,7 +18,8 @@ def main(filenames: list[str]) -> int:
     # 获取本次 commit 中新增的文件
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-status", "--diff-filter=A"],
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
     )
     new_files = set()
     for line in result.stdout.split("\n"):

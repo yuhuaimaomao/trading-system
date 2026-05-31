@@ -17,11 +17,15 @@ from pathlib import Path
 
 # 值 → 允许的原因
 WHITELIST = {
-    0, 1, -1,
-    2,              # 常见数组长度/序列起始
-    3,              # 常见序列长度
-    0.0, 0.5, 1.0, -1.0,
-    0.25, 0.75,
+    0,
+    1,
+    -1,
+    2,  # 常见数组长度/序列起始
+    3,  # 常见序列长度
+    0.5,
+    -1.0,
+    0.25,
+    0.75,
 }
 
 
@@ -44,13 +48,13 @@ def check_line(line: str) -> list[str]:
 
     # 匹配独立的数字字面量（不在字符串/注释/变量名中）
     # 整数
-    for m in re.finditer(r'(?<![\w.])-?(\d+)(?![\w.])', line):
+    for m in re.finditer(r"(?<![\w.])-?(\d+)(?![\w.])", line):
         v = int(m.group(1))
         if abs(v) >= 2 and not is_volume_multiple(abs(v)) and abs(v) not in WHITELIST:
             violations.append(f"整数 {v} — 应进配置")
 
     # 小数
-    for m in re.finditer(r'(?<![\w.])-?(\d+\.\d+)(?![\w.])', line):
+    for m in re.finditer(r"(?<![\w.])-?(\d+\.\d+)(?![\w.])", line):
         v = float(m.group(1))
         if abs(v) >= 0.001 and not is_safe_decimal(v):
             violations.append(f"小数 {v} — 应进配置")
@@ -63,7 +67,9 @@ def get_changed_lines(filename: str) -> list[tuple[int, str]]:
     try:
         result = subprocess.run(
             ["git", "diff", "--cached", "--", filename],
-            capture_output=True, text=True, timeout=5
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return []
@@ -73,7 +79,7 @@ def get_changed_lines(filename: str) -> list[tuple[int, str]]:
     for line in result.stdout.split("\n"):
         if line.startswith("@@ "):
             # 解析 hunk header: @@ -old,count +new,count @@
-            m = re.search(r'\+(\d+)', line)
+            m = re.search(r"\+(\d+)", line)
             line_num = int(m.group(1)) if m else 0
         elif line.startswith("+") and not line.startswith("+++"):
             changed.append((line_num, line[1:]))
@@ -123,7 +129,8 @@ if __name__ == "__main__":
         # 没有传文件 → 检查所有 staged 的 Python 文件
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
         )
         filenames = [f for f in result.stdout.split("\n") if f.endswith(".py")]
 

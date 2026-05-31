@@ -18,7 +18,7 @@ from datetime import time as dt_time
 from data.repo import TradeRepository
 from system.config import settings
 from trade.monitor.market_state import MarketRegime, MarketStateMixin
-from trade.portfolio.portfolio import Portfolio
+from trade.paper.account import PaperAccount
 from trade.risk.engine import RiskEngine
 
 logger = logging.getLogger(__name__)
@@ -71,8 +71,15 @@ class Watcher(
         self.qmt = qmt_quote
         self.scan_interval = scan_interval
         self.db_path = db_path or settings.DATABASE_PATH
-        self.portfolio = Portfolio(initial_cash=settings.PAPER_INITIAL_CAPITAL)
         self.repo = TradeRepository(db_path=self.db_path)
+        self.paper_account = PaperAccount(
+            db_path=self.db_path,
+            telegram_bot=self.telegram,
+            initial_capital=settings.PAPER_INITIAL_CAPITAL,
+        )
+        self._pos_meta: dict[
+            str, dict
+        ] = {}  # {code: {sl, tp, trailing_stop, highest_price, sector, score, signal_id}}
         self.risk_engine = RiskEngine()
         self._running = False
         self._trade_date = ""
@@ -86,7 +93,6 @@ class Watcher(
         self._abnormal_detector = None
         self._receiver = None
         self._executor = None
-        self._paper_trader = None
 
         # 指数日内走势追踪
         self._index_prices: list[float] = []  # 近 N 轮上证价格
@@ -205,7 +211,9 @@ class Watcher(
     def run(self):
         self._trade_date = datetime.now().strftime("%Y-%m-%d")
         logger.info(f"盯盘进程启动 {self._trade_date}")
-        self._restore_positions()
+        self.paper_account.restore(self._trade_date)
+        self._restore_pos_meta()
+        self._init_bought_watch()
         self._cleanup_old_snapshots()
         self._load_sector_history()
         # 新交易日重置跨日状态
@@ -329,12 +337,12 @@ class Watcher(
             return
 
         try:
-            self.portfolio.update_prices(prices)
+            self.paper_account.update_prices(prices)
         except Exception as e:
             logger.warning(f"更新持仓价格异常: {e}", exc_info=True)
 
         try:
-            drawdown_halt = self.portfolio.drawdown >= settings.MAX_ACCOUNT_DRAWDOWN
+            drawdown_halt = self.paper_account.drawdown >= settings.MAX_ACCOUNT_DRAWDOWN
             if drawdown_halt:
                 self._check_max_drawdown()
         except Exception as e:
@@ -454,104 +462,66 @@ class Watcher(
         except Exception as e:
             logger.warning(f"尾盘决策异常: {e}", exc_info=True)
 
-    def _restore_positions(self):
-        """从 trade_orders 恢复模拟盘持仓（进程重启不丢）。"""
+    def _restore_pos_meta(self):
+        """从 trade_signals 恢复 _pos_meta（止损止盈板块等决策数据）。
+
+        模拟盘只存买卖结果，盯盘决策数据需从信号表重建。
+        """
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """SELECT stock_code,
-                          SUM(CASE WHEN order_type='buy' THEN filled_volume
-                                   ELSE -filled_volume END) as net_vol,
-                          SUM(CASE WHEN order_type='buy' THEN filled_price * filled_volume
-                                   ELSE 0 END) / NULLIF(SUM(CASE WHEN order_type='buy'
-                                   THEN filled_volume ELSE 0 END), 0) as avg_price,
-                          MIN(trade_date) as entry_date
-                   FROM trade_orders
-                   WHERE order_status='filled' AND filled_volume > 0
-                     AND account='paper'
-                   GROUP BY stock_code
-                   HAVING net_vol > 0"""
-            ).fetchall()
-            if not rows:
-                conn.close()
-                return
-
-            for row in rows:
-                code = row["stock_code"]
-                vol = row["net_vol"]
-                price = row["avg_price"]
-                entry_date = row["entry_date"]
-
-                # 从 signal 取止盈止损
+            for code in self.paper_account.positions:
                 sig = conn.execute(
-                    """SELECT stock_name, stop_loss, take_profit, trailing_stop
-                       FROM trade_signals WHERE stock_code=? AND status='bought'
+                    """SELECT stop_loss, take_profit, trailing_stop, signal_score,
+                              strategy_name, id
+                       FROM trade_signals
+                       WHERE stock_code=? AND status='bought'
                        ORDER BY id DESC LIMIT 1""",
                     (code,),
                 ).fetchone()
-
-                name = sig["stock_name"] if sig else ""
-                if not name or name == code:
-                    name = self._resolve_name(code)
-                sl = sig["stop_loss"] if sig else 0
-                tp = sig["take_profit"] if sig else 0
-                trail = sig["trailing_stop"] if sig else 0.05
-
-                self.portfolio.open_position(
-                    stock_code=code,
-                    stock_name=name,
-                    volume=vol,
-                    price=price,
-                    entry_date=entry_date,
-                    stop_loss=sl or 0,
-                    take_profit=tp or 0,
-                    trailing_stop=trail,
-                )
-                logger.info(f"恢复持仓: {code} {name} {vol}股 @{price:.2f}")
-
-            # 恢复历史峰值（最大回撤计算基准）
-            snap = conn.execute(
-                """SELECT MAX(total_value) FROM trade_portfolio_snapshots
-                   WHERE account='paper'""",
-            ).fetchone()
-            if snap and snap[0] and snap[0] > self.portfolio._peak_value:
-                self.portfolio._peak_value = snap[0]
-                logger.info(f"恢复历史峰值: {snap[0]:.0f}")
-
-            # 恢复今日开盘基准（daily_pnl 计算用），避免重启后把历史盈亏计入"当日"
-            today_snap = conn.execute(
-                """SELECT total_value FROM trade_portfolio_snapshots
-                   WHERE trade_date=? AND account='paper' ORDER BY id LIMIT 1""",
-                (self._trade_date,),
-            ).fetchone()
-            if today_snap and today_snap[0]:
-                self.portfolio._prev_total = today_snap[0]
-                logger.info(f"恢复今日开盘基准: {today_snap[0]:.0f}")
-
-            # 初始化 _bought_watch（利润回撤止盈追踪）
-            # 使用 setdefault 避免覆盖已有数据（如恢复前已存在的追踪记录）
-            for code, pos in self.portfolio.positions.items():
-                bw = self._bought_watch.setdefault(code, {})
-                if not bw:
-                    bw.update(
-                        {
-                            "entry_price": pos.avg_cost,
-                            "last_alert_scan": 0,
-                            "status": "watching",
-                            "alert_count": 0,
-                            "max_profit_pct": max(
-                                0, (pos.current_price - pos.avg_cost) / pos.avg_cost
-                            )
-                            if pos.avg_cost > 0 and pos.current_price > 0
-                            else 0,
-                        }
-                    )
-            self._invalidate_watch_codes_cache()
-
+                if sig:
+                    pos = self.paper_account.positions[code]
+                    self._pos_meta[code] = {
+                        "sl": sig["stop_loss"] or 0,
+                        "tp": sig["take_profit"] or 0,
+                        "trailing_stop": sig["trailing_stop"] or 0.05,
+                        "highest_price": pos.current_price,
+                        "sector": "",
+                        "score": sig["signal_score"] or 0,
+                        "signal_id": sig["id"],
+                    }
+                else:
+                    pos = self.paper_account.positions[code]
+                    self._pos_meta[code] = {
+                        "sl": 0,
+                        "tp": 0,
+                        "trailing_stop": 0.05,
+                        "highest_price": pos.current_price,
+                        "sector": "",
+                        "score": 0,
+                        "signal_id": None,
+                    }
             conn.close()
+            logger.info(f"_pos_meta 恢复: {len(self._pos_meta)} 只")
         except Exception as e:
-            logger.warning(f"恢复持仓失败: {e}")
+            logger.warning(f"_pos_meta 恢复失败: {e}")
+
+    def _init_bought_watch(self):
+        """初始化 _bought_watch（从 _pos_meta + paper_account 持仓重建）。"""
+        for code, pos in self.paper_account.positions.items():
+            meta = self._pos_meta.get(code, {})
+            self._bought_watch[code] = {
+                "entry_price": pos.avg_cost,
+                "last_alert_scan": 0,
+                "status": "watching",
+                "alert_count": 0,
+                "max_profit_pct": (
+                    max(0, (pos.current_price - pos.avg_cost) / pos.avg_cost)
+                    if pos.avg_cost > 0 and pos.current_price > 0
+                    else 0
+                ),
+            }
+        self._invalidate_watch_codes_cache()
 
     # ======================== 关注清单 ========================
 
@@ -560,7 +530,7 @@ class Watcher(
         codes: set[str] = set()
 
         # 持仓来自内存，始终实时
-        for code in self.portfolio.positions:
+        for code in self.paper_account.positions:
             codes.add(code)
 
         # signals + review picks 缓存，信号变化时 _invalidate_watch_codes_cache() 触发刷新
@@ -579,7 +549,9 @@ class Watcher(
             except Exception as e:
                 logger.warning(f"获取复盘推荐异常: {e}")
 
-            self._cached_db_watch_codes = codes - set(self.portfolio.positions.keys())
+            self._cached_db_watch_codes = codes - set(
+                self.paper_account.positions.keys()
+            )
             self._watch_codes_stale = False
         else:
             # 从缓存恢复（不含持仓，持仓已从内存加入）
@@ -847,20 +819,6 @@ class Watcher(
             except Exception as e:
                 logger.warning(f"执行器初始化失败: {e}")
         return self._executor
-
-    def _get_paper_trader(self):
-        if self._paper_trader is None:
-            try:
-                from trade.paper.trader import PaperTrader
-
-                self._paper_trader = PaperTrader(
-                    db_path=self.db_path,
-                    telegram_bot=self.telegram,
-                    portfolio=self.portfolio,
-                )
-            except Exception as e:
-                logger.warning(f"模拟盘初始化失败: {e}")
-        return self._paper_trader
 
     # ======================== 推送 ========================
 

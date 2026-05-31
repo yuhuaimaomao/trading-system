@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """审计 AI Prompt 模板"""
 
 STRATEGY_AUDIT_PROMPT = """

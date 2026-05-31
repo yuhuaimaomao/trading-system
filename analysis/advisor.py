@@ -13,7 +13,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
 
-from system.config import settings
 from analysis.signals import (
     AccountSummary,
     HoldingInfo,
@@ -26,6 +25,7 @@ from analysis.signals import (
     StrategyAiDecision,
     StrategyAiResult,
 )
+from system.config import settings
 from system.config.prompts.ai_advisor import AI_ADVISOR_PROMPT
 from system.utils.logger import get_system_logger
 
@@ -749,7 +749,9 @@ class AIAdvisor:
                     buy_zone_max=buy_max,
                     stop_loss=sl,
                     take_profit=tp,
-                    target_position=s1.target_position or s2.target_position or settings.DEFAULT_POSITION_PCT,
+                    target_position=s1.target_position
+                    or s2.target_position
+                    or settings.DEFAULT_POSITION_PCT,
                     signal_score=round(score, 1),
                     strategy_name="ai_advisor_merged",
                     reason=reason,

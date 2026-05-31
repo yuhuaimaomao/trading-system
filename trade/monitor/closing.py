@@ -1,14 +1,11 @@
-# -*- coding: utf-8 -*-
 """尾盘决策：14:30 后持仓过夜判断 + 尾盘异动。
 
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
-import logging
-import sqlite3
-from collections import defaultdict
-from datetime import datetime, date, time as dt_time
 
-from system.config import settings
+import logging
+from datetime import datetime
+from datetime import time as dt_time
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +21,14 @@ class ClosingDecisionMixin:
         now = datetime.now().time()
         if now < dt_time(14, 30) or self._closing_decision_done:
             return
-        if not self.portfolio.positions:
+        if not self.paper_account.positions:
             self._closing_decision_done = True
             return
 
         # 大盘环境
-        regime = getattr(self, '_regime', None)
-        risk_level = getattr(regime, 'risk_level', 'safe') if regime else 'safe'
-        pattern = getattr(regime, 'pattern', 'normal') if regime else 'normal'
+        regime = getattr(self, "_regime", None)
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
         is_market_extreme = risk_level == "extreme"
         is_market_dangerous = risk_level == "dangerous"
 
@@ -45,22 +42,26 @@ class ClosingDecisionMixin:
         lines = [header, "   ─────────────────────────"]
         has_action = False
 
-        for code, pos in self.portfolio.positions.items():
+        for code, pos in self.paper_account.positions.items():
+            meta = self._pos_meta.get(code, {})
+            sl = meta.get("sl", 0)
             price = prices.get(code)
             if price is None:
                 continue
 
             pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost else 0
             is_today = pos.entry_date == self._trade_date
-            dist_sl = (price - pos.stop_loss) / price * 100 if pos.stop_loss > 0 and price > 0 else 999
+            dist_sl = (price - sl) / price * 100 if sl > 0 and price > 0 else 999
 
             # 板块趋势
             trend = ""
-            if hasattr(self, '_get_sector_trend'):
+            if hasattr(self, "_get_sector_trend"):
                 trend = self._get_sector_trend(code)
 
             if is_today:
-                lines.append(f"   🔒 {code} {pos.stock_name}  T+1 锁定  盈亏: {pnl_pct:+.1f}%")
+                lines.append(
+                    f"   🔒 {code} {pos.stock_name}  T+1 锁定  盈亏: {pnl_pct:+.1f}%"
+                )
                 continue
 
             # 大盘极端/恐慌 → 任何亏损都建议清仓
@@ -111,4 +112,3 @@ class ClosingDecisionMixin:
         if has_action:
             self._alert("\n".join(lines))
         self._closing_decision_done = True
-

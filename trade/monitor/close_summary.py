@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """收盘处理：保存快照 + 过期信号 + 推送持仓汇总。
 
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
@@ -19,30 +18,7 @@ class CloseSummaryMixin:
 
     def _finalize_close(self):
         """收盘后全部处理：DB 快照 + 信号过期 + Telegram 持仓汇总推送。"""
-        # DB 快照
-        snap = self.portfolio.snapshot(self._trade_date)
-        self.repo.insert_snapshot(snap.to_db_dict(account="paper"))
-
-        pos_rows = []
-        for code, pos in self.portfolio.positions.items():
-            pos_rows.append({
-                "stock_code": code,
-                "stock_name": pos.stock_name,
-                "volume": pos.volume,
-                "avg_cost": pos.avg_cost,
-                "current_price": pos.current_price,
-                "market_value": pos.market_value,
-                "pnl": pos.pnl,
-                "pnl_pct": pos.pnl_pct,
-                "stop_loss": pos.stop_loss,
-                "take_profit": pos.take_profit,
-                "holding_days": 0,
-                "sector_code": pos.sector_code,
-            })
-        if pos_rows:
-            self.repo.insert_positions(self._trade_date, "paper", pos_rows)
-
-        logger.info(f"模拟盘快照已保存: 总资产{snap.total_value:.0f} 仓位{snap.position_count}只")
+        self.paper_account.snapshot(self._trade_date)
 
         # 过期信号
         self._expire_signals()
@@ -66,7 +42,7 @@ class CloseSummaryMixin:
 
     def _build_paper_summary(self) -> str:
         """生成模拟盘持仓汇总消息。"""
-        p = self.portfolio
+        p = self.paper_account
         total_pnl_pct = p.total_pnl / p.initial_cash * 100 if p.initial_cash > 0 else 0
         lines = [
             f"📊 收盘持仓报告  {self._trade_date}",
@@ -84,8 +60,11 @@ class CloseSummaryMixin:
                     f"   {emoji} {code} {pos.stock_name}  现价: {pos.current_price:.2f}  "
                     f"成本: {pos.avg_cost:.2f}  盈亏: {pos.pnl_pct:+.2%}"
                 )
+                meta = self._pos_meta.get(code, {})
+                sl = meta.get("sl", 0)
+                tp = meta.get("tp", 0)
                 lines.append(
-                    f"      止损: {pos.stop_loss:.2f}  止盈: {pos.take_profit:.2f}  "
+                    f"      止损: {sl:.2f}  止盈: {tp:.2f}  "
                     f"市值: {pos.market_value:,.0f}"
                 )
         else:
@@ -124,7 +103,7 @@ class CloseSummaryMixin:
                 code = rp["code"]
                 vol = rp["volume"]
                 cost = rp["avg_cost"]
-                paper_pos = self.portfolio.positions.get(code)
+                paper_pos = self.paper_account.positions.get(code)
                 if paper_pos and paper_pos.current_price > 0:
                     price = paper_pos.current_price
                     pnl_pct = (price - cost) / cost if cost > 0 else 0
@@ -158,6 +137,7 @@ class CloseSummaryMixin:
 
 # ---- 模块级辅助函数（不依赖 self） ----
 
+
 def _derive_real_positions(db_path: str) -> list[dict]:
     """从 trade_orders 推算实盘当前持仓（所有历史 filled 订单 net）。"""
     conn = sqlite3.connect(db_path)
@@ -176,10 +156,10 @@ def _derive_real_positions(db_path: str) -> list[dict]:
         if code not in stocks:
             stocks[code] = {"buy_vol": 0, "buy_amt": 0.0, "sell_vol": 0}
         if otype == "buy":
-            stocks[code]["buy_vol"] += (vol or 0)
-            stocks[code]["buy_amt"] += (amt or 0)
+            stocks[code]["buy_vol"] += vol or 0
+            stocks[code]["buy_amt"] += amt or 0
         else:
-            stocks[code]["sell_vol"] += (vol or 0)
+            stocks[code]["sell_vol"] += vol or 0
 
     positions = []
     for code, s in stocks.items():
