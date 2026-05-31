@@ -880,8 +880,7 @@ class StrategyPipeline:
             signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1
         )
         for s in ordered:
-            if s.source != SignalSource.REVIEW:
-                if not self._validate_signal(s):
+            if s.source != SignalSource.REVIEW and not self._validate_signal(s):
                     logger.warning(
                         f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过"
                     )
@@ -968,7 +967,6 @@ class StrategyPipeline:
 
         # 按账户拆分持仓审查
         paper_reviews = [hr for hr in (holdings_review or []) if hr.account != "real"]
-        real_reviews = [hr for hr in (holdings_review or []) if hr.account == "real"]
 
         # 群消息：信号 + 模拟盘持仓审查（不含实盘）
         group_lines = list(lines)
@@ -1107,7 +1105,6 @@ class StrategyPipeline:
         if not p:
             return f"买入区间 {zone}"
         h = p.history
-        price = p.snapshot.get("price", 0)
         ma5 = h.get("ma5", 0)
         ma10 = h.get("ma10", 0)
         ma20 = h.get("ma20", 0)

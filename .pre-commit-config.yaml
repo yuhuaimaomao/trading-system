@@ -24,7 +24,7 @@ repos:
     rev: v0.11.0
     hooks:
       - id: ruff
-        args: ['--fix', '--select=E,F,W,I,N,UP,B,SIM']  # 风格+导入排序+语法升级
+        args: ['--fix', '--select=E,F,W,I,N,B,SIM', '--line-length=120']
       - id: ruff-format
 
   # ══════════════════════════════════════════════

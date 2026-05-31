@@ -7,11 +7,12 @@
 AI 不替代量化规则，而是叠加一层判断层。
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple
 
 from analysis.signals import (
     AccountSummary,
