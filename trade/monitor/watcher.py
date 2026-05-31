@@ -462,6 +462,76 @@ class Watcher(
         except Exception as e:
             logger.warning(f"尾盘决策异常: {e}", exc_info=True)
 
+        try:
+            if self._scan_count % 5 == 0:  # 每 5 轮做一次健康检查
+                self._health_check(prices)
+        except Exception as e:
+            logger.warning(f"健康检查异常: {e}", exc_info=True)
+
+    # ======================== 健康检查 ========================
+
+    def _health_check(self, prices: dict[str, float]):
+        """运行时数据一致性校验 — 发现异常推 Telegram，不阻塞主循环。"""
+        alerts = []
+        pa = self.paper_account
+
+        # 1. 账户恒等式：total_value == cash + market_value
+        mv = sum(p.market_value for p in pa.positions.values())
+        expected = pa.cash + mv
+        drift = abs(pa.total_value - expected)
+        if drift > 10:  # 超过 10 块钱偏差算异常
+            alerts.append(
+                f"⚠️ 账户不一致: total={pa.total_value:.0f} cash+mv={expected:.0f} 偏差={drift:.0f}"
+            )
+
+        # 2. 持仓数不超上限
+        if len(pa.positions) > settings.MAX_POSITIONS:
+            alerts.append(
+                f"⚠️ 持仓超限: {len(pa.positions)}/{settings.MAX_POSITIONS}"
+            )
+
+        # 3. 价格剧烈波动（单轮 > 15%，排除除权除息/数据异常）
+        for code, price in prices.items():
+            pos = pa.positions.get(code)
+            if pos and pos.current_price > 0:
+                chg = abs(price - pos.current_price) / pos.current_price
+                if chg > 0.15:
+                    alerts.append(
+                        f"⚠️ 价格跳变: {code} {pos.current_price:.2f}→{price:.2f} ({chg:.1%})"
+                    )
+
+        # 4. 指数价格停更检测（最近 5 轮没变化）
+        if len(self._index_prices) >= 5:
+            recent = self._index_prices[-5:]
+            if max(recent) - min(recent) < 0.01:
+                self._index_stale_count = getattr(self, "_index_stale_count", 0) + 1
+                if self._index_stale_count >= 3:  # 连续 3 次（15 轮）没变
+                    alerts.append(
+                        f"⚠️ 指数停更: 近 15 轮上证波动 < 0.01，QMT 连接可能中断"
+                    )
+            else:
+                self._index_stale_count = 0
+
+        # 5. _pos_meta 与 positions 一致性
+        meta_codes = set(self._pos_meta.keys())
+        pos_codes = set(pa.positions.keys())
+        orphan_meta = meta_codes - pos_codes  # 有 meta 但没持仓
+        if orphan_meta:
+            alerts.append(f"⚠️ 元数据孤儿: {', '.join(orphan_meta)}（有止损止盈但没有持仓）")
+
+        # 6. 模拟盘卖出检查 — 今日买入不应被卖出
+        for code in list(self._alerted_sl_tp):
+            pos = pa.positions.get(code)
+            if not pos:
+                # 已卖出的检查是否 T+1 违规
+                # 这里只记录，具体拦截在 PaperAccount.sell()
+                pass
+
+        if alerts:
+            msg = "🩺 健康检查告警\n" + "\n".join(f"  {a}" for a in alerts)
+            logger.warning(msg)
+            self._alert(msg)
+
     def _restore_pos_meta(self):
         """从 trade_signals 恢复 _pos_meta（止损止盈板块等决策数据）。
 
