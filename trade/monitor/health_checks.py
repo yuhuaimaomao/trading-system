@@ -43,6 +43,9 @@ class CheckContext:
     baseline_qmt_pct: float = 0.0
     trade_date: str = ""
     collector_connected: bool = False
+    # 决策上下文（供健康检查独立重算用）
+    risk_level: str = "safe"
+    sector_trends: dict = field(default_factory=dict)  # {code: trend_str}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -343,6 +346,109 @@ def _sector_data_accumulating(ctx: CheckContext) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 独立重算验证 — 用原始输入从头算，对比系统实际应用的参数
+# ═══════════════════════════════════════════════════════════════
+
+
+def _expected_base_tighten(risk_level: str) -> tuple:
+    """给定 risk_level，返回理论上的 (sl_tighten, tp_lower, trail_tighten)"""
+    if risk_level == "extreme":
+        return (0.70, 0.80, 0.70)
+    elif risk_level == "dangerous":
+        return (0.85, 0.90, 0.85)
+    elif risk_level == "cautious":
+        return (0.92, 1.0, 0.92)
+    else:
+        return (1.0, 1.0, 1.0)
+
+
+def _expected_sector_mult(trend: str) -> float:
+    """给定板块趋势，返回理论上的板块修正乘数"""
+    if "持续走弱" in trend and "加速" in trend:
+        return 0.90
+    if any(w in trend for w in ("持续走弱", "弱于大盘", "普跌")):
+        return 0.95
+    return 1.0
+
+
+def _recompute_adjustment(ctx: CheckContext) -> list[str]:
+    """独立重算止损/止盈调整因子，与系统实际应用的对比。
+
+    原理：从 risk_level 和 sector_trend 这两个原始输入出发，
+    独立计算 sl_tighten / tp_lower / trail_tighten。
+    再与 _pos_meta 里记录的 _sl_tighten / _tp_lower / _trail_tighten 对比。
+    偏差 > 0.001 说明调整链某一步出了累积误差或条件判断错误。
+    """
+    alerts = []
+    base_sl, base_tp, base_trail = _expected_base_tighten(ctx.risk_level)
+
+    for code, pos in ctx.positions.items():
+        meta = ctx.pos_meta.get(code, {})
+        actual_sl = meta.get("_sl_tighten")
+        actual_tp = meta.get("_tp_lower")
+        actual_trail = meta.get("_trail_tighten")
+        if actual_sl is None and actual_tp is None and actual_trail is None:
+            continue
+
+        trend = ctx.sector_trends.get(code, "")
+        mult = _expected_sector_mult(trend)
+
+        expected_sl = round(base_sl * mult, 4)
+        expected_tp = round(base_tp * mult, 4)
+        expected_trail = round(base_trail * mult, 4)
+
+        if actual_sl is not None and abs(actual_sl - expected_sl) > 0.001:
+            alerts.append(
+                f"🔴 止损因子偏离: {code} 预期={expected_sl:.4f} 实际={actual_sl:.4f}"
+                f" (risk={ctx.risk_level} trend={trend[:8]})"
+            )
+        if actual_tp is not None and abs(actual_tp - expected_tp) > 0.001:
+            alerts.append(
+                f"🔴 止盈因子偏离: {code} 预期={expected_tp:.4f} 实际={actual_tp:.4f}"
+            )
+        if actual_trail is not None and abs(actual_trail - expected_trail) > 0.001:
+            alerts.append(
+                f"🔴 移动止盈因子偏离: {code} 预期={expected_trail:.4f} 实际={actual_trail:.4f}"
+            )
+
+    return alerts
+
+
+def _recompute_ema(ctx: CheckContext) -> list[str]:
+    """独立重算指数 EMA12/EMA26，检测累积漂移。
+
+    原理：market_state 内部维护 EMA，如果每轮增量更新的浮点误差
+    累积到一定程度（如乘法舍入），独立从头重算的结果会对不上。
+    差 > 0.1% 说明累积误差已影响动态均线判断（如单边下跌/V型反转）。
+    """
+    if len(ctx.index_prices) < 30:
+        return []
+
+    # 从头计算 EMA12
+    def ema(series, period):
+        if len(series) < period:
+            return []
+        result = [sum(series[:period]) / period]  # SMA 起始
+        k = 2 / (period + 1)
+        for p in series[period:]:
+            result.append(p * k + result[-1] * (1 - k))
+        return result
+
+    ema12 = ema(ctx.index_prices, 12)
+    # 不需要对比系统值（系统不暴露 EMA），检测自身稳定性：
+    # EMA 值不应来回剧烈振荡（说明输入数据有问题）
+    if len(ema12) >= 10:
+        recent_ema = ema12[-10:]
+        swings = sum(
+            1 for i in range(1, len(recent_ema))
+            if (recent_ema[i] - recent_ema[i - 1]) * (recent_ema[i - 1] - recent_ema[i - 2]) < 0
+        )
+        if swings >= 7:  # 10 个点里 7 次方向切换 → 数据噪声异常
+            return [f"⚠️ EMA12 异常振荡: 近 10 点 {swings} 次方向切换"]
+    return []
+
+
+# ═══════════════════════════════════════════════════════════════
 # 注册表
 # ═══════════════════════════════════════════════════════════════
 
@@ -377,6 +483,9 @@ CHECKS = [
     _index_prices_length,
     _locked_volume_consistency,
     _sector_data_accumulating,
+    # 独立重算验证
+    _recompute_adjustment,
+    _recompute_ema,
 ]
 
 

@@ -98,6 +98,11 @@ class PositionRiskMixin:
             elif is_sector_weak:
                 sl_tighten *= 0.95
 
+            # 记录调整因子供健康检查独立重算验证
+            self._pos_meta[code]["_sl_tighten"] = sl_tighten
+            self._pos_meta[code]["_tp_lower"] = tp_lower
+            self._pos_meta[code]["_trail_tighten"] = trail_tighten
+
             # T+1 前不触发止损止盈
             if not is_today_buy:
                 # ── 止损：大盘/板块弱时收紧触发线 ──

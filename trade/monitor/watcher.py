@@ -520,6 +520,15 @@ class Watcher(
             getattr(self, "_collector_client", None)
             and getattr(self._collector_client, "connected", False)
         )
+        regime = getattr(self, "_regime", None)
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        sector_trends = {}
+        for code in pa.positions:
+            try:
+                sector_trends[code] = self._get_sector_trend(code)
+            except Exception:
+                sector_trends[code] = ""
+
         ctx = CheckContext(
             cash=pa.cash,
             total_value=pa.total_value,
@@ -543,6 +552,8 @@ class Watcher(
             baseline_qmt_pct=baseline.get("qmt_change_pct", 0),
             trade_date=self._trade_date,
             collector_connected=collector_ok,
+            risk_level=risk_level,
+            sector_trends=sector_trends,
         )
 
         alerts = run_checks(ctx)
