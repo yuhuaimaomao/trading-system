@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """双线比对器 — 收盘后比对实盘 vs 模拟盘成交
 
 用法:
@@ -20,8 +19,8 @@ logger = logging.getLogger(__name__)
 class OrderComparator:
     """收盘后比对实盘 vs 模拟盘成交。"""
 
-    def __init__(self, telegram_bot=None):
-        self.repo = TradeRepository()
+    def __init__(self, telegram_bot=None, db_path: str = None):
+        self.repo = TradeRepository(db_path=db_path)
         self.telegram = telegram_bot
 
     def compare(self, trade_date: Optional[str] = None) -> dict:
@@ -70,32 +69,38 @@ class OrderComparator:
                 r_vol = sum(o["filled_volume"] or 0 for o in r_orders)
                 price_diff = round(r_avg - p_avg, 2)
                 diff_pct = round(price_diff / p_avg * 100, 2) if p_avg else 0
-                paired.append({
-                    "code": code,
-                    "name": p_orders[0].get("stock_name", code),
-                    "paper_price": round(p_avg, 2),
-                    "real_price": round(r_avg, 2),
-                    "paper_vol": p_vol,
-                    "real_vol": r_vol,
-                    "price_diff": price_diff,
-                    "diff_pct": diff_pct,
-                })
+                paired.append(
+                    {
+                        "code": code,
+                        "name": p_orders[0].get("stock_name", code),
+                        "paper_price": round(p_avg, 2),
+                        "real_price": round(r_avg, 2),
+                        "paper_vol": p_vol,
+                        "real_vol": r_vol,
+                        "price_diff": price_diff,
+                        "diff_pct": diff_pct,
+                    }
+                )
             elif p_orders:
                 for o in p_orders:
-                    paper_only.append({
-                        "code": code,
-                        "name": o.get("stock_name", code),
-                        "price": o.get("filled_price"),
-                        "volume": o.get("filled_volume"),
-                    })
+                    paper_only.append(
+                        {
+                            "code": code,
+                            "name": o.get("stock_name", code),
+                            "price": o.get("filled_price"),
+                            "volume": o.get("filled_volume"),
+                        }
+                    )
             else:
                 for o in r_orders:
-                    real_only.append({
-                        "code": code,
-                        "name": code,
-                        "price": o.get("filled_price"),
-                        "volume": o.get("filled_volume"),
-                    })
+                    real_only.append(
+                        {
+                            "code": code,
+                            "name": o.get("stock_name", code),
+                            "price": o.get("filled_price"),
+                            "volume": o.get("filled_volume"),
+                        }
+                    )
 
         avg_slippage = None
         if paired:
@@ -108,7 +113,9 @@ class OrderComparator:
             "real_only": real_only,
             "avg_slippage": avg_slippage,
         }
-        logger.info(f"比对完成: 配对{len(paired)} 模拟独有{len(paper_only)} 实盘独有{len(real_only)}")
+        logger.info(
+            f"比对完成: 配对{len(paired)} 模拟独有{len(paper_only)} 实盘独有{len(real_only)}"
+        )
         return report
 
     def format_report(self, report: dict) -> str:
@@ -127,7 +134,9 @@ class OrderComparator:
 
         if paired:
             slip_tag = "🟢" if avg_slippage and abs(avg_slippage) < 0.5 else "🟡"
-            lines.append(f"配对成交: {len(paired)} 笔  平均滑点: {avg_slippage or 0:+.2f}% {slip_tag}")
+            lines.append(
+                f"配对成交: {len(paired)} 笔  平均滑点: {avg_slippage or 0:+.2f}% {slip_tag}"
+            )
             for p in paired:
                 lines.append(
                     f"  {p['code']}: 模拟{p['paper_price']:.2f} vs 实盘{p['real_price']:.2f}"
@@ -154,6 +163,7 @@ class OrderComparator:
         if not self.telegram:
             try:
                 from system.utils.telegram import MessageSender
+
                 self.telegram = MessageSender()
             except Exception as e:
                 logger.warning(f"Telegram 不可用: {e}")

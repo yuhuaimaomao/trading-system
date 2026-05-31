@@ -11,30 +11,27 @@ import logging
 import sqlite3
 from typing import Optional
 
-from system.config import settings
-from analysis.signals import StockScore
 from analysis.screening.factors import (
-    check_hard_gates,
-    check_volume_breakout,
-    check_volume_pullback,
     check_amplitude_contract,
-    check_main_force_buy,
     check_chip_concentrate,
     check_consecutive_yang,
-    check_pullback_hold,
-    check_trend_persist,
-    check_low_volatility,
-    check_volume_expand,
-    check_trend_strength,
-    check_rps_20_strong,
-    check_rps_60_strong,
-    check_rps_120_strong,
-    check_rps_resonance,
+    check_hard_gates,
     check_leader_in_sector,
-    check_stronger_than_sector,
+    check_low_volatility,
+    check_main_force_buy,
+    check_pullback_hold,
     check_sector_fund_resonance,
+    check_sector_hot,
+    check_stronger_than_sector,
+    check_trend_persist,
+    check_trend_strength,
+    check_volume_breakout,
+    check_volume_expand,
+    check_volume_pullback,
     check_weekly_bbi,
 )
+from analysis.signals import StockScore
+from system.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,25 +59,59 @@ _BASE_SQL = """
 # 板块黑名单：硬编码 sector_code，筛选时精确匹配，每日无需重查 DB
 _SECTOR_BLACKLIST: set[str] = {
     # 白酒
-    "BK1575", "BK1277", "BK0896",
+    "BK1575",
+    "BK1277",
+    "BK0896",
     # 银行
-    "BK1610", "BK1283", "BK0475", "BK1611", "BK0525",
+    "BK1610",
+    "BK1283",
+    "BK0475",
+    "BK1611",
+    "BK0525",
     # 保险
-    "BK1358", "BK0474", "BK0604",
+    "BK1358",
+    "BK0474",
+    "BK0604",
     # 证券/券商
-    "BK1366", "BK0473", "BK0711", "BK0514",
+    "BK1366",
+    "BK0473",
+    "BK0711",
+    "BK0514",
     # 房地产
-    "BK1045", "BK1342", "BK1202", "BK0451", "BK1344", "BK1345",
+    "BK1045",
+    "BK1342",
+    "BK1202",
+    "BK0451",
+    "BK1344",
+    "BK1345",
     # 农业
-    "BK1506", "BK1257", "BK0669", "BK0888",
+    "BK1506",
+    "BK1257",
+    "BK0669",
+    "BK0888",
     # 新能源车
     "BK0900",
     # 环保
-    "BK0728", "BK1387", "BK1234", "BK0494",
+    "BK0728",
+    "BK1387",
+    "BK1234",
+    "BK0494",
     # 消费
-    "BK1338", "BK1037", "BK1337", "BK1654", "BK1646", "BK1652",
+    "BK1338",
+    "BK1037",
+    "BK1337",
+    "BK1654",
+    "BK1646",
+    "BK1652",
     # 食品
-    "BK0438", "BK1581", "BK1280", "BK1281", "BK1582", "BK1507", "BK1429", "BK0614",
+    "BK0438",
+    "BK1581",
+    "BK1280",
+    "BK1281",
+    "BK1582",
+    "BK1507",
+    "BK1429",
+    "BK0614",
 }
 
 
@@ -106,7 +137,9 @@ class TrendScreener:
         try:
             rows = self._fetch_base(conn, trade_date)
             sector_data = self._load_sector_data(conn, trade_date, rows)
-            candidates = self._screen_rows(conn, rows, trade_date, market_state, sector_data)
+            candidates = self._screen_rows(
+                conn, rows, trade_date, market_state, sector_data
+            )
             return self._rank_and_limit(candidates)
         finally:
             conn.close()
@@ -119,7 +152,10 @@ class TrendScreener:
     # ---- 板块数据 ----
 
     def _load_sector_data(
-        self, conn: sqlite3.Connection, trade_date: str, rows: list[dict],
+        self,
+        conn: sqlite3.Connection,
+        trade_date: str,
+        rows: list[dict],
     ) -> dict:
         """加载板块相关数据，供板块因子使用。表不存在时返回空数据，因子会自动跳过。"""
         codes = [r["stock_code"] for r in rows]
@@ -130,8 +166,10 @@ class TrendScreener:
             sector_funds = self._load_sector_funds(conn, trade_date)
         except Exception:
             return {
-                "stock_sectors": {}, "sector_changes": {},
-                "sector_hot": {}, "sector_funds": {},
+                "stock_sectors": {},
+                "sector_changes": {},
+                "sector_hot": {},
+                "sector_funds": {},
                 "sector_stocks_pct": {},
             }
         sector_stocks_pct = {r["stock_code"]: r["change_pct"] or 0 for r in rows}
@@ -173,8 +211,8 @@ class TrendScreener:
         result: dict[str, int] = {}
         for row in conn.execute(
             """SELECT sector_code, COUNT(*) as cnt FROM sector_hot_history
-               WHERE trade_date >= date(?, '-9 days') AND trade_date <= ?
-                 AND rank > 0
+               WHERE trade_date >= date(?, '-5 days') AND trade_date <= ?
+                 AND rank > 0 AND rank <= 5
                GROUP BY sector_code""",
             (trade_date, trade_date),
         ):
@@ -197,7 +235,9 @@ class TrendScreener:
 
     @staticmethod
     def _check_sector_blacklist(
-        row: dict, blacklist: set[str], stock_sectors: dict[str, list[str]],
+        row: dict,
+        blacklist: set[str],
+        stock_sectors: dict[str, list[str]],
     ) -> bool:
         """股票属于黑名单板块 → 过滤"""
         code = row.get("stock_code", "")
@@ -208,9 +248,11 @@ class TrendScreener:
 
     @staticmethod
     def _check_sector_gate(
-        row: dict, sector_hot: dict[str, int], stock_sectors: dict[str, list[str]],
+        row: dict,
+        sector_hot: dict[str, int],
+        stock_sectors: dict[str, list[str]],
     ) -> bool:
-        """股票所属板块至少有一个在近10日热点榜上，否则过滤。板块数据为空时放行。"""
+        """股票所属板块至少有一个在近5日热点榜上，否则过滤。板块数据为空时放行。"""
         if not sector_hot:
             return True
         code = row.get("stock_code", "")
@@ -223,7 +265,9 @@ class TrendScreener:
 
     @staticmethod
     def _load_serious_risks(
-        conn: sqlite3.Connection, codes: list[str], trade_date: str,
+        conn: sqlite3.Connection,
+        codes: list[str],
+        trade_date: str,
     ) -> set[str]:
         """返回存在严重风险的股票代码集合：监管函(财务造假/信披违规) + 电报利空(业绩暴雷/减持/诉讼)"""
         if not codes:
@@ -250,6 +294,7 @@ class TrendScreener:
             (trade_date,),
         ).fetchall()
         import json
+
         for r in tel_rows:
             try:
                 stocks_list = json.loads(r["ai_stocks"] or "[]")
@@ -268,7 +313,9 @@ class TrendScreener:
 
     @staticmethod
     def _load_weekly_bbi(
-        conn: sqlite3.Connection, trade_date: str, codes: list[str],
+        conn: sqlite3.Connection,
+        trade_date: str,
+        codes: list[str],
     ) -> dict[str, float]:
         """批量加载周线 BBI"""
         if not codes:
@@ -284,8 +331,12 @@ class TrendScreener:
         return {r[0]: r[1] for r in rows}
 
     def _screen_rows(
-        self, conn: sqlite3.Connection, rows: list[dict],
-        trade_date: str, market_state: str, sector_data: dict,
+        self,
+        conn: sqlite3.Connection,
+        rows: list[dict],
+        trade_date: str,
+        market_state: str,
+        sector_data: dict,
     ) -> list[StockScore]:
         sd = sector_data
         candidates = []
@@ -306,7 +357,9 @@ class TrendScreener:
             if not self._check_sector_gate(row, sd["sector_hot"], sd["stock_sectors"]):
                 continue
 
-            if not self._check_sector_blacklist(row, _SECTOR_BLACKLIST, sd["stock_sectors"]):
+            if not self._check_sector_blacklist(
+                row, _SECTOR_BLACKLIST, sd["stock_sectors"]
+            ):
                 continue
 
             history = self._get_history(conn, row["stock_code"], trade_date, days=20)
@@ -314,14 +367,17 @@ class TrendScreener:
             # 跑所有因子（量价/资金/趋势 + 板块类）
             factor_results = []
             for fn in [
-                check_volume_breakout, check_volume_pullback,
-                check_amplitude_contract, check_main_force_buy,
-                check_chip_concentrate, check_consecutive_yang,
-                check_pullback_hold, check_trend_persist,
-                check_low_volatility, check_volume_expand,
+                check_volume_breakout,
+                check_volume_pullback,
+                check_amplitude_contract,
+                check_main_force_buy,
+                check_chip_concentrate,
+                check_consecutive_yang,
+                check_pullback_hold,
+                check_trend_persist,
+                check_low_volatility,
+                check_volume_expand,
                 check_trend_strength,
-                check_rps_20_strong, check_rps_60_strong,
-                check_rps_120_strong, check_rps_resonance,
             ]:
                 result = fn(row, history)
                 if result:
@@ -334,16 +390,21 @@ class TrendScreener:
 
             # 板块因子
             for fn in [
+                check_sector_hot,
                 check_leader_in_sector,
-                check_stronger_than_sector, check_sector_fund_resonance,
+                check_stronger_than_sector,
+                check_sector_fund_resonance,
             ]:
                 try:
-                    result = fn(row, history,
-                                sector_hot=sd["sector_hot"],
-                                stock_sectors=sd["stock_sectors"],
-                                sector_changes=sd["sector_changes"],
-                                sector_funds=sd["sector_funds"],
-                                sector_stocks_pct=sd["sector_stocks_pct"])
+                    result = fn(
+                        row,
+                        history,
+                        sector_hot=sd["sector_hot"],
+                        stock_sectors=sd["stock_sectors"],
+                        sector_changes=sd["sector_changes"],
+                        sector_funds=sd["sector_funds"],
+                        sector_stocks_pct=sd["sector_stocks_pct"],
+                    )
                     if result:
                         factor_results.append(result)
                 except Exception:
@@ -352,37 +413,44 @@ class TrendScreener:
             if len(factor_results) < 2:
                 continue
 
-            scenarios = self._match_scenarios(row, history, factor_results, market_state)
+            scenarios = self._match_scenarios(
+                row, history, factor_results, market_state
+            )
             score = self._compute_score(factor_results, scenarios, row)
             mode = self._determine_mode(scenarios, row, history)
 
-            candidates.append(StockScore(
-                stock_code=row["stock_code"],
-                stock_name=row["stock_name"],
-                trend_mode=mode,
-                score=score,
-                price=row["price"] or 0,
-                change_pct=row["change_pct"] or 0,
-                mcap=row["mcap"] or 0,
-                circ_mcap=row["circ_mcap"] or 0,
-                turnover_rate=row["turnover_rate"] or 0,
-                volume_ratio=row["volume_ratio"] or 0,
-                ma5=row["ma5"] or 0,
-                ma10=row["ma10"] or 0,
-                ma20=row["ma20"] or 0,
-                ma5_angle=row["ma5_angle"] or 0,
-                industry=row["industry"] or "",
-                mf_wan=row["mf_wan"] or 0,
-                mf_ratio=row["mf_ratio"] or 0,
-                tags=factor_results,
-                scenarios=scenarios,
-            ))
+            candidates.append(
+                StockScore(
+                    stock_code=row["stock_code"],
+                    stock_name=row["stock_name"],
+                    trend_mode=mode,
+                    score=score,
+                    price=row["price"] or 0,
+                    change_pct=row["change_pct"] or 0,
+                    mcap=row["mcap"] or 0,
+                    circ_mcap=row["circ_mcap"] or 0,
+                    turnover_rate=row["turnover_rate"] or 0,
+                    volume_ratio=row["volume_ratio"] or 0,
+                    ma5=row["ma5"] or 0,
+                    ma10=row["ma10"] or 0,
+                    ma20=row["ma20"] or 0,
+                    ma5_angle=row["ma5_angle"] or 0,
+                    industry=row["industry"] or "",
+                    mf_wan=row["mf_wan"] or 0,
+                    mf_ratio=row["mf_ratio"] or 0,
+                    tags=factor_results,
+                    scenarios=scenarios,
+                )
+            )
 
         return candidates
 
     def _get_history(
-        self, conn: sqlite3.Connection, stock_code: str,
-        trade_date: str, days: int,
+        self,
+        conn: sqlite3.Connection,
+        stock_code: str,
+        trade_date: str,
+        days: int,
     ) -> list[dict]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -398,7 +466,11 @@ class TrendScreener:
     # ---- 场景匹配 ----
 
     def _match_scenarios(
-        self, row: dict, history: list[dict], tags: list[str], market_state: str,
+        self,
+        row: dict,
+        history: list[dict],
+        tags: list[str],
+        market_state: str,
     ) -> list[str]:
         scenarios = []
         # "放量启动" = 今日量比≥1.5，是突破信号
@@ -422,7 +494,11 @@ class TrendScreener:
         # 稳健
         if "缩量回调" in tags and self._near_ma(row, "ma5", pct=2):
             scenarios.append("回踩MA5")
-        if "缩量回调" in tags and self._near_ma(row, "ma10", pct=2) and "趋势延续" in tags:
+        if (
+            "缩量回调" in tags
+            and self._near_ma(row, "ma10", pct=2)
+            and "趋势延续" in tags
+        ):
             scenarios.append("回踩MA10")
         if self._near_ma(row, "ma20", pct=3) and has_volume_up:
             scenarios.append("回踩MA20")
@@ -449,7 +525,7 @@ class TrendScreener:
     def _is_reversal(self, row: dict, history: list[dict]) -> bool:
         if len(history) < 1:
             return False
-        prev_chg = (history[-1].get("change_pct") or 0)
+        prev_chg = history[-1].get("change_pct") or 0
         today_chg = row.get("change_pct") or 0
         return prev_chg < 0 and today_chg > 0
 
@@ -481,18 +557,28 @@ class TrendScreener:
     def _is_ma_diverging(self, row: dict, history: list[dict]) -> bool:
         if len(history) < 3:
             return False
-        ma5, ma10, ma20 = row.get("ma5") or 0, row.get("ma10") or 0, row.get("ma20") or 0
+        ma5, ma10, ma20 = (
+            row.get("ma5") or 0,
+            row.get("ma10") or 0,
+            row.get("ma20") or 0,
+        )
         if not (ma5 > ma10 > ma20):
             return False
         prev = history[-1]
         prev_ma20 = max(abs(prev.get("ma20") or 1), 1)
-        prev_spread = max(
-            abs((prev.get("ma5") or 0) - (prev.get("ma10") or 0)),
-            abs((prev.get("ma10") or 0) - (prev.get("ma20") or 0)),
-        ) / prev_ma20 * 100
+        prev_spread = (
+            max(
+                abs((prev.get("ma5") or 0) - (prev.get("ma10") or 0)),
+                abs((prev.get("ma10") or 0) - (prev.get("ma20") or 0)),
+            )
+            / prev_ma20
+            * 100
+        )
         return prev_spread < 2
 
-    def _determine_mode(self, scenarios: list[str], row: dict, history: list[dict]) -> str:
+    def _determine_mode(
+        self, scenarios: list[str], row: dict, history: list[dict]
+    ) -> str:
         """纯数据驱动：只看价格与均线的位置关系，不看场景标签。
 
         5日线强趋势 — 价格紧贴MA5，沿MA5上行
@@ -537,7 +623,10 @@ class TrendScreener:
         return False
 
     def _compute_score(
-        self, tags: list[str], scenarios: list[str], row: dict,
+        self,
+        tags: list[str],
+        scenarios: list[str],
+        row: dict,
     ) -> float:
         base = 20.0
         base += len(tags) * 5
@@ -548,4 +637,4 @@ class TrendScreener:
 
     def _rank_and_limit(self, candidates: list[StockScore]) -> list[StockScore]:
         candidates.sort(key=lambda x: (-x.score, x.stock_code))
-        return candidates[:self.top_n * 2]
+        return candidates[: self.top_n * 2]

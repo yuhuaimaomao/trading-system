@@ -53,41 +53,49 @@ def _timeout_handler(signum, frame):
 
 
 def _fetch_worker(code: str, start: str, end: str) -> list[dict] | None:
-	"""在线程中执行 akshare 调用"""
-	sina_code = code_to_sina_prefix(code)
-	if not sina_code:
-		return []
-	df = ak.stock_zh_a_daily(symbol=sina_code, start_date=start, end_date=end, adjust="qfq")
-	if df is None or df.empty:
-		return None
-	rows = []
-	for _, row in df.iterrows():
-		rows.append({
-			"trade_date": str(row["date"]),
-			"open": float(row.get("open", 0) or 0),
-			"high": float(row.get("high", 0) or 0),
-			"low": float(row.get("low", 0) or 0),
-			"price": float(row.get("close", 0) or 0),
-			"volume": float(row.get("volume", 0) or 0),
-		})
-	return rows
+    """在线程中执行 akshare 调用"""
+    sina_code = code_to_sina_prefix(code)
+    if not sina_code:
+        return []
+    df = ak.stock_zh_a_daily(
+        symbol=sina_code, start_date=start, end_date=end, adjust="qfq"
+    )
+    if df is None or df.empty:
+        return None
+    rows = []
+    for _, row in df.iterrows():
+        rows.append(
+            {
+                "trade_date": str(row["date"]),
+                "open": float(row.get("open", 0) or 0),
+                "high": float(row.get("high", 0) or 0),
+                "low": float(row.get("low", 0) or 0),
+                "price": float(row.get("close", 0) or 0),
+                "volume": float(row.get("volume", 0) or 0),
+            }
+        )
+    return rows
 
 
-def fetch_one(code: str, start: str, end: str, timeout: int = API_TIMEOUT) -> list[dict] | None:
-	"""用线程超时机制获取单只股票日线（不等待死线程退出）"""
-	from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-	executor = ThreadPoolExecutor(max_workers=1)
-	try:
-		future = executor.submit(_fetch_worker, code, start, end)
-		return future.result(timeout=timeout)
-	except FutureTimeout:
-		logger.debug(f"  {code} 超时 ({timeout}s)")
-		return None
-	except Exception as e:
-		logger.debug(f"  {code} fetch error: {e}")
-		return None
-	finally:
-		executor.shutdown(wait=False)
+def fetch_one(
+    code: str, start: str, end: str, timeout: int = API_TIMEOUT
+) -> list[dict] | None:
+    """用线程超时机制获取单只股票日线（不等待死线程退出）"""
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_fetch_worker, code, start, end)
+        return future.result(timeout=timeout)
+    except FutureTimeout:
+        logger.debug(f"  {code} 超时 ({timeout}s)")
+        return None
+    except Exception as e:
+        logger.debug(f"  {code} fetch error: {e}")
+        return None
+    finally:
+        executor.shutdown(wait=False)
 
 
 def upsert_rows(conn: sqlite3.Connection, code: str, name: str, rows: list[dict]):
@@ -114,13 +122,24 @@ def upsert_rows(conn: sqlite3.Connection, code: str, name: str, rows: list[dict]
                (stock_code, stock_name, trade_date,
                 price, open, high, low, prev_close, change_pct, volume)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (code, name, r["trade_date"],
-             r["price"], r["open"], r["high"], r["low"],
-             prev_price, change_pct, r["volume"]),
+            (
+                code,
+                name,
+                r["trade_date"],
+                r["price"],
+                r["open"],
+                r["high"],
+                r["low"],
+                prev_price,
+                change_pct,
+                r["volume"],
+            ),
         )
 
 
-def get_codes_needing_data(conn: sqlite3.Connection, start: str) -> list[tuple[str, str]]:
+def get_codes_needing_data(
+    conn: sqlite3.Connection, start: str
+) -> list[tuple[str, str]]:
     today_str = date.today().strftime("%Y-%m-%d")
     rows = conn.execute(
         """SELECT DISTINCT b.stock_code, b.stock_name
@@ -136,7 +155,8 @@ def get_codes_needing_data(conn: sqlite3.Connection, start: str) -> list[tuple[s
 
 
 def show_stats(conn: sqlite3.Connection, start: str):
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT
             CASE
                 WHEN min_date <= ? THEN '120天完整'
@@ -148,12 +168,14 @@ def show_stats(conn: sqlite3.Connection, start: str):
             COUNT(*) as cnt
         FROM (SELECT stock_code, MIN(trade_date) as min_date FROM stock_basic GROUP BY stock_code)
         GROUP BY coverage ORDER BY MIN(min_date)
-    """, (start, start, start, start)).fetchall()
+    """,
+        (start, start, start, start),
+    ).fetchall()
 
     print(f"\n数据覆盖度分布 (目标: {start} ~ {date.today()}):")
     total = sum(r[1] for r in rows)
     for coverage, cnt in rows:
-        print(f"  {coverage}: {cnt} 只 ({cnt/total*100:.1f}%)")
+        print(f"  {coverage}: {cnt} 只 ({cnt / total * 100:.1f}%)")
     print(f"  总计: {total} 只")
 
     need = conn.execute(
@@ -176,19 +198,30 @@ def load_progress() -> set[str]:
 
 
 def save_progress(done: set[str], start_date: str, total_new: int, fail_count: int):
-    PROGRESS_FILE.write_text(json.dumps({
-        "done": sorted(done),
-        "start_date": start_date,
-        "total_new_rows": total_new,
-        "fail_count": fail_count,
-        "updated": date.today().isoformat(),
-    }, ensure_ascii=False, indent=2))
+    PROGRESS_FILE.write_text(
+        json.dumps(
+            {
+                "done": sorted(done),
+                "start_date": start_date,
+                "total_new_rows": total_new,
+                "fail_count": fail_count,
+                "updated": date.today().isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="回填 stock_basic 历史日线")
     parser.add_argument("--days", type=int, default=120, help="回填天数（默认 120）")
-    parser.add_argument("--timeout", type=int, default=API_TIMEOUT, help=f"API 超时秒数（默认 {API_TIMEOUT}）")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=API_TIMEOUT,
+        help=f"API 超时秒数（默认 {API_TIMEOUT}）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不写库")
     parser.add_argument("--stats", action="store_true", help="仅显示覆盖度统计")
     parser.add_argument("--reset", action="store_true", help="清除断点，从头开始")
@@ -235,7 +268,6 @@ def main():
     start_time = time.time()
     consec_fails = 0  # 连续失败计数，用于 API 限流检测
 
-
     for idx, (code, name) in enumerate(pending):
         # 连续失败 >= 10 只 → API 限流，冷却 60 秒
         if consec_fails >= 10:
@@ -278,7 +310,7 @@ def main():
             logger.info(
                 f"  进度: {len(done)}/{len(todo)} ({processed}/{len(pending)}) "
                 f"新增 {total} 条, 失败 {fail_count}, "
-                f"{rate:.1f}只/s, ETA {eta:.0f}min, 耗时 {elapsed/60:.1f}min"
+                f"{rate:.1f}只/s, ETA {eta:.0f}min, 耗时 {elapsed / 60:.1f}min"
             )
 
         time.sleep(SLEEP_BETWEEN)
@@ -288,7 +320,9 @@ def main():
     conn.close()
 
     elapsed = (time.time() - start_time) / 60
-    logger.info(f"完成: {count} 只有新数据, 失败 {fail_count}, 新增 {total} 条, 耗时 {elapsed:.1f}min")
+    logger.info(
+        f"完成: {count} 只有新数据, 失败 {fail_count}, 新增 {total} 条, 耗时 {elapsed:.1f}min"
+    )
     if fail_count > 0:
         logger.info(f"失败列表见 {PROGRESS_FILE}")
 

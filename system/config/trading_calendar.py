@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 交易日历配置
 
@@ -6,8 +5,8 @@
 QMT 不可用时回退到硬编码节假日后排除周末。
 """
 
-import sqlite3
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -17,12 +16,36 @@ DB_PATH = Path(__file__).parent.parent.parent / "storage" / "stock_market.db"
 
 # 硬编码节假日（QMT 不可用时的回退方案）
 A_HOLIDAYS = [
-    "2026-01-01", "2026-01-02", "2026-01-03",
-    "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-21", "2026-02-22", "2026-02-23", "2026-02-24",
-    "2026-04-04", "2026-04-05", "2026-04-06",
-    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
-    "2026-06-19", "2026-06-20", "2026-06-21",
-    "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08",
+    "2026-01-01",
+    "2026-01-02",
+    "2026-01-03",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-02-21",
+    "2026-02-22",
+    "2026-02-23",
+    "2026-02-24",
+    "2026-04-04",
+    "2026-04-05",
+    "2026-04-06",
+    "2026-05-01",
+    "2026-05-02",
+    "2026-05-03",
+    "2026-05-04",
+    "2026-05-05",
+    "2026-06-19",
+    "2026-06-20",
+    "2026-06-21",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-03",
+    "2026-10-04",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
 ]
 
 _qmt_cache = None  # 交易日集合的内存缓存
@@ -35,7 +58,9 @@ def _load_qmt_calendar():
         return _qmt_cache
     try:
         conn = sqlite3.connect(str(DB_PATH))
-        rows = conn.execute("SELECT DISTINCT trade_date FROM qmt_calendar WHERE market='sh'").fetchall()
+        rows = conn.execute(
+            "SELECT DISTINCT trade_date FROM qmt_calendar WHERE market='sh'"
+        ).fetchall()
         conn.close()
         if rows:
             _qmt_cache = {r[0] for r in rows}
@@ -71,11 +96,11 @@ def is_trading_day(date_str: str = None):
 def get_previous_trading_day(target_date: str = None, offset: int = 1):
     """
     获取上一个交易日
-    
+
     Args:
         target_date: 目标日期，默认今天
         offset: 向前偏移的交易天数（默认1 = 上一个交易日，7 = 7个交易日前）
-    
+
     Returns:
         上一个交易日字符串（YYYY-MM-DD）或 None（如果没找到）
     """
@@ -83,21 +108,21 @@ def get_previous_trading_day(target_date: str = None, offset: int = 1):
         target_date = datetime.now()
     else:
         target_date = datetime.strptime(target_date, "%Y-%m-%d")
-    
+
     check_date = target_date - timedelta(days=1)
     found = 0
-    
+
     # 最多向前查 60 天（覆盖长假+周末）
     for _ in range(60):
         date_str = check_date.strftime("%Y-%m-%d")
-        
+
         if is_trading_day(date_str):
             found += 1
             if found >= offset:
                 return date_str
-        
+
         check_date -= timedelta(days=1)
-    
+
     return None
 
 
@@ -132,10 +157,10 @@ def get_recent_trading_days(target_date: str = None, count: int = 5) -> list:
 def get_next_trading_day(target_date: str = None):
     """
     获取下一个交易日
-    
+
     Args:
         target_date: 目标日期，默认今天
-    
+
     Returns:
         下一个交易日字符串（YYYY-MM-DD）或 None（如果没找到）
     """
@@ -143,18 +168,18 @@ def get_next_trading_day(target_date: str = None):
         target_date = datetime.now()
     else:
         target_date = datetime.strptime(target_date, "%Y-%m-%d")
-    
+
     # 从目标日期的下一天开始向后查找
     check_date = target_date + timedelta(days=1)
-    
+
     # 最多向后查 30 天
     for _ in range(30):
         date_str = check_date.strftime("%Y-%m-%d")
-        
+
         if is_trading_day(date_str):
             return date_str
-        
+
         check_date += timedelta(days=1)
-    
+
     # 如果没找到（理论上不应该发生），返回 None
     return None

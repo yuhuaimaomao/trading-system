@@ -21,7 +21,9 @@ def _ema(data: list[float], period: int) -> list[float]:
     return [sma] * (period - 1) + result
 
 
-def calc_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
+def calc_macd(
+    closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> dict:
     """MACD — 返回 DIF, DEA, bar (柱值)"""
     if len(closes) < slow + signal:
         return {"dif": 0, "dea": 0, "bar": 0}
@@ -60,8 +62,14 @@ def calc_rsi(closes: list[float], period: int = 14) -> float:
     return round(100 - 100 / (1 + rs), 2)
 
 
-def calc_kdj(highs: list[float], lows: list[float], closes: list[float],
-             n: int = 9, k_smooth: int = 3, d_smooth: int = 3) -> dict:
+def calc_kdj(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    n: int = 9,
+    k_smooth: int = 3,
+    d_smooth: int = 3,
+) -> dict:
     """KDJ — 随机指标，返回 K, D, J"""
     if len(closes) < n:
         return {"k": 50.0, "d": 50.0, "j": 50.0}
@@ -86,14 +94,17 @@ def calc_kdj(highs: list[float], lows: list[float], closes: list[float],
 
 # ---- 形态检测 -------------------------------------------------------------
 
-def calc_bollinger(closes: list[float], period: int = 20, std_mult: float = 2.0) -> dict:
+
+def calc_bollinger(
+    closes: list[float], period: int = 20, std_mult: float = 2.0
+) -> dict:
     """布林带 — 返回 upper, mid, lower, width(带宽%), pct_b(价格在带内位置%)"""
     if len(closes) < period:
         return {"upper": 0, "mid": 0, "lower": 0, "width": 0, "pct_b": 0}
 
     mid = sum(closes[-period:]) / period
     variance = sum((x - mid) ** 2 for x in closes[-period:]) / period
-    std = variance ** 0.5
+    std = variance**0.5
 
     upper = mid + std_mult * std
     lower = mid - std_mult * std
@@ -112,8 +123,9 @@ def calc_bollinger(closes: list[float], period: int = 20, std_mult: float = 2.0)
     }
 
 
-def calc_macd_series(closes: list[float], fast: int = 12, slow: int = 26,
-                      signal: int = 9) -> dict:
+def calc_macd_series(
+    closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> dict:
     """返回 MACD DIF/DEA/BAR 完整序列（用于形态检测）"""
     if len(closes) < slow + signal:
         return {"dif": [], "dea": [], "bar": []}
@@ -125,8 +137,9 @@ def calc_macd_series(closes: list[float], fast: int = 12, slow: int = 26,
     return {"dif": dif, "dea": dea, "bar": bar}
 
 
-def detect_macd_cross(dif: list[float], dea: list[float],
-                      lookback: int = 20) -> list[dict]:
+def detect_macd_cross(
+    dif: list[float], dea: list[float], lookback: int = 20
+) -> list[dict]:
     """检测近期金叉/死叉。返回 [(days_ago, type), ...]"""
     crosses = []
     if len(dif) < 2:
@@ -140,8 +153,9 @@ def detect_macd_cross(dif: list[float], dea: list[float],
     return crosses
 
 
-def calc_atr(highs: list[float], lows: list[float], closes: list[float],
-             period: int = 14) -> float:
+def calc_atr(
+    highs: list[float], lows: list[float], closes: list[float], period: int = 14
+) -> float:
     """ATR — Average True Range，Wilder 平滑"""
     if len(closes) < 2:
         return 0.0
@@ -162,8 +176,9 @@ def calc_atr(highs: list[float], lows: list[float], closes: list[float],
     return round(atr, 4)
 
 
-def detect_divergence(closes: list[float], dif: list[float],
-                      lookback: int = 30) -> list[dict]:
+def detect_divergence(
+    closes: list[float], dif: list[float], lookback: int = 30
+) -> list[dict]:
     """检测顶背离/底背离。比较近 30 天内价格与 DIF 的局部高/低点"""
     divergences = []
     if len(closes) < lookback:
@@ -171,10 +186,14 @@ def detect_divergence(closes: list[float], dif: list[float],
 
     c = closes[-lookback:]
     d = dif[-lookback:]
+    # 确保 c 和 d 等长（MACD 序列可能比价格序列短）
+    min_len = min(len(c), len(d))
+    c = c[:min_len]
+    d = d[:min_len]
 
-    peaks = []   # (idx, price, dif)
+    peaks = []  # (idx, price, dif)
     troughs = []  # (idx, price, dif)
-    for i in range(2, len(c) - 2):
+    for i in range(2, min_len - 2):
         if c[i] > c[i - 1] and c[i] > c[i - 2] and c[i] > c[i + 1] and c[i] > c[i + 2]:
             peaks.append((i, c[i], d[i]))
         if c[i] < c[i - 1] and c[i] < c[i - 2] and c[i] < c[i + 1] and c[i] < c[i + 2]:
@@ -183,13 +202,15 @@ def detect_divergence(closes: list[float], dif: list[float],
     if len(peaks) >= 2:
         p1, p2 = peaks[-2], peaks[-1]
         if p2[1] > p1[1] and p2[2] < p1[2]:
-            divergences.append({"type": "顶背离",
-                                "desc": "股价创新高但DIF走弱，上涨动能衰减"})
+            divergences.append(
+                {"type": "顶背离", "desc": "股价创新高但DIF走弱，上涨动能衰减"}
+            )
 
     if len(troughs) >= 2:
         t1, t2 = troughs[-2], troughs[-1]
         if t2[1] < t1[1] and t2[2] > t1[2]:
-            divergences.append({"type": "底背离",
-                                "desc": "股价创新低但DIF拒绝跟随，下跌动能衰减"})
+            divergences.append(
+                {"type": "底背离", "desc": "股价创新低但DIF拒绝跟随，下跌动能衰减"}
+            )
 
     return divergences

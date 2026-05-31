@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """板块热度监控 — 每 5 轮用全市场快照算板块涨跌排名"""
 
 import logging
@@ -82,44 +81,54 @@ class SectorHeatMonitor:
                 if len(history) < 3:
                     continue
                 delta = history[-1] - history[0]
-                rank = next((i + 1 for i, (n, _) in enumerate(ranked) if n == ind), None)
+                rank = next(
+                    (i + 1 for i, (n, _) in enumerate(ranked) if n == ind), None
+                )
+                total = len(ranked)
                 avg = history[-1]
+                rank_str = f" 排名: {rank}/{total}" if rank else ""
                 if delta < -1.0:
-                    warnings.append(f"{ind} {avg:+.1f}%（↓{delta:+.1f}% 排名{rank}）")
+                    warnings.append(
+                        f"   ⚠️ {ind}: {avg:+.1f}%  ↓{delta:+.1f}%{rank_str}"
+                    )
                 elif delta > 1.0:
-                    good.append(f"{ind} {avg:+.1f}%（↑{delta:+.1f}% 排名{rank}）")
+                    good.append(f"   ✅ {ind}: {avg:+.1f}%  ↑{delta:+.1f}%{rank_str}")
             return warnings, good
 
         my_warnings, my_good = _check_sectors(my_sectors)
         watch_warnings, watch_good = _check_sectors(watch_sectors)
 
         if top5:
-            lines = ["📊 板块热度 TOP5:"]
+            medals = ["🥇", "🥈", "🥉"]
+            lines = ["📊 板块热度 TOP5"]
             for i, (ind, avg) in enumerate(top5, 1):
                 tags = []
                 if ind in my_sectors:
-                    tags.append("持仓")
+                    tags.append("持仓✓")
                 if ind in watch_sectors:
                     tags.append("观察")
-                tag = f" ← {','.join(tags)}" if tags else ""
+                tag = f"  {','.join(tags)}" if tags else ""
                 # 计算相对上次快照的变化
                 history = self._sector_history.get(ind, [])
                 if len(history) >= 2:
                     delta = history[-1] - history[-2]
-                    delta_str = f" ↑{delta:+.1f}%" if delta > 0 else f" ↓{abs(delta):.1f}%"
+                    delta_str = f"  {'↑' if delta > 0 else '↓'}{abs(delta):.1f}%"
                 else:
                     delta_str = ""
-                lines.append(f"  {i}. {ind} {avg:+.1f}%{delta_str}{tag}")
+                prefix = medals[i - 1] if i <= 3 else f" {i}."
+                lines.append(f"   {prefix} {ind}: {avg:+.1f}%{delta_str}{tag}")
             messages.append("\n".join(lines))
 
+        if my_warnings or my_good or watch_warnings or watch_good:
+            messages.append("   ─────────────────────────")
         if my_warnings:
-            messages.append(f"⚠️ 持仓板块走弱: {', '.join(my_warnings)}")
+            messages.append("\n".join(my_warnings))
         if my_good:
-            messages.append(f"✅ 持仓板块走强: {', '.join(my_good)}")
+            messages.append("\n".join(my_good))
         if watch_warnings:
-            messages.append(f"👀 观察板块走弱: {', '.join(watch_warnings)}")
+            messages.append("\n".join(watch_warnings))
         if watch_good:
-            messages.append(f"👀 观察板块走强: {', '.join(watch_good)}")
+            messages.append("\n".join(watch_good))
 
         return messages
 

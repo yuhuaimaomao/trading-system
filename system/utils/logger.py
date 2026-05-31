@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 日志工具 v3.1
 
@@ -66,11 +65,11 @@ def get_task_logger(task_name: str, trade_date: str = None) -> logging.Logger:
     log_file = str(log_dir / f"{task_name}.log")
 
     detailed_fmt = logging.Formatter(
-        '%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    fh = logging.FileHandler(log_file, encoding='utf-8')
+    fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(detailed_fmt)
     logger.addHandler(fh)
@@ -111,11 +110,11 @@ def _get_module_logger(
     log_file = str(log_dir / f"{short_name}.log")
 
     detailed_fmt = logging.Formatter(
-        '%(asctime)s.%(msecs)03d - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s.%(msecs)03d - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    fh = logging.FileHandler(log_file, encoding='utf-8')
+    fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(detailed_fmt)
     logger.addHandler(fh)
@@ -123,7 +122,11 @@ def _get_module_logger(
     # 终端只打 WARNING+，避免子模块噪音淹没终端
     ch = logging.StreamHandler()
     ch.setLevel(logging.WARNING)
-    ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%H:%M:%S'))
+    ch.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
+        )
+    )
     logger.addHandler(ch)
 
     return logger
@@ -134,7 +137,9 @@ def get_collector_logger(collector_name: str, trade_date: str = None) -> logging
     采集器日志 → logs/{date}/collectors/{name}.log (DEBUG)
     有任务上下文时 INFO+ 自动冒泡到 task log
     """
-    return _get_module_logger(collector_name, category="collectors", trade_date=trade_date)
+    return _get_module_logger(
+        collector_name, category="collectors", trade_date=trade_date
+    )
 
 
 def get_core_logger(name: str, trade_date: str = None) -> logging.Logger:

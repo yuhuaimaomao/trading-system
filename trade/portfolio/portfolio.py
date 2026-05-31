@@ -1,8 +1,8 @@
 """组合管理器：持仓、现金、净值追踪"""
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 import json
+from dataclasses import dataclass, field
+from typing import Dict, List
 
 
 @dataclass
@@ -26,7 +26,9 @@ class Position:
         self.current_price = price
         self.market_value = self.volume * price
         self.pnl = (price - self.avg_cost) * self.volume
-        self.pnl_pct = (price - self.avg_cost) / self.avg_cost if self.avg_cost > 0 else 0.0
+        self.pnl_pct = (
+            (price - self.avg_cost) / self.avg_cost if self.avg_cost > 0 else 0.0
+        )
         if price > self.highest_price:
             self.highest_price = price
 
@@ -53,12 +55,15 @@ class PortfolioSnapshot:
         exposure: Dict[str, float] = {}
         for p in self.positions:
             if p.sector_code:
-                exposure[p.sector_code] = exposure.get(p.sector_code, 0) + p.market_value
+                exposure[p.sector_code] = (
+                    exposure.get(p.sector_code, 0) + p.market_value
+                )
         total = self.market_value or 1
         return {k: v / total for k, v in exposure.items()}
 
     def to_db_dict(self, account: str = "paper") -> dict:
         from datetime import datetime
+
         return {
             "trade_date": self.date,
             "total_value": self.total_value,
@@ -68,7 +73,9 @@ class PortfolioSnapshot:
             "total_pnl": self.total_pnl,
             "drawdown": self.drawdown,
             "position_count": self.position_count,
-            "sector_exposure": json.dumps(self.get_sector_exposure(), ensure_ascii=False),
+            "sector_exposure": json.dumps(
+                self.get_sector_exposure(), ensure_ascii=False
+            ),
             "account": account,
             "created_at": datetime.now().isoformat(),
         }
@@ -115,13 +122,19 @@ class Portfolio:
         base = self.total_value or 1.0
         for p in self.positions.values():
             if p.sector_code:
-                exposure[p.sector_code] = exposure.get(p.sector_code, 0) + p.market_value
+                exposure[p.sector_code] = (
+                    exposure.get(p.sector_code, 0) + p.market_value
+                )
         return {k: v / base for k, v in exposure.items()}
 
-    def can_open_position(self, stock_code: str, target_pct: float,
-                          sector_code: str = "",
-                          max_single_pct: float = 0.20,
-                          max_sector_pct: float = 0.30) -> tuple[bool, str]:
+    def can_open_position(
+        self,
+        stock_code: str,
+        target_pct: float,
+        sector_code: str = "",
+        max_single_pct: float = 0.20,
+        max_sector_pct: float = 0.30,
+    ) -> tuple[bool, str]:
         """开仓前检查"""
         if stock_code in self.positions:
             return True, ""
@@ -136,20 +149,34 @@ class Portfolio:
             exposure = self.get_sector_exposure()
             current = exposure.get(sector_code, 0)
             if current + target_pct > max_sector_pct:
-                return False, f"板块 {sector_code} {current + target_pct:.0%} 超上限 {max_sector_pct:.0%}"
+                return (
+                    False,
+                    f"板块 {sector_code} {current + target_pct:.0%} 超上限 {max_sector_pct:.0%}",
+                )
 
         return True, ""
 
-    def open_position(self, stock_code: str, stock_name: str, volume: int,
-                      price: float, sector_code: str = "", entry_date: str = "",
-                      stop_loss: float = 0.0, take_profit: float = 0.0,
-                      trailing_stop: float = 0.05, commission: float = 0.0):
+    def open_position(
+        self,
+        stock_code: str,
+        stock_name: str,
+        volume: int,
+        price: float,
+        sector_code: str = "",
+        entry_date: str = "",
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+        trailing_stop: float = 0.05,
+        commission: float = 0.0,
+    ):
         cost = price * volume + commission
         if cost > self.cash:
             return False
 
         self.cash -= cost
-        actual_avg_cost = (price * volume + commission) / volume if volume > 0 else price
+        actual_avg_cost = (
+            (price * volume + commission) / volume if volume > 0 else price
+        )
         pos = Position(
             stock_code=stock_code,
             stock_name=stock_name,
@@ -165,14 +192,21 @@ class Portfolio:
             highest_price=price,
         )
         self.positions[stock_code] = pos
-        self.trade_log.append({
-            "type": "buy", "stock_code": stock_code, "volume": volume,
-            "price": price, "commission": commission, "date": entry_date,
-        })
+        self.trade_log.append(
+            {
+                "type": "buy",
+                "stock_code": stock_code,
+                "volume": volume,
+                "price": price,
+                "commission": commission,
+                "date": entry_date,
+            }
+        )
         return True
 
-    def close_position(self, stock_code: str, price: float,
-                       reason: str = "", commission: float = 0.0) -> bool:
+    def close_position(
+        self, stock_code: str, price: float, reason: str = "", commission: float = 0.0
+    ) -> bool:
         pos = self.positions.get(stock_code)
         if not pos:
             return False
@@ -181,11 +215,18 @@ class Portfolio:
         pos.update_price(price)
         proceeds = price * pos.volume - commission
         self.cash += proceeds
-        self.trade_log.append({
-            "type": "sell", "stock_code": stock_code, "volume": pos.volume,
-            "price": price, "commission": commission, "reason": reason,
-            "pnl": pos.pnl, "pnl_pct": pos.pnl_pct,
-        })
+        self.trade_log.append(
+            {
+                "type": "sell",
+                "stock_code": stock_code,
+                "volume": pos.volume,
+                "price": price,
+                "commission": commission,
+                "reason": reason,
+                "pnl": pos.pnl,
+                "pnl_pct": pos.pnl_pct,
+            }
+        )
         del self.positions[stock_code]
         return True
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """实盘手动执行器 — Telegram 推送 → 用户成交回复 → 记录订单
 
 不下单，只做三件事:
@@ -12,15 +11,15 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from data.repo import TradeRepository
 from analysis.signals import OrderSignal
+from data.repo import TradeRepository
 
 logger = logging.getLogger(__name__)
 
 
 class ManualExecutor:
-    def __init__(self, telegram_bot=None, portfolio=None):
-        self.repo = TradeRepository()
+    def __init__(self, telegram_bot=None, portfolio=None, db_path: str = None):
+        self.repo = TradeRepository(db_path=db_path)
         self.telegram = telegram_bot
         self.portfolio = portfolio
         self._pending_signals: dict[int, dict] = {}
@@ -33,7 +32,9 @@ class ManualExecutor:
     def _resolve_name(name: str) -> Optional[str]:
         """股票名称 → 代码，从 stock_basic 查最新日期。"""
         import sqlite3
+
         from system.config import settings
+
         try:
             conn = sqlite3.connect(settings.DATABASE_PATH)
             row = conn.execute(
@@ -87,7 +88,10 @@ class ManualExecutor:
         elif any(kw in text for kw in ["实盘", "实际", "real", "Real"]):
             result["account"] = "real"
 
-        if any(kw in text for kw in ["没成交", "未成交", "没买到", "未买到", "没买", "没买到"]):
+        if any(
+            kw in text
+            for kw in ["没成交", "未成交", "没买到", "未买到", "没买", "没买到"]
+        ):
             result["status"] = "rejected"
             return result
 
@@ -110,15 +114,25 @@ class ManualExecutor:
 
         return result
 
-    def handle_user_reply(self, text: str) -> Optional[str]:
+    def handle_user_reply(self, text: str) -> tuple[str, str] | None:
         """处理用户成交回复，记录到 DB。
 
         Returns:
-            确认消息字符串，失败返回 None。
+            (reply_text, account) 或 None。
         """
         # 只有包含下单相关关键词时才解析，避免把闲聊当指令
-        trade_keywords = ["模拟盘", "实盘", "paper", "real", "买了", "成交",
-                          "买到", "买入", "没成交", "未成交"]
+        trade_keywords = [
+            "模拟盘",
+            "实盘",
+            "paper",
+            "real",
+            "买了",
+            "成交",
+            "买到",
+            "买入",
+            "没成交",
+            "未成交",
+        ]
         has_code = bool(re.search(r"\b\d{6}\b", text))
         has_vol = bool(re.search(r"\d+\s*股", text))  # "1000股" 而非 "个股"
         has_keyword = any(kw in text for kw in trade_keywords)
@@ -128,19 +142,19 @@ class ManualExecutor:
         parsed = self.parse_reply(text)
         code = parsed["stock_code"]
         name = parsed["stock_name"]
+        account = parsed["account"] or "real"  # 默认实盘
 
         # 名称 → 代码转换
         if not code and name:
             code = self._resolve_name(name)
             if not code:
                 logger.warning(f"无法从消息中解析股票: {text}")
-                return f"⚠️ 未找到「{name}」对应的股票代码，请用六位代码"
+                return f"⚠️ 未找到「{name}」对应的股票代码，请用六位代码", account
 
         if not code:
             logger.warning(f"无法从消息中解析股票代码: {text}")
             return None
 
-        account = parsed["account"] or "real"  # 默认实盘
         status = parsed["status"]
         price = parsed["price"]
         volume = parsed["volume"]
@@ -154,34 +168,38 @@ class ManualExecutor:
             for s in matched:
                 self.repo.update_signal_status(s["id"], "rejected")
                 logger.info(f"信号 {s['id']} {code} 标记为 rejected（用户未成交）")
-            return f"📝 已记录: {code} 未成交"
+            return f"📝 已记录: {code} 未成交", account
 
         if price is None or volume is None:
-            return f"⚠️ 请补充成交信息: {code} X股 X.XX"
+            return f"⚠️ 请补充成交信息: {code} X股 X.XX", account
 
         signals = self.repo.get_pending_signals()
         matched = [s for s in signals if s["stock_code"] == code]
         signal_id = matched[0]["id"] if matched else None
         stock_name = matched[0].get("stock_name", code) if matched else (name or code)
 
-        order_id = self.repo.insert_order({
-            "signal_id": signal_id,
-            "trade_date": trade_date,
-            "order_time": now.isoformat(),
-            "stock_code": code,
-            "order_type": "buy",
-            "order_price": price,
-            "order_volume": volume,
-            "order_status": "filled",
-            "filled_volume": volume,
-            "filled_price": price,
-            "filled_amount": round(price * volume, 2),
-            "strategy_name": "",
-            "updated_at": now.isoformat(),
-            "account": account,
-        })
+        order_id = self.repo.insert_order(
+            {
+                "signal_id": signal_id,
+                "trade_date": trade_date,
+                "order_time": now.isoformat(),
+                "stock_code": code,
+                "order_type": "buy",
+                "order_price": price,
+                "order_volume": volume,
+                "order_status": "filled",
+                "filled_volume": volume,
+                "filled_price": price,
+                "filled_amount": round(price * volume, 2),
+                "strategy_name": "",
+                "updated_at": now.isoformat(),
+                "account": account,
+            }
+        )
 
-        logger.info(f"记录 {account} 成交: {code} {volume}股 @{price} order_id={order_id}")
+        logger.info(
+            f"记录 {account} 成交: {code} {volume}股 @{price} order_id={order_id}"
+        )
 
         # 检查是否 paper+real 都有了
         orders = self.repo.get_orders_by_date(trade_date)
@@ -192,7 +210,10 @@ class ManualExecutor:
         if signal_id:
             self.repo.update_signal_status(signal_id, "bought")
 
-        return f"✅ 已记录: {code} {stock_name} {account} {volume}股 @{price} | 持续盯盘中"
+        return (
+            f"✅ 已记录: {code} {stock_name} {account} {volume}股 @{price} | 持续盯盘中",
+            account,
+        )
 
     # ------------------------------------------------------------------
     # 信号提交 (Watcher 触发时调用)
@@ -235,8 +256,9 @@ class ManualExecutor:
         msg = signal.__repr__()
         self.telegram.send(f"【交易信号】\n{msg}")
 
-    def confirm(self, signal_id: int, price: float, volume: int,
-                code: str = "", name: str = ""):
+    def confirm(
+        self, signal_id: int, price: float, volume: int, code: str = "", name: str = ""
+    ):
         """手动确认买入 → 更新状态、记录订单"""
         info = self._pending_signals.get(signal_id, {})
         code = code or info.get("stock_code", "")
@@ -253,21 +275,23 @@ class ManualExecutor:
                 entry_date=datetime.now().strftime("%Y-%m-%d"),
             )
 
-        order_id = self.repo.insert_order({
-            "signal_id": signal_id,
-            "trade_date": datetime.now().strftime("%Y-%m-%d"),
-            "order_time": datetime.now().isoformat(),
-            "stock_code": code,
-            "order_type": "buy",
-            "order_price": price,
-            "order_volume": volume,
-            "order_status": "filled",
-            "filled_volume": volume,
-            "filled_price": price,
-            "filled_amount": round(price * volume, 2),
-            "strategy_name": info.get("strategy_name", ""),
-            "updated_at": datetime.now().isoformat(),
-        })
+        order_id = self.repo.insert_order(
+            {
+                "signal_id": signal_id,
+                "trade_date": datetime.now().strftime("%Y-%m-%d"),
+                "order_time": datetime.now().isoformat(),
+                "stock_code": code,
+                "order_type": "buy",
+                "order_price": price,
+                "order_volume": volume,
+                "order_status": "filled",
+                "filled_volume": volume,
+                "filled_price": price,
+                "filled_amount": round(price * volume, 2),
+                "strategy_name": info.get("strategy_name", ""),
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
         return order_id
 
     def reject(self, signal_id: int):

@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """QMT HTTP 客户端 — 封装对 Windows QMT Server 的请求"""
+
 import logging
 import time
 
@@ -18,7 +18,7 @@ def strip_suffix(code):
     """去掉 QMT 代码后缀 .SH/.SZ/.BJ，与东财格式保持一致"""
     for s in (".SH", ".SZ", ".BJ"):
         if code.endswith(s):
-            return code[:-len(s)]
+            return code[: -len(s)]
     return code
 
 
@@ -36,11 +36,23 @@ class QMTClient:
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
-            return {"success": False, "error": f"请求超时({time.time()-t0:.0f}s)", "elapsed": round(time.time()-t0, 2)}
+            return {
+                "success": False,
+                "error": f"请求超时({time.time() - t0:.0f}s)",
+                "elapsed": round(time.time() - t0, 2),
+            }
         except requests.exceptions.ConnectionError:
-            return {"success": False, "error": "无法连接QMT服务器", "elapsed": round(time.time()-t0, 2)}
+            return {
+                "success": False,
+                "error": "无法连接QMT服务器",
+                "elapsed": round(time.time() - t0, 2),
+            }
         except Exception as e:
-            return {"success": False, "error": str(e), "elapsed": round(time.time()-t0, 2)}
+            return {
+                "success": False,
+                "error": str(e),
+                "elapsed": round(time.time() - t0, 2),
+            }
 
     def status(self):
         return self._get("/status", timeout=(5, 10))

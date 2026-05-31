@@ -53,7 +53,9 @@ def _resolve_real_ip(hostname: str) -> str | None:
         try:
             result = subprocess.run(
                 ["dig", "+short", hostname, dns_server],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             for line in result.stdout.strip().split("\n"):
                 line = line.strip()

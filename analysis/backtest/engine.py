@@ -1,20 +1,20 @@
-# -*- coding: utf-8 -*-
 """简单回测引擎骨架 — 信号驱动，逐日模拟"""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from system.config.settings import (
     DEFAULT_COMMISSION_RATE,
     DEFAULT_SLIPPAGE,
+    MAX_SINGLE_STOCK_PCT,
     MIN_COMMISSION,
     STAMP_TAX_RATE,
-    MAX_SINGLE_STOCK_PCT,
 )
 
 
 @dataclass
 class BacktestConfig:
     """回测参数"""
+
     initial_cash: float = 100_000
     commission_rate: float = DEFAULT_COMMISSION_RATE
     slippage: float = DEFAULT_SLIPPAGE
@@ -27,6 +27,7 @@ class BacktestConfig:
 @dataclass
 class Trade:
     """单笔交易记录"""
+
     stock_code: str
     entry_date: str
     exit_date: str | None = None
@@ -41,6 +42,7 @@ class Trade:
 @dataclass
 class OrderSignal:
     """回测用交易信号"""
+
     stock_code: str
     signal_date: str
     stop_loss: float | None = None
@@ -83,7 +85,9 @@ class BacktestEngine:
         # 为每个信号确定入场日和入场价（次交易日开盘价）
         entry_map: dict[str, list[OrderSignal]] = {}
         for sig in signals:
-            entry_date = self._find_entry_date(sig.signal_date, dates, sig.stock_code, stock_data)
+            entry_date = self._find_entry_date(
+                sig.signal_date, dates, sig.stock_code, stock_data
+            )
             if entry_date is None:
                 continue
             sig.entry_date = entry_date
@@ -105,16 +109,20 @@ class BacktestEngine:
                 if shares <= 0:
                     continue
                 cost = shares * price
-                commission = max(cost * self.config.commission_rate,
-                                 self.config.min_commission)
+                commission = max(
+                    cost * self.config.commission_rate, self.config.min_commission
+                )
                 total_cost = cost + commission
                 if total_cost > cash:
-                    shares = int((cash - self.config.min_commission) / price / 100) * 100
+                    shares = (
+                        int((cash - self.config.min_commission) / price / 100) * 100
+                    )
                     if shares <= 0:
                         continue
                     cost = shares * price
-                    commission = max(cost * self.config.commission_rate,
-                                     self.config.min_commission)
+                    commission = max(
+                        cost * self.config.commission_rate, self.config.min_commission
+                    )
                     total_cost = cost + commission
                 cash -= total_cost
                 trade = Trade(
@@ -131,7 +139,11 @@ class BacktestEngine:
                 if sc not in stock_data or d not in stock_data[sc].index:
                     continue
                 row = stock_data[sc].loc[d]
-                low, high, close = float(row["low"]), float(row["high"]), float(row["close"])
+                low, high, close = (
+                    float(row["low"]),
+                    float(row["high"]),
+                    float(row["close"]),
+                )
 
                 # 找到信号获取止损止盈
                 sig = next((s for s in signals if s.stock_code == sc), None)
@@ -152,8 +164,10 @@ class BacktestEngine:
 
                 if exit_price is not None:
                     sell_value = trade.shares * exit_price
-                    commission = max(sell_value * self.config.commission_rate,
-                                     self.config.min_commission)
+                    commission = max(
+                        sell_value * self.config.commission_rate,
+                        self.config.min_commission,
+                    )
                     stamp_tax = sell_value * self.config.stamp_tax_rate
                     net_sell = sell_value - commission - stamp_tax
                     buy_commission = max(
@@ -163,8 +177,14 @@ class BacktestEngine:
                     trade.exit_date = d
                     trade.exit_price = exit_price
                     trade.exit_reason = reason
-                    trade.pnl = net_sell - trade.shares * trade.entry_price - buy_commission
-                    trade.pnl_pct = trade.pnl / (trade.shares * trade.entry_price + buy_commission) * 100
+                    trade.pnl = (
+                        net_sell - trade.shares * trade.entry_price - buy_commission
+                    )
+                    trade.pnl_pct = (
+                        trade.pnl
+                        / (trade.shares * trade.entry_price + buy_commission)
+                        * 100
+                    )
                     cash += net_sell
                     to_close.append(sc)
 
@@ -177,20 +197,27 @@ class BacktestEngine:
                 for t in positions.values()
                 if t.stock_code in stock_data and d in stock_data[t.stock_code].index
             )
-            self.equity_curve.append({
-                "date": d,
-                "cash": cash,
-                "market_value": market_value,
-                "total": cash + market_value,
-            })
+            self.equity_curve.append(
+                {
+                    "date": d,
+                    "cash": cash,
+                    "market_value": market_value,
+                    "total": cash + market_value,
+                }
+            )
 
         return self.get_metrics()
 
-    def _find_entry_date(self, signal_date: str, dates: list,
-                         stock_code: str, stock_data: dict):
+    def _find_entry_date(
+        self, signal_date: str, dates: list, stock_code: str, stock_data: dict
+    ):
         """找到信号日之后的首个交易日"""
         for d in dates:
-            if d > signal_date and stock_code in stock_data and d in stock_data[stock_code].index:
+            if (
+                d > signal_date
+                and stock_code in stock_data
+                and d in stock_data[stock_code].index
+            ):
                 return d
         return None
 
@@ -198,14 +225,21 @@ class BacktestEngine:
         """计算并返回绩效指标"""
         if not self.equity_curve:
             return {
-                "total_return": 0.0, "annual_return": 0.0,
-                "sharpe_ratio": 0.0, "max_drawdown": 0.0,
-                "win_rate": 0.0, "profit_factor": 0.0,
-                "avg_win": 0.0, "avg_loss": 0.0,
-                "total_trades": 0, "avg_hold_days": 0.0,
+                "total_return": 0.0,
+                "annual_return": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "total_trades": 0,
+                "avg_hold_days": 0.0,
             }
         from .metrics import calculate_metrics
+
         return calculate_metrics(
-            self.trades, self.equity_curve,
+            self.trades,
+            self.equity_curve,
             initial_cash=self.config.initial_cash,
         )

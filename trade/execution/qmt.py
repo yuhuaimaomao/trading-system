@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """QMT 自动下单执行器 — 预留"""
 
 from analysis.signals import OrderSignal

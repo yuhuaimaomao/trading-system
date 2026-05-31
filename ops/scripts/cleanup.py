@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """周清理脚本 — 清理 storage/ 下旧文件 + 清理数据库旧电报
 
 独立运行:
@@ -8,23 +7,27 @@
 import re
 import shutil
 import sqlite3
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from system.config.settings import DATABASE_PATH, STORAGE_PATH
-from system.utils.logger import set_current_task, get_task_logger
+from system.utils.logger import get_task_logger, set_current_task
 
 
 def run():
-    set_current_task('cleanup')
-    logger = get_task_logger('cleanup')
+    set_current_task("cleanup")
+    logger = get_task_logger("cleanup")
 
     # 尝试使用交易日历，失败则回退到简单 timedelta（约 10 日历天 ≈ 7 交易日）
     try:
         from system.config.trading_calendar import get_previous_trading_day as _gptd
+
         cutoff_str = _gptd(offset=7)
-        cutoff = datetime.strptime(cutoff_str, "%Y-%m-%d") if cutoff_str else datetime.now() - timedelta(days=10)
+        cutoff = (
+            datetime.strptime(cutoff_str, "%Y-%m-%d")
+            if cutoff_str
+            else datetime.now() - timedelta(days=10)
+        )
     except Exception:
         cutoff = datetime.now() - timedelta(days=10)
 
@@ -105,15 +108,20 @@ def run():
     if db_path.exists():
         conn = sqlite3.connect(str(db_path))
         try:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT COUNT(*), COUNT(DISTINCT trade_date)
                 FROM cls_telegraph
                 WHERE trade_date < ?
-            """, (db_cutoff,))
+            """,
+                (db_cutoff,),
+            )
             row = cursor.fetchone()
             del_count, del_dates = row[0], row[1]
             if del_count > 0:
-                conn.execute("DELETE FROM cls_telegraph WHERE trade_date < ?", (db_cutoff,))
+                conn.execute(
+                    "DELETE FROM cls_telegraph WHERE trade_date < ?", (db_cutoff,)
+                )
                 conn.commit()
                 logger.info(f"  🗑️  电报：删除 {del_count} 条（{del_dates}天）")
             else:

@@ -1,20 +1,15 @@
-# -*- coding: utf-8 -*-
 """盯盘进程单元测试 — Watcher"""
 
-from datetime import date, time as dt_time, datetime
+from datetime import datetime
+from datetime import time as dt_time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from trade.monitor.watcher import (
     Watcher,
-    MORNING_START,
-    MORNING_END,
-    AFTERNOON_START,
-    MARKET_CLOSE,
 )
 from trade.portfolio.portfolio import Portfolio
-
 
 # =====================  Fixtures  =====================
 
@@ -35,10 +30,11 @@ def mock_qmt():
 
 
 @pytest.fixture
-def watcher(mock_telegram, mock_qmt):
-    w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+def watcher(mock_telegram, mock_qmt, tmp_path):
+    w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=str(tmp_path / "test.db"))
     w._trade_date = "2026-05-22"
     w._load_review_picks = MagicMock(return_value=[])
+    w._get_paper_trader = MagicMock()  # 防止测试中意外写生产库
     return w
 
 
@@ -313,18 +309,24 @@ class TestCheckPositions:
         """现价 <= 止损价应触发止损警报"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 10.50}
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        msg = mock_telegram.send.call_args[0][0]
-        assert "止损触发" in msg
+        assert mock_telegram.send.called
+        msg = mock_telegram.send.call_args_list[0][0][0]
+        assert "止损卖出" in msg
         assert "000001" in msg
         assert "10.50" in msg
         assert "11.00" in msg
@@ -333,57 +335,79 @@ class TestCheckPositions:
         """现价 == 止损价应触发止损警报"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 11.00}
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        assert "止损触发" in mock_telegram.send.call_args[0][0]
+        assert mock_telegram.send.called
+        assert "止损卖出" in mock_telegram.send.call_args_list[0][0][0]
 
     def test_take_profit_triggered(self, mock_telegram, mock_qmt):
         """现价 >= 止盈价应触发止盈警报"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 14.50}
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        msg = mock_telegram.send.call_args[0][0]
-        assert "止盈触发" in msg
+        assert mock_telegram.send.called
+        msg = mock_telegram.send.call_args_list[0][0][0]
+        assert "止盈卖出" in msg
 
     def test_take_profit_boundary(self, mock_telegram, mock_qmt):
         """现价 == 止盈价应触发止盈警报"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 14.00}
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        assert "止盈触发" in mock_telegram.send.call_args[0][0]
+        assert mock_telegram.send.called
+        assert "止盈卖出" in mock_telegram.send.call_args_list[0][0][0]
 
     def test_trailing_stop_triggered(self, mock_telegram, mock_qmt):
         """价格从高点回落超过 trailing_stop 应触发移动止盈"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
             trailing_stop=0.05,
         )
         # 模拟价格先涨到 13.00
@@ -391,30 +415,37 @@ class TestCheckPositions:
         pos.update_price(13.00)  # highest_price = 13.00
         assert pos.highest_price == 13.00
 
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         # 价格回落到 12.30，触发价 = 13.00 * (1-0.05) = 12.35
         prices = {"000001": 12.30}
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        msg = mock_telegram.send.call_args[0][0]
-        assert "移动止盈触发" in msg
+        assert mock_telegram.send.called
+        msg = mock_telegram.send.call_args_list[0][0][0]
+        assert "移动止盈卖出" in msg
         assert "13.00" in msg  # 最高价
 
     def test_trailing_stop_not_triggered_above_threshold(self, mock_telegram, mock_qmt):
         """价格回落但未超过 trailing_stop 阈值不应触发"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
             trailing_stop=0.05,
         )
         pos = p.positions["000001"]
         pos.update_price(13.00)  # highest_price = 13.00
 
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         # 价格回落到 12.40，触发价 = 13.00 * 0.95 = 12.35，12.40 > 12.35 不触发
@@ -429,10 +460,16 @@ class TestCheckPositions:
         """价格创出新高应更新 highest_price"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 13.50}
@@ -446,10 +483,16 @@ class TestCheckPositions:
         """正常价格波动不触发任何警报"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {"000001": 12.50}
@@ -461,10 +504,16 @@ class TestCheckPositions:
         """同一周期两者同时满足时，止损优先"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00, take_profit=14.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
+            take_profit=14.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         # 价格同时满足止损和止盈（不可能但测试边界)
@@ -475,17 +524,22 @@ class TestCheckPositions:
         pos.highest_price = 15.00  # 移动止盈触发价 = 14.25
         w._check_positions(prices)
 
-        mock_telegram.send.assert_called_once()
-        assert "止损触发" in mock_telegram.send.call_args[0][0]
+        assert mock_telegram.send.called
+        assert "止损卖出" in mock_telegram.send.call_args_list[0][0][0]
 
     def test_price_missing_skipped(self, mock_telegram, mock_qmt):
         """持仓股票无行情数据，跳过"""
         p = Portfolio(initial_cash=100000)
         p.open_position(
-            stock_code="000001", stock_name="平安银行", volume=1000, price=12.00,
-            entry_date="2026-05-22", stop_loss=11.00,
+            stock_code="000001",
+            stock_name="平安银行",
+            volume=1000,
+            price=12.00,
+            entry_date="2026-05-22",
+            stop_loss=11.00,
         )
-        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+        w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w.portfolio = p
 
         prices = {}  # 无行情数据
@@ -537,10 +591,14 @@ class TestGetWatchCodes:
         """同时获取信号和持仓中的股票代码"""
         watcher.repo = MagicMock()
         watcher.repo.get_pending_signals.return_value = [
-            {"stock_code": "000001"}, {"stock_code": "000002"},
+            {"stock_code": "000001"},
+            {"stock_code": "000002"},
         ]
         watcher.portfolio.open_position(
-            stock_code="000003", stock_name="测试", volume=100, price=10.00,
+            stock_code="000003",
+            stock_name="测试",
+            volume=100,
+            price=10.00,
         )
         codes = watcher._get_watch_codes()
         assert sorted(codes) == ["000001", "000002", "000003"]
@@ -559,7 +617,10 @@ class TestGetWatchCodes:
         watcher.repo = MagicMock()
         watcher.repo.get_pending_signals.return_value = []
         watcher.portfolio.open_position(
-            stock_code="000001", stock_name="测试", volume=100, price=10.00,
+            stock_code="000001",
+            stock_name="测试",
+            volume=100,
+            price=10.00,
         )
         codes = watcher._get_watch_codes()
         assert codes == ["000001"]
@@ -582,13 +643,15 @@ class TestAlert:
 
     def test_alert_no_telegram(self):
         """没有 Telegram bot 时不应抛异常"""
-        w = Watcher(telegram_bot=None)
+        w = Watcher(telegram_bot=None, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w._alert("测试消息")  # Should not crash
 
     def test_alert_telegram_exception(self, mock_telegram):
         """Telegram 发送失败不应抛异常"""
         mock_telegram.send.side_effect = Exception("send failed")
-        w = Watcher(telegram_bot=mock_telegram)
+        w = Watcher(telegram_bot=mock_telegram, db_path=":memory:")
+        w._get_paper_trader = MagicMock()
         w._alert("测试消息")  # Should not crash
 
 

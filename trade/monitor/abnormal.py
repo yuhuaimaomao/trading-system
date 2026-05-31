@@ -1,168 +1,233 @@
-# -*- coding: utf-8 -*-
-"""异动检测 — 行业 + 概念板块，按成分股计算涨跌幅，3轮累计异动时推送"""
+"""异动检测 + 换仓评估 + 板块热度。
+
+Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
+"""
 
 import logging
-import sqlite3
-from collections import defaultdict
+import time
+from datetime import datetime
 
 from system.config import settings
 
 logger = logging.getLogger(__name__)
 
-SECTOR_SURGE_PCT = getattr(settings, "ABNORMAL_SECTOR_SURGE_PCT", 1.5)
-MIN_STOCKS = 3
+
+class AbnormalMonitorMixin:
+    """异动检测 + 换仓评估 + 板块热度。"""
+
+    def _check_sector_heat(self, snapshot: dict[str, dict]):
+        monitor = self._get_sector_monitor()
+        if monitor is None:
+            return
+        try:
+            messages = monitor.check(snapshot)
+            for msg in messages:
+                self._alert(msg)
+        except Exception as e:
+            logger.warning(f"板块热度检查异常: {e}")
+
+    def _get_sector_monitor(self):
+        if self._sector_monitor is None:
+            try:
+                from trade.monitor.sector_heat import SectorHeatMonitor
+
+                self._sector_monitor = SectorHeatMonitor(
+                    db_path=self.db_path,
+                    telegram_bot=self.telegram,
+                )
+            except Exception as e:
+                logger.warning(f"板块热度监控器初始化失败: {e}")
+        return self._sector_monitor
+
+    # ======================== 第三层：异动检测 ========================
+
+    def _check_abnormal(self, prices: dict[str, float]):
+        detector = self._get_abnormal_detector()
+        if detector is None:
+            return
+        try:
+            if self._market_snapshot:
+                current_snapshot = self._market_snapshot
+            else:
+                current_snapshot = self._build_market_snapshot(prices)
+            messages = detector.detect_sector(current_snapshot, self._prev_snapshot)
+            self._prev_snapshot = current_snapshot
+            if messages:
+                self._alert("\n".join(messages))
+        except Exception as e:
+            logger.warning(f"异动检测异常: {e}")
+
+    def _evaluate_swaps(self, prices: dict[str, float]):
+        """每15分钟主动评估换仓：AI 实时判断是否卖出某持仓换入候选。"""
+        pt = self._get_paper_trader()
+        if not pt or len(pt.portfolio.positions) < 3:
+            return
+
+        try:
+            signals = self.repo.get_pending_signals(account="paper")
+        except Exception as e:
+            logger.warning(f"换仓评估获取信号失败: {e}")
+            return
+
+        candidates = []
+        for s in signals:
+            code = s["stock_code"]
+            price = prices.get(code)
+            if price is None:
+                continue
+            buy_min = s.get("buy_zone_min") or 0
+            buy_max = s.get("buy_zone_max") or 0
+            if buy_min <= 0:
+                continue
+            in_or_near = buy_min * 0.95 <= price <= buy_max
+            if in_or_near:
+                snap = (
+                    self._market_snapshot.get(code, {}) if self._market_snapshot else {}
+                )
+                industry = (
+                    self._industry_cache.get(code, "")
+                    if hasattr(self, "_industry_cache")
+                    else ""
+                )
+                sec_trend = ""
+                if industry and hasattr(self, "_sector_trend_history"):
+                    history = self._sector_trend_history.get(industry, [])
+                    if history:
+                        sec_trend = f"{history[-1]:+.1f}%"
+                candidates.append(
+                    {
+                        "code": code,
+                        "name": s.get("stock_name", ""),
+                        "price": price,
+                        "change_pct": snap.get("changePct", 0),
+                        "score": s.get("signal_score", 0) or 0,
+                        "sl": s.get("stop_loss", 0) or 0,
+                        "tp": s.get("take_profit", 0) or 0,
+                        "buy_min": buy_min,
+                        "buy_max": buy_max,
+                        "sector": industry,
+                        "sector_trend": sec_trend,
+                    }
+                )
+                concepts = self._concept_cache.get(code, [])
+                if concepts and self._concept_stats:
+                    top = sorted(
+                        concepts,
+                        key=lambda c: abs(
+                            self._concept_stats.get(c, {}).get("change_pct", 0)
+                        ),
+                        reverse=True,
+                    )[:3]
+                    candidates[-1]["concepts"] = top
+
+        if not candidates:
+            return
+
+        ctx = ""
+        if self._index_prices and len(self._index_prices) >= 2:
+            idx_chg = (
+                (self._index_prices[-1] - self._index_prices[-2])
+                / self._index_prices[-2]
+                * 100
+            )
+            ctx = f"上证指数 日内变动{idx_chg:+.2f}%"
+
+        price_info = {}
+        if self._market_snapshot:
+            for code, pos in pt.portfolio.positions.items():
+                snap = self._market_snapshot.get(code, {})
+                info = {"change_pct": snap.get("changePct", 0)}
+                industry = pos.sector_code
+                if industry and hasattr(self, "_sector_trend_history"):
+                    history = self._sector_trend_history.get(industry, [])
+                    if history:
+                        info["sector_trend"] = f"{history[-1]:+.1f}%"
+                concepts = self._concept_cache.get(code, [])
+                if concepts and self._concept_stats:
+                    top = sorted(
+                        concepts,
+                        key=lambda c: abs(
+                            self._concept_stats.get(c, {}).get("change_pct", 0)
+                        ),
+                        reverse=True,
+                    )[:3]
+                    info["concepts"] = top
+                price_info[code] = info
+
+        all_codes = set(c["code"] for c in candidates) | set(
+            pt.portfolio.positions.keys()
+        )
+        sector_context = self._build_sector_context(all_codes)
+
+        logger.info(
+            f"主动换仓评估: {len(candidates)} 个候选, {len(pt.portfolio.positions)} 个持仓"
+        )
+        try:
+            swapped = pt.evaluate_swaps(
+                candidates,
+                market_context=ctx,
+                price_info=price_info,
+                sector_context=sector_context,
+            )
+            if swapped:
+                self._invalidate_watch_codes_cache()
+        except Exception as e:
+            logger.warning(f"换仓评估异常: {e}")
+
+    def _get_abnormal_detector(self):
+        if self._abnormal_detector is None:
+            self._abnormal_detector = AbnormalDetector()
+        return self._abnormal_detector
+
+    @staticmethod
+    def _build_market_snapshot(prices: dict[str, float]) -> dict:
+        """将当前价格字典转为 snapshot 格式供异动检测器使用。"""
+        return {
+            code: {"price": p, "timestamp": time.time()} for code, p in prices.items()
+        }
+
+    # ======================== 收盘收尾 ========================
 
 
 class AbnormalDetector:
-    """按板块成分股计算平均涨跌幅，覆盖行业和概念，3轮累计超阈值推送。"""
-
-    def __init__(self, db_path: str, telegram_bot=None):
-        self.db_path = db_path
-        self.telegram = telegram_bot
-        self._sector_history: dict[tuple, list[float]] = defaultdict(list)
-        self._concept_map: dict[str, list[str]] | None = None
-
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path)
-
-    # ------------------------------------------------------------------
-    # 数据加载
-    # ------------------------------------------------------------------
-
-    def _load_stock_info(self) -> dict[str, dict]:
-        # 盘中不变化，懒加载缓存
-        if hasattr(self, "_stock_info_cache"):
-            return self._stock_info_cache
-        try:
-            conn = self._get_conn()
-            rows = conn.execute(
-                """SELECT stock_code, stock_name, industry, total_market_cap
-                   FROM stock_basic
-                   WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)"""
-            ).fetchall()
-            conn.close()
-            info: dict[str, dict] = {}
-            for r in rows:
-                code = r[0]
-                name = r[1] or ""
-                mcap = r[3] or 0
-                if code.startswith("688"):
-                    continue
-                if "ST" in name:
-                    continue
-                if mcap < 5e9 or mcap > 500e9:
-                    continue
-                info[code] = {"name": name, "industry": r[2] or "其他"}
-            self._stock_info_cache = info
-            return info
-        except Exception as e:
-            logger.warning(f"加载 stock_basic 失败: {e}")
-            return {}
-
-    def _load_concept_map(self) -> dict[str, list[str]]:
-        """加载概念板块映射 {stock_code: [concept_name, ...]}，懒加载一次。"""
-        if self._concept_map is not None:
-            return self._concept_map
-        try:
-            conn = self._get_conn()
-            rows = conn.execute(
-                """SELECT ss.stock_code, si.sector_name
-                   FROM sector_stocks ss
-                   JOIN sector_info si ON si.sector_code = ss.sector_code
-                   WHERE si.sector_type = 'concept'"""
-            ).fetchall()
-            conn.close()
-            cmap: dict[str, list[str]] = defaultdict(list)
-            for code, name in rows:
-                cmap[code].append(name)
-            self._concept_map = dict(cmap)
-            return self._concept_map
-        except Exception as e:
-            logger.warning(f"加载概念映射失败: {e}")
-            self._concept_map = {}
-            return {}
-
-    # ------------------------------------------------------------------
-    # 主入口
-    # ------------------------------------------------------------------
+    """盘中异动检测器 — 急速拉升 / 量比暴增 / 逼近涨停。"""
 
     def detect_sector(self, current: dict, previous: dict) -> list[str]:
-        """按成分股计算板块均涨跌幅（行业+概念），3轮累计超阈值推送。"""
-        if not previous:
-            return []
+        """对比两轮快照，返回异动告警消息列表。"""
+        alerts = []
+        if not current or not previous:
+            return alerts
 
-        stock_info = self._load_stock_info()
-        concept_map = self._load_concept_map()
+        rapid_rise = getattr(settings, "ABNORMAL_RAPID_RISE_PCT", 1.0)
+        vol_surge = getattr(settings, "ABNORMAL_VOLUME_SURGE_RATIO", 3.0)
+        near_limit = getattr(settings, "ABNORMAL_NEAR_LIMIT_PCT", 7.0)
 
-        # key: (type, name) → list of changes
-        sector_changes: dict[tuple, list[float]] = defaultdict(list)
-        sector_stocks: dict[tuple, list[tuple]] = defaultdict(list)
+        rapid_list = []
+        vol_list = []
+        limit_list = []
 
-        for code, cur_data in current.items():
-            info = stock_info.get(code)
-            if info is None:
-                continue
-            prev_data = previous.get(code)
-            if prev_data is None:
-                continue
-            cur_price = cur_data.get("price")
-            prev_price = prev_data.get("price")
-            if cur_price is None or prev_price is None or prev_price <= 0:
-                continue
+        for code, info in current.items():
+            prev = previous.get(code, {})
+            cur_chg = float(info.get("changePct", 0))
+            prev_chg = float(prev.get("changePct", 0))
 
-            change_pct = (cur_price - prev_price) / prev_price * 100
-            stock_entry = (code, info["name"], change_pct, cur_price)
+            if cur_chg - prev_chg > rapid_rise:
+                rapid_list.append(f"{code} {cur_chg - prev_chg:+.1f}%")
 
-            # 行业
-            ind_key = ("industry", info["industry"])
-            sector_changes[ind_key].append(change_pct)
-            sector_stocks[ind_key].append(stock_entry)
+            cur_vol = float(info.get("amount", 0))
+            prev_vol = float(prev.get("amount", 0))
+            if prev_vol > 0 and cur_vol > prev_vol * vol_surge:
+                vol_list.append(f"{code} {cur_vol / prev_vol:.0f}×")
 
-            # 概念（一只票属于多个概念）
-            for cname in concept_map.get(code, []):
-                con_key = ("concept", cname)
-                sector_changes[con_key].append(change_pct)
-                sector_stocks[con_key].append(stock_entry)
+            if cur_chg >= near_limit and prev_chg < near_limit:
+                limit_list.append(f"{code} {cur_chg:+.1f}%")
 
-        # 计算均涨跌幅
-        sector_avg: dict[tuple, float] = {}
-        for key, changes in sector_changes.items():
-            if len(changes) >= MIN_STOCKS:
-                sector_avg[key] = sum(changes) / len(changes)
+        now = datetime.now().strftime("%H:%M")
+        if rapid_list:
+            alerts.append(f"🏭 急速拉升 {now}\n   " + " ".join(rapid_list))
+        if vol_list:
+            alerts.append(f"📊 量比暴增 {now}\n   " + " ".join(vol_list))
+        if limit_list:
+            alerts.append(f"🔥 逼近涨停 {now}\n   " + " ".join(limit_list))
 
-        # 更新 3 轮历史
-        for key, avg in sector_avg.items():
-            self._sector_history[key].append(avg)
-            if len(self._sector_history[key]) > 3:
-                self._sector_history[key] = self._sector_history[key][-3:]
-
-        # 检测异动：3轮累计超阈值
-        messages: list[str] = []
-        for key, history in self._sector_history.items():
-            if len(history) < 3:
-                continue
-            cumulative = sum(history)
-            if abs(cumulative) < SECTOR_SURGE_PCT:
-                continue
-
-            stype, sname = key
-            label = "🏭" if stype == "industry" else "💡"
-            direction = "涨" if cumulative > 0 else "跌"
-
-            stocks = sector_stocks.get(key, [])
-            stocks.sort(key=lambda x: abs(x[2]), reverse=True)
-            shown = stocks[:5]
-
-            stock_lines = []
-            for s in shown:
-                arrow = "↑" if s[2] > 0 else "↓"
-                stock_lines.append(f"  {s[0]} {s[1]} {arrow}{abs(s[2]):.1f}% 现价{s[3]:.2f}")
-
-            messages.append(
-                f"{label} {sname} 板块异动 | 3轮累计{direction}{abs(cumulative):.1f}%\n"
-                + "\n".join(stock_lines)
-            )
-
-            self._sector_history[key] = []
-
-        return messages
+        return alerts

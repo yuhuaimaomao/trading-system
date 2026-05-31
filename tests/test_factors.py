@@ -1,38 +1,38 @@
-import pytest
 from analysis.screening.factors import (
-    check_hard_gates,
-    check_volume_breakout,
-    check_volume_pullback,
     check_amplitude_contract,
-    check_main_force_buy,
     check_chip_concentrate,
     check_consecutive_yang,
-    check_pullback_hold,
-    check_trend_persist,
-    check_low_volatility,
-    check_volume_expand,
-    check_trend_strength,
-    check_rps_20_strong,
-    check_rps_60_strong,
-    check_rps_120_strong,
-    check_rps_resonance,
-    check_sector_hot,
+    check_hard_gates,
     check_leader_in_sector,
-    check_stronger_than_sector,
+    check_low_volatility,
+    check_main_force_buy,
+    check_pullback_hold,
     check_sector_fund_resonance,
+    check_sector_hot,
+    check_stronger_than_sector,
+    check_trend_persist,
+    check_trend_strength,
+    check_volume_breakout,
+    check_volume_expand,
+    check_volume_pullback,
 )
-
 
 # ============================================================
 # 硬关卡
 # ============================================================
 
+
 class TestHardGates:
     def _ok_row(self, **overrides):
         row = {
-            "stock_name": "平安银行", "stock_code": "000001",
-            "change_pct": 2.0, "total_market_cap": 200_0000_0000,
-            "volume_ratio": 1.2, "ma5": 11.0, "ma10": 10.8, "ma20": 10.5,
+            "stock_name": "平安银行",
+            "stock_code": "000001",
+            "change_pct": 2.0,
+            "total_market_cap": 200_0000_0000,
+            "volume_ratio": 1.2,
+            "ma5": 11.0,
+            "ma10": 10.8,
+            "ma20": 10.5,
             "price": 11.2,
         }
         row.update(overrides)
@@ -47,8 +47,11 @@ class TestHardGates:
     def test_688_fail(self):
         assert check_hard_gates(self._ok_row(stock_code="688001")) is False
 
-    def test_limit_up_fail(self):
-        assert check_hard_gates(self._ok_row(change_pct=9.8)) is False
+    def test_limit_up_pass_and_flagged(self):
+        """涨停股通过硬关卡（标记但不拦截），后续 Watcher._is_limit_up 负责拦截买入."""
+        row = self._ok_row(change_pct=9.8)
+        assert check_hard_gates(row) is True
+        assert row.get("is_limit_up") is True  # 已标记涨停
 
     def test_small_mcap_fail(self):
         assert check_hard_gates(self._ok_row(total_market_cap=30_0000_0000)) is False
@@ -68,6 +71,7 @@ class TestHardGates:
 # 量价类
 # ============================================================
 
+
 class TestVolumeFactors:
     def test_breakout(self):
         assert check_volume_breakout({"volume_ratio": 1.8}, []) == "放量启动"
@@ -80,10 +84,14 @@ class TestVolumeFactors:
         assert check_volume_pullback(row, []) == "缩量回调"
 
     def test_pullback_none_up(self):
-        assert check_volume_pullback({"volume_ratio": 0.6, "change_pct": 1.0}, []) is None
+        assert (
+            check_volume_pullback({"volume_ratio": 0.6, "change_pct": 1.0}, []) is None
+        )
 
     def test_pullback_none_vol_high(self):
-        assert check_volume_pullback({"volume_ratio": 0.9, "change_pct": -1.0}, []) is None
+        assert (
+            check_volume_pullback({"volume_ratio": 0.9, "change_pct": -1.0}, []) is None
+        )
 
     def test_amplitude_contract(self):
         assert check_amplitude_contract({"amplitude": 2.5}, []) == "蓄力中"
@@ -95,6 +103,7 @@ class TestVolumeFactors:
 # ============================================================
 # 资金类
 # ============================================================
+
 
 class TestFundFlowFactors:
     def test_main_force_buy(self):
@@ -121,6 +130,7 @@ class TestFundFlowFactors:
 # ============================================================
 # 多日类
 # ============================================================
+
 
 class TestMultiDayFactors:
     def test_consecutive_yang_3(self):
@@ -195,13 +205,26 @@ class TestMultiDayFactors:
         # 10-day cum return = (1.01)^10 - 1 ≈ 10.46% > 5%
         # varied values so std > 0 for sharpe
         history = [
-            {"change_pct": 1.0}, {"change_pct": 0.8}, {"change_pct": 1.2},
-            {"change_pct": 1.1}, {"change_pct": 0.9}, {"change_pct": 1.3},
-            {"change_pct": 1.0}, {"change_pct": 0.7}, {"change_pct": 1.1},
-            {"change_pct": 1.0}, {"change_pct": 0.9}, {"change_pct": 1.2},
-            {"change_pct": 1.0}, {"change_pct": 0.8}, {"change_pct": 1.1},
-            {"change_pct": 1.3}, {"change_pct": 0.9}, {"change_pct": 1.0},
-            {"change_pct": 1.1}, {"change_pct": 0.8},
+            {"change_pct": 1.0},
+            {"change_pct": 0.8},
+            {"change_pct": 1.2},
+            {"change_pct": 1.1},
+            {"change_pct": 0.9},
+            {"change_pct": 1.3},
+            {"change_pct": 1.0},
+            {"change_pct": 0.7},
+            {"change_pct": 1.1},
+            {"change_pct": 1.0},
+            {"change_pct": 0.9},
+            {"change_pct": 1.2},
+            {"change_pct": 1.0},
+            {"change_pct": 0.8},
+            {"change_pct": 1.1},
+            {"change_pct": 1.3},
+            {"change_pct": 0.9},
+            {"change_pct": 1.0},
+            {"change_pct": 1.1},
+            {"change_pct": 0.8},
         ]
         result = check_trend_strength({}, history)
         assert result == "趋势强劲"
@@ -219,31 +242,18 @@ class TestMultiDayFactors:
 # RPS 类
 # ============================================================
 
+
 class TestRPSFactors:
-    def test_rps20_strong(self):
-        assert check_rps_20_strong({"rps_20": 0.85}, []) == "RPS20强"
+    """RPS 因子已迁移到 profiles.py 的 _calc_rps()，不再作为独立 check 函数。
+    后续如需测试 RPS，请通过 TestProfileBuilder 验证 StockProfile.rps_20/60/120 字段。"""
 
-    def test_rps20_not_strong(self):
-        assert check_rps_20_strong({"rps_20": 0.75}, []) is None
-
-    def test_rps60_strong(self):
-        assert check_rps_60_strong({"rps_60": 0.90}, []) == "RPS60强"
-
-    def test_rps120_strong(self):
-        assert check_rps_120_strong({"rps_120": 0.82}, []) == "RPS120强"
-
-    def test_rps_resonance(self):
-        row = {"rps_20": 0.75, "rps_60": 0.80}
-        assert check_rps_resonance(row, []) == "RPS多周期共振"
-
-    def test_rps_resonance_none(self):
-        row = {"rps_20": 0.75, "rps_60": 0.60}
-        assert check_rps_resonance(row, []) is None
+    pass
 
 
 # ============================================================
 # 板块类
 # ============================================================
+
 
 class TestSectorFactors:
     def test_sector_hot(self):
@@ -251,24 +261,35 @@ class TestSectorFactors:
         sector_hot = {"BK1036": 2}
         stock_sectors = {"000001": ["BK1036"]}
         assert (
-            check_sector_hot(row, [], sector_hot=sector_hot, stock_sectors=stock_sectors)
+            check_sector_hot(
+                row, [], sector_hot=sector_hot, stock_sectors=stock_sectors
+            )
             == "板块加持"
         )
 
     def test_sector_not_hot(self):
         row = {"stock_code": "000001"}
         assert (
-            check_sector_hot(row, [], sector_hot={}, stock_sectors={"000001": ["BK1036"]})
+            check_sector_hot(
+                row, [], sector_hot={}, stock_sectors={"000001": ["BK1036"]}
+            )
             is None
         )
 
     def test_leader_in_sector(self):
         row = {"stock_code": "000001", "change_pct": 5.0}
         sector_stocks_pct = {"000001": 5.0, "000002": 3.0, "000003": 2.0}
-        stock_sectors = {"000001": ["BK1036"], "000002": ["BK1036"], "000003": ["BK1036"]}
+        stock_sectors = {
+            "000001": ["BK1036"],
+            "000002": ["BK1036"],
+            "000003": ["BK1036"],
+        }
         assert (
             check_leader_in_sector(
-                row, [], sector_stocks_pct=sector_stocks_pct, stock_sectors=stock_sectors,
+                row,
+                [],
+                sector_stocks_pct=sector_stocks_pct,
+                stock_sectors=stock_sectors,
             )
             == "领涨龙头"
         )
@@ -277,17 +298,25 @@ class TestSectorFactors:
         # 000005 在 5 只股票中排第 4，不在前 3
         row = {"stock_code": "000005", "change_pct": 2.0}
         sector_stocks_pct = {
-            "000001": 5.0, "000002": 4.5, "000003": 3.5,
-            "000004": 3.0, "000005": 2.0,
+            "000001": 5.0,
+            "000002": 4.5,
+            "000003": 3.5,
+            "000004": 3.0,
+            "000005": 2.0,
         }
         stock_sectors = {
-            "000001": ["BK1036"], "000002": ["BK1036"],
-            "000003": ["BK1036"], "000004": ["BK1036"],
+            "000001": ["BK1036"],
+            "000002": ["BK1036"],
+            "000003": ["BK1036"],
+            "000004": ["BK1036"],
             "000005": ["BK1036"],
         }
         assert (
             check_leader_in_sector(
-                row, [], sector_stocks_pct=sector_stocks_pct, stock_sectors=stock_sectors,
+                row,
+                [],
+                sector_stocks_pct=sector_stocks_pct,
+                stock_sectors=stock_sectors,
             )
             is None
         )
@@ -298,7 +327,10 @@ class TestSectorFactors:
         stock_sectors = {"000001": ["BK1036"]}
         assert (
             check_stronger_than_sector(
-                row, [], sector_changes=sector_changes, stock_sectors=stock_sectors,
+                row,
+                [],
+                sector_changes=sector_changes,
+                stock_sectors=stock_sectors,
             )
             == "强于板块"
         )
@@ -309,7 +341,10 @@ class TestSectorFactors:
         stock_sectors = {"000001": ["BK1036"]}
         assert (
             check_stronger_than_sector(
-                row, [], sector_changes=sector_changes, stock_sectors=stock_sectors,
+                row,
+                [],
+                sector_changes=sector_changes,
+                stock_sectors=stock_sectors,
             )
             is None
         )
@@ -320,7 +355,10 @@ class TestSectorFactors:
         stock_sectors = {"000001": ["BK1036"]}
         assert (
             check_sector_fund_resonance(
-                row, [], sector_funds=sector_funds, stock_sectors=stock_sectors,
+                row,
+                [],
+                sector_funds=sector_funds,
+                stock_sectors=stock_sectors,
             )
             == "资金共振"
         )

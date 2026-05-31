@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """trading-system CLI 入口"""
 
 import sys
@@ -6,33 +5,50 @@ import sys
 # 全局：绕过 Shadowrocket/Surge/Clash 的 DNS 劫持
 # 必须在所有网络请求之前安装
 from system.utils.dns_bypass import install as _install_dns_bypass
+
 _install_dns_bypass()
 
-COMMANDS = ["review", "morning", "strategy", "monitor", "collect",
-            "cleanup", "portfolio", "compare", "trade",
-            "backtest", "test", "track", "listen"]
+COMMANDS = [
+    "review",
+    "morning",
+    "strategy",
+    "monitor",
+    "collect",
+    "cleanup",
+    "portfolio",
+    "compare",
+    "trade",
+    "backtest",
+    "test",
+    "track",
+    "listen",
+    "qmt-collect",
+    "strategy-audit",
+]
 
 
 def cmd_review():
     """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送，成功后自动跑策略管线"""
     import sys
+
     from analysis.review.service import ReviewService
 
-    analyze_only = '--analyze-only' in sys.argv
+    analyze_only = "--analyze-only" in sys.argv
 
     service = ReviewService()
     ok = service.generate_and_send(analyze_only=analyze_only)
     if ok:
         cmd_strategy()
 
+
 def cmd_morning():
     """盘前简报：隔夜宏观 + 候选池确认 + 推送"""
     from analysis.morning import MorningBrief
+    from system.utils.logger import get_task_logger, set_current_task
     from system.utils.telegram import MessageSender
-    from system.utils.logger import set_current_task, get_task_logger
 
-    set_current_task('morning')
-    logger = get_task_logger('morning')
+    set_current_task("morning")
+    logger = get_task_logger("morning")
 
     telegram = None
     try:
@@ -43,28 +59,35 @@ def cmd_morning():
     brief = MorningBrief(telegram_bot=telegram)
     brief.generate_and_send()
 
+
 def cmd_monitor():
     """盘中盯盘 — 拉起 Watcher 进程（PID 文件防多实例）"""
-    import os
     import atexit
-    from system.config.settings import PROJECT_ROOT
+    import os
 
     # stdout/stderr 重定向必须在 import Watcher 之前（logger 初始化时会捕获 sys.stdout）
     import sys as _sys
     from datetime import datetime as _dt
-    _log_dir = PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
+
+    from system.config.settings import PROJECT_ROOT
+
+    _log_dir = (
+        PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
+    )
     _log_dir.mkdir(parents=True, exist_ok=True)
-    _monitor_fh = open(str(_log_dir / "monitor_output.log"), "a", encoding="utf-8", buffering=1)
+    _monitor_fh = open(
+        str(_log_dir / "monitor_output.log"), "a", encoding="utf-8", buffering=1
+    )
     _sys.stdout = _monitor_fh
     _sys.stderr = _monitor_fh
 
-    from trade.monitor.watcher import Watcher
     from data.live.quotes import QuoteClient
+    from system.utils.logger import get_task_logger, set_current_task
     from system.utils.telegram import MessageSender
-    from system.utils.logger import set_current_task, get_task_logger
+    from trade.monitor.watcher import Watcher
 
-    set_current_task('monitor')
-    logger = get_task_logger('monitor')
+    set_current_task("monitor")
+    logger = get_task_logger("monitor")
 
     PID_FILE = str(PROJECT_ROOT / "storage" / "watcher.pid")
 
@@ -88,6 +111,7 @@ def cmd_monitor():
             os.remove(PID_FILE)
         except OSError:
             pass
+
     atexit.register(_cleanup)
 
     telegram = None
@@ -105,7 +129,7 @@ def cmd_monitor():
     watcher = Watcher(
         telegram_bot=telegram,
         qmt_quote=qmt_quote,
-        scan_interval=0,
+        scan_interval=60,
     )
     try:
         watcher.run()
@@ -117,44 +141,125 @@ def cmd_monitor():
     finally:
         _cleanup()
 
+
 def cmd_collect():
     """数据采集 — 16个采集器，独立 try/except"""
     import sys
     from datetime import datetime
-    from system.utils.logger import set_current_task, get_task_logger, get_collector_logger
 
-    set_current_task('collect')
-    logger = get_task_logger('collect')
+    from system.utils.logger import (
+        get_task_logger,
+        set_current_task,
+    )
+
+    set_current_task("collect")
+    logger = get_task_logger("collect")
     trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    from system.config.trading_calendar import is_trading_day
+
+    if not is_trading_day(trade_date):
+        logger.info(f"{trade_date} 非交易日，跳过采集")
+        return
     logger.info(f"开始数据采集 {trade_date}")
 
     # Module filter support
     module_filter = None
-    if '--module' in sys.argv:
-        idx = sys.argv.index('--module')
+    if "--module" in sys.argv:
+        idx = sys.argv.index("--module")
         if idx + 1 < len(sys.argv):
             module_filter = sys.argv[idx + 1]
 
     # All collectors: (name, module_path, class_name, category)
     collectors = [
         # Market (行情)
-        ("stock_basic", "data.collectors.market.stock_basic_collector", "StockBasicCollector", "market"),
-        ("main_index", "data.collectors.market.main_index_collector", "MainIndexCollector", "market"),
-        ("industry_board", "data.collectors.market.industry_board_collector", "IndustryBoardCollector", "market"),
-        ("concept_board", "data.collectors.market.concept_board_collector", "ConceptBoardCollector", "market"),
-        ("sector_stocks", "data.collectors.market.sector_stocks_collector", "SectorStocksCollector", "market"),
-        ("suspend_resume", "data.collectors.market.suspend_resume_collector", "SuspendResumeCollector", "market"),
+        (
+            "stock_basic",
+            "data.collectors.market.stock_basic_collector",
+            "StockBasicCollector",
+            "market",
+        ),
+        (
+            "main_index",
+            "data.collectors.market.main_index_collector",
+            "MainIndexCollector",
+            "market",
+        ),
+        (
+            "industry_board",
+            "data.collectors.market.industry_board_collector",
+            "IndustryBoardCollector",
+            "market",
+        ),
+        (
+            "concept_board",
+            "data.collectors.market.concept_board_collector",
+            "ConceptBoardCollector",
+            "market",
+        ),
+        (
+            "sector_stocks",
+            "data.collectors.market.sector_stocks_collector",
+            "SectorStocksCollector",
+            "market",
+        ),
+        (
+            "suspend_resume",
+            "data.collectors.market.suspend_resume_collector",
+            "SuspendResumeCollector",
+            "market",
+        ),
         # News (盘中电报)
-        ("telegraph", "data.collectors.events.telegraph_collector", "TelegraphCollector", "news"),
+        (
+            "telegraph",
+            "data.collectors.events.telegraph_collector",
+            "TelegraphCollector",
+            "news",
+        ),
         # Events (事件)
-        ("cls_digest", "data.collectors.events.cls_digest_collector", "CLSDigestCollector", "events"),
+        (
+            "cls_digest",
+            "data.collectors.events.cls_digest_collector",
+            "CLSDigestCollector",
+            "events",
+        ),
         ("lhb", "data.collectors.events.lhb_collector", "LHBCollector", "events"),
-        ("limit_pool", "data.collectors.events.limit_pool_collector", "LimitPoolCollector", "events"),
-        ("strong_stock", "data.collectors.events.strong_stock_collector", "StrongStockCollector", "events"),
-        ("regulatory", "data.collectors.events.regulatory_letter_collector", "RegulatoryLetterCollector", "events"),
-        ("stock_monitor", "data.collectors.events.stock_monitor_collector", "StockMonitorCollector", "events"),
-        ("shareholder", "data.collectors.events.share_holder_change_collector", "ShareHolderChangeCollector", "events"),
-        ("notice", "data.collectors.events.notice_collector", "NoticeCollector", "events"),
+        (
+            "limit_pool",
+            "data.collectors.events.limit_pool_collector",
+            "LimitPoolCollector",
+            "events",
+        ),
+        (
+            "strong_stock",
+            "data.collectors.events.strong_stock_collector",
+            "StrongStockCollector",
+            "events",
+        ),
+        (
+            "regulatory",
+            "data.collectors.events.regulatory_letter_collector",
+            "RegulatoryLetterCollector",
+            "events",
+        ),
+        (
+            "stock_monitor",
+            "data.collectors.events.stock_monitor_collector",
+            "StockMonitorCollector",
+            "events",
+        ),
+        (
+            "shareholder",
+            "data.collectors.events.share_holder_change_collector",
+            "ShareHolderChangeCollector",
+            "events",
+        ),
+        (
+            "notice",
+            "data.collectors.events.notice_collector",
+            "NoticeCollector",
+            "events",
+        ),
         # Macro (宏观)
         ("macro", "data.collectors.macro.macro_collector", "MacroCollector", "macro"),
     ]
@@ -164,6 +269,7 @@ def cmd_collect():
         logger.info(f"筛选模块: {module_filter} -> {len(collectors)} 个采集器")
 
     import importlib
+
     success = 0
     failed = 0
     for name, module_path, class_name, category in collectors:
@@ -180,27 +286,36 @@ def cmd_collect():
 
     logger.info(f"采集完成: {success} 成功, {failed} 失败")
 
+
 def cmd_cleanup():
     """周清理：清理 storage/ 下旧文件 + 清理数据库旧电报"""
     from ops.scripts.cleanup import run
+
     run()
+
 
 def cmd_portfolio():
     """持仓查询"""
     from trade.portfolio.portfolio import Portfolio
+
     p = Portfolio()
-    print(f"  现金: {p.cash:.2f}  总资产: {p.total_value:.2f}  持仓数: {len(p.positions)}")
+    print(
+        f"  现金: {p.cash:.2f}  总资产: {p.total_value:.2f}  持仓数: {len(p.positions)}"
+    )
+
 
 def cmd_strategy():
     """盘前管线：趋势筛选 → AI 分析 → 信号入库"""
     from analysis.strategy import StrategyPipeline
+    from system.utils.logger import get_task_logger, set_current_task
     from system.utils.telegram import MessageSender
-    from system.utils.logger import set_current_task, get_task_logger
 
-    set_current_task('strategy')
-    logger = get_task_logger('strategy')
+    set_current_task("strategy")
+    logger = get_task_logger("strategy")
 
-    trade_date = sys.argv[2] if len(sys.argv) > 2 else None
+    trade_date = (
+        sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
+    )
 
     telegram = None
     try:
@@ -211,15 +326,17 @@ def cmd_strategy():
     pipeline = StrategyPipeline(telegram_bot=telegram)
     pipeline.run(trade_date=trade_date)
 
+
 def cmd_compare():
     """收盘后双线比对：实盘 vs 模拟盘成交"""
-    from trade.execution.comparator import OrderComparator
-    from system.utils.telegram import MessageSender
-    from system.utils.logger import set_current_task, get_task_logger
     from datetime import datetime
 
-    set_current_task('compare')
-    logger = get_task_logger('compare')
+    from system.utils.logger import get_task_logger, set_current_task
+    from system.utils.telegram import MessageSender
+    from trade.execution.comparator import OrderComparator
+
+    set_current_task("compare")
+    logger = get_task_logger("compare")
 
     telegram = None
     try:
@@ -234,15 +351,16 @@ def cmd_compare():
     logger.info(output)
     print(output)
 
+
 def cmd_trade():
     """手动录入交易 — 解析用户回复并记录成交"""
     print("[trade] 用法: python main.py trade --text '模拟盘 000001 1000股 12.50'")
-    from trade.execution.manual import ManualExecutor
-    from system.utils.telegram import MessageSender
-
     import sys
-    if '--text' in sys.argv:
-        idx = sys.argv.index('--text')
+
+    from trade.execution.manual import ManualExecutor
+
+    if "--text" in sys.argv:
+        idx = sys.argv.index("--text")
         if idx + 1 < len(sys.argv):
             text = sys.argv[idx + 1]
             result = ManualExecutor.parse_reply(text)
@@ -250,49 +368,65 @@ def cmd_trade():
     else:
         print("请用 --text 传入消息内容")
 
+
 def cmd_backtest():
     """回测"""
     print("回测框架（骨架）")
-    print("Usage: python main.py backtest --start 2025-01-01 --end 2025-12-31 --stocks 000001,000002")
-    from analysis.backtest import BacktestEngine, DataLoader, calculate_metrics
+    print(
+        "Usage: python main.py backtest --start 2025-01-01 --end 2025-12-31 --stocks 000001,000002"
+    )
     print("模块已就绪: BacktestEngine, DataLoader, calculate_metrics")
+
 
 def cmd_track():
     """股票追踪：更新当日行情 + 次日表现 + 统计"""
     from datetime import datetime, timedelta
-    from analysis.tracker import StockTracker
-    from system.utils.logger import set_current_task, get_task_logger
 
-    set_current_task('track')
-    logger = get_task_logger('track')
+    from analysis.tracker import StockTracker
+    from system.utils.logger import get_task_logger, set_current_task
+
+    set_current_task("track")
+    logger = get_task_logger("track")
 
     tracker = StockTracker()
-    today = datetime.now().strftime('%Y-%m-%d')
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     tracker.update_daily_data(today)
     tracker.update_next_day_data(yesterday, today)
 
     stats = tracker.get_statistics()
-    logger.info(f"总推荐: {stats['total']} | 胜率: {stats['win_rate']:.1f}% | 平均收益: {stats['avg_return']:.2f}%")
+    logger.info(
+        f"总推荐: {stats['total']} | 胜率: {stats['win_rate']:.1f}% | 平均收益: {stats['avg_return']:.2f}%"
+    )
+
 
 def cmd_listen():
     """监听 Telegram 用户回复（前台阻塞运行）。
     由 cron 在 9:00 启动、18:00 停止，不需要手动管理生命周期。
     """
     import time
+
+    from system.utils.logger import get_task_logger, set_current_task
     from system.utils.telegram import MessageReceiver, MessageSender
     from trade.execution.manual import ManualExecutor
-    from system.utils.logger import set_current_task, get_task_logger
 
-    set_current_task('listen')
-    logger = get_task_logger('listen')
+    set_current_task("listen")
+    logger = get_task_logger("listen")
 
     telegram = None
+    private_telegram = None
     try:
         telegram = MessageSender()
     except Exception as e:
         logger.warning(f"Telegram 发送初始化失败: {e}")
+    try:
+        from system.config.settings import TELEGRAM_PRIVATE_CHAT_ID
+
+        if TELEGRAM_PRIVATE_CHAT_ID:
+            private_telegram = MessageSender(chat_id=TELEGRAM_PRIVATE_CHAT_ID)
+    except Exception:
+        pass
 
     receiver = MessageReceiver()
     executor = ManualExecutor()
@@ -307,19 +441,160 @@ def cmd_listen():
                 if not text:
                     continue
                 logger.info(f"收到: {msg['user']}: {text}")
-                reply = executor.handle_user_reply(text)
-                if reply:
-                    logger.info(f"回复: {reply}")
-                    if telegram:
-                        telegram.send(reply)
+                result = executor.handle_user_reply(text)
+                if result:
+                    reply_text, account = result
+                    logger.info(f"回复({account}): {reply_text}")
+                    if account == "real" and private_telegram:
+                        private_telegram.send(reply_text)
+                    elif telegram:
+                        telegram.send(reply_text)
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("监听被中断")
 
 
+def cmd_qmt_collect():
+    """QMT 实时数据采集进程 — 独立进程，TCP 推送至 Watcher + DB 容灾"""
+    from data.live.qmt_collector import QMTCollector
+    from system.utils.logger import get_task_logger, set_current_task
+
+    set_current_task("qmt_collect")
+    logger = get_task_logger("qmt_collect")
+
+    collector = QMTCollector()
+    try:
+        collector.run_forever()
+    except KeyboardInterrupt:
+        logger.info("用户中断")
+    except Exception as e:
+        logger.error(f"QMT Collector 异常退出: {e}")
+        raise
+
+
+def cmd_strategy_audit():
+    """选股审计：规则审计 + AI 审计 + 生成改进建议"""
+    import sys
+    from datetime import datetime, timedelta
+
+    from analysis.audit.ai_auditor import AIAuditor
+    from analysis.audit.improvement_applier import ImprovementApplier
+    from analysis.audit.rule_auditor import RuleAuditor
+    from system.utils.logger import get_task_logger, set_current_task
+    from system.utils.telegram import MessageSender
+
+    set_current_task("strategy_audit")
+    logger = get_task_logger("strategy_audit")
+
+    push_date = None
+    args = [a for a in sys.argv[2:] if not a.startswith("--")]
+    if args and not args[0].startswith("-"):
+        push_date = args[0]
+    if not push_date:
+        push_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if "--apply" in sys.argv:
+        idx = sys.argv.index("--apply")
+        if idx + 1 < len(sys.argv):
+            imp_id = int(sys.argv[idx + 1])
+            applier = ImprovementApplier()
+            ok = applier.apply(imp_id)
+            logger.info(f"改进 #{imp_id} 应用{'成功' if ok else '失败或需人工审核'}")
+            print(f"改进 #{imp_id} 应用{'成功' if ok else '失败或需人工审核'}")
+            return
+
+    if "--list" in sys.argv:
+        applier = ImprovementApplier()
+        pending = applier.list_pending()
+        if not pending:
+            print("无待处理改进")
+        else:
+            for imp in pending:
+                print(
+                    f"  #{imp['id']} [{imp['improvement_type']}] "
+                    f"{imp.get('target_module', '')} — {imp['suggested_change'][:80]}"
+                )
+        return
+
+    logger.info(f"开始规则审计 push_date={push_date}")
+    rule_auditor = RuleAuditor()
+    rule_findings = rule_auditor.audit(push_date)
+    logger.info(f"规则审计: {len(rule_findings)} 条发现")
+
+    logger.info("开始 AI 审计")
+    ai_auditor = AIAuditor()
+    result = ai_auditor.audit(push_date, rule_findings)
+
+    bias_count = len(result.get("bias_findings", []))
+    omission_count = len(result.get("omission_findings", []))
+    improvement_count = len(result.get("improvements", []))
+    logger.info(
+        f"AI 审计完成: {bias_count} 偏见, {omission_count} 遗漏, {improvement_count} 改进"
+    )
+
+    from system.config.settings import (
+        TELEGRAM_REPORT_BOT_TOKEN,
+        TELEGRAM_REPORT_CHAT_ID,
+    )
+
+    if TELEGRAM_REPORT_CHAT_ID and (rule_findings or result.get("improvements")):
+        try:
+            sender = MessageSender(
+                chat_id=TELEGRAM_REPORT_CHAT_ID,
+                bot_token=TELEGRAM_REPORT_BOT_TOKEN,
+            )
+            lines = [f"🔍 选股审计 {push_date}", ""]
+            lines.append(f"📊 规则发现: {len(rule_findings)} 条")
+            for f in rule_findings:
+                sev = f.get("severity", "P2")
+                if sev in ("P0", "P1"):
+                    lines.append(
+                        f"  [{sev}] {f.get('type', '')}: {f.get('evidence', '')[:80]}"
+                    )
+
+            if result.get("bias_findings"):
+                lines.append("")
+                lines.append("🧠 偏见发现:")
+                for b in result["bias_findings"]:
+                    sev = b.get("severity", "P2")
+                    lines.append(
+                        f"  [{sev}] {b.get('bias_type', '')}: {b.get('pattern', '')[:80]}"
+                    )
+
+            if result.get("omission_findings"):
+                lines.append("")
+                lines.append("👁️ 遗漏发现:")
+                for o in result["omission_findings"]:
+                    lines.append(
+                        f"  {o.get('signal_type', '')}: {o.get('impact', '')[:80]}"
+                    )
+
+            if result.get("improvements"):
+                lines.append("")
+                lines.append("🔧 改进建议:")
+                for i, imp in enumerate(result["improvements"], 1):
+                    lines.append(
+                        f"  #{i} [{imp.get('type', '')}] {imp.get('target', '')}"
+                    )
+                    lines.append(f"     {imp.get('suggested_change', '')[:100]}")
+                lines.append("")
+                lines.append("💡 回复「strategy-audit --apply N」应用改进")
+            sender.send("\n".join(lines))
+            logger.info("审计结果已推送 Telegram")
+        except Exception as e:
+            logger.warning(f"审计结果推送失败: {e}")
+
+    print(f"\n📊 选股审计 {push_date}")
+    print(f"  规则发现: {len(rule_findings)} 条")
+    print(f"  偏见发现: {bias_count} 条")
+    print(f"  遗漏发现: {omission_count} 条")
+    print(f"  改进建议: {improvement_count} 条")
+
+
 def cmd_test():
     print("[test] 配置检查...")
-    from system.config.settings import DATABASE_PATH, LOGS_DIR, DASHSCOPE_API_KEY
+    from system.config.settings import DASHSCOPE_API_KEY, DATABASE_PATH, LOGS_DIR
+
     print(f"  DB: {DATABASE_PATH}")
     print(f"  Logs: {LOGS_DIR}")
     print(f"  千问 API: {'已配置' if DASHSCOPE_API_KEY else '未配置'}")
@@ -334,12 +609,21 @@ def main():
 
     cmd = sys.argv[1]
     {
-        "review": cmd_review, "morning": cmd_morning,
-        "strategy": cmd_strategy, "monitor": cmd_monitor,
-        "collect": cmd_collect, "cleanup": cmd_cleanup,
-        "portfolio": cmd_portfolio, "compare": cmd_compare,
-        "trade": cmd_trade, "backtest": cmd_backtest,
-        "test": cmd_test, "track": cmd_track, "listen": cmd_listen,
+        "review": cmd_review,
+        "morning": cmd_morning,
+        "strategy": cmd_strategy,
+        "monitor": cmd_monitor,
+        "collect": cmd_collect,
+        "cleanup": cmd_cleanup,
+        "portfolio": cmd_portfolio,
+        "compare": cmd_compare,
+        "trade": cmd_trade,
+        "backtest": cmd_backtest,
+        "test": cmd_test,
+        "track": cmd_track,
+        "listen": cmd_listen,
+        "qmt-collect": cmd_qmt_collect,
+        "strategy-audit": cmd_strategy_audit,
     }.get(cmd, lambda: print(f"Unknown: {cmd}"))()
 
 

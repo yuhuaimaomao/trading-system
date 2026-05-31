@@ -1,7 +1,7 @@
 """组合绩效追踪"""
 
-from typing import List
 import math
+from typing import List
 
 
 def calc_max_drawdown(equity_curve: List[float]) -> float:
@@ -17,7 +17,9 @@ def calc_max_drawdown(equity_curve: List[float]) -> float:
     return max_dd
 
 
-def calc_sharpe_ratio(daily_returns: List[float], risk_free_rate: float = 0.03) -> float:
+def calc_sharpe_ratio(
+    daily_returns: List[float], risk_free_rate: float = 0.03
+) -> float:
     """计算年化夏普比率"""
     if len(daily_returns) < 2:
         return 0.0
@@ -72,7 +74,14 @@ def calc_metrics(trades: List[dict], equity_curve: List[float]) -> dict:
         "win_rate": calc_win_rate(trades),
         "profit_loss_ratio": calc_profit_loss_ratio(trades),
         "total_trades": len([t for t in trades if t.get("type") == "sell"]),
-        "volatility": (sum((r - sum(daily_returns) / len(daily_returns)) ** 2
-                           for r in daily_returns) / (len(daily_returns) - 1)) ** 0.5
-        if len(daily_returns) > 1 else 0,
+        "volatility": (
+            sum(
+                (r - sum(daily_returns) / len(daily_returns)) ** 2
+                for r in daily_returns
+            )
+            / (len(daily_returns) - 1)
+        )
+        ** 0.5
+        if len(daily_returns) > 1
+        else 0,
     }

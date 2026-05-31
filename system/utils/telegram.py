@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """Telegram 消息推送工具 — 通过 Bot API 直接发送"""
 
 import os
-from datetime import datetime
 
 import requests
 import urllib3
@@ -11,7 +9,7 @@ from system.utils.logger import get_system_logger
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-logger = get_system_logger('telegram_bot')
+logger = get_system_logger("telegram_bot")
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TELEGRAM_UPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"
@@ -25,7 +23,11 @@ class MessageSender:
     """Telegram 消息发送器"""
 
     def __init__(self, chat_id: str = None, bot_token: str = None):
-        from system.config.settings import TELEGRAM_CHAT_ID, TELEGRAM_REPORT_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
+        from system.config.settings import (
+            TELEGRAM_CHAT_ID,
+            TELEGRAM_REPORT_BOT_TOKEN,
+            TELEGRAM_REPORT_CHAT_ID,
+        )
 
         self.chat_id = chat_id or TELEGRAM_REPORT_CHAT_ID or TELEGRAM_CHAT_ID
         self.bot_token = bot_token or TELEGRAM_REPORT_BOT_TOKEN
@@ -40,27 +42,37 @@ class MessageSender:
             url = TELEGRAM_API_URL.format(token=self.bot_token)
 
             max_len = 4000
-            chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
+            chunks = [message[i : i + max_len] for i in range(0, len(message), max_len)]
 
             for i, chunk_text in enumerate(chunks):
-                escaped_chunk = chunk_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                escaped_chunk = (
+                    chunk_text.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
                 payload = {
-                    'chat_id': self.chat_id,
-                    'text': escaped_chunk,
-                    'parse_mode': 'HTML',
-                    'disable_web_page_preview': True,
+                    "chat_id": self.chat_id,
+                    "text": escaped_chunk,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
                 }
 
-                if i > 0 and hasattr(self, '_last_message_id'):
-                    payload['reply_to_message_id'] = self._last_message_id
+                if i > 0 and hasattr(self, "_last_message_id"):
+                    payload["reply_to_message_id"] = self._last_message_id
 
-                resp = requests.post(url, json=payload, timeout=30, verify=False, proxies=TELEGRAM_PROXIES)
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    timeout=30,
+                    verify=False,
+                    proxies=TELEGRAM_PROXIES,
+                )
                 resp.raise_for_status()
 
                 result = resp.json()
-                if result.get('ok'):
-                    self._last_message_id = result['result']['message_id']
-                    logger.info(f"发送成功 (片段 {i+1}/{len(chunks)})")
+                if result.get("ok"):
+                    self._last_message_id = result["result"]["message_id"]
+                    logger.info(f"发送成功 (片段 {i + 1}/{len(chunks)})")
                 else:
                     logger.error(f"Telegram API 返回错误: {result}")
 
@@ -77,7 +89,7 @@ class MessageReceiver:
     """
 
     def __init__(self, bot_token: str = None):
-        from system.config.settings import TELEGRAM_REPORT_BOT_TOKEN, PROJECT_ROOT
+        from system.config.settings import PROJECT_ROOT, TELEGRAM_REPORT_BOT_TOKEN
 
         self.bot_token = bot_token or TELEGRAM_REPORT_BOT_TOKEN
         if not self.bot_token:
@@ -112,7 +124,13 @@ class MessageReceiver:
                 "timeout": timeout,
                 "allowed_updates": ["message"],
             }
-            resp = requests.get(url, params=params, timeout=timeout + 10, verify=False, proxies=TELEGRAM_PROXIES)
+            resp = requests.get(
+                url,
+                params=params,
+                timeout=timeout + 10,
+                verify=False,
+                proxies=TELEGRAM_PROXIES,
+            )
             resp.raise_for_status()
             data = resp.json()
 
@@ -133,14 +151,16 @@ class MessageReceiver:
                     continue
 
                 from_user = msg.get("from", {})
-                messages.append({
-                    "chat_id": str(msg.get("chat", {}).get("id", "")),
-                    "user": from_user.get("first_name", ""),
-                    "username": from_user.get("username", ""),
-                    "text": text.strip(),
-                    "message_id": str(msg.get("message_id", "")),
-                    "ts": msg.get("date", 0),
-                })
+                messages.append(
+                    {
+                        "chat_id": str(msg.get("chat", {}).get("id", "")),
+                        "user": from_user.get("first_name", ""),
+                        "username": from_user.get("username", ""),
+                        "text": text.strip(),
+                        "message_id": str(msg.get("message_id", "")),
+                        "ts": msg.get("date", 0),
+                    }
+                )
 
             self._save_last_update_id()
             return messages

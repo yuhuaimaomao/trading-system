@@ -5,8 +5,8 @@ import logging
 import sqlite3
 from typing import Optional
 
+from analysis.signals import StockProfile, StockScore
 from system.config import settings
-from analysis.signals import StockScore, StockProfile
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +18,11 @@ class ProfileBuilder:
         self.db_path = db_path or settings.DATABASE_PATH
 
     def build(
-        self, stocks: list[StockScore], trade_date: str,
-        market_state: str = "", breadth: Optional[dict] = None,
+        self,
+        stocks: list[StockScore],
+        trade_date: str,
+        market_state: str = "",
+        breadth: Optional[dict] = None,
     ) -> list[StockProfile]:
         if not stocks:
             return []
@@ -43,11 +46,15 @@ class ProfileBuilder:
                 snapshot = self._build_snapshot(s, conn, trade_date)
                 history_data = self._build_history(s, history)
                 rps = self._compute_rps(conn, s.stock_code, trade_date)
-                sectors = self._build_sector_ref(s, stock_sectors, sector_changes, sector_hot_map)
+                sectors = self._build_sector_ref(
+                    s, stock_sectors, sector_changes, sector_hot_map
+                )
                 resonance = self._build_resonance(sectors, sector_hot_map)
                 valuation = self._build_valuation(s, conn, trade_date)
                 telegraphs = self._load_telegraphs(conn, s, trade_date)
-                indicators = self._calc_indicators(conn, s.stock_code, trade_date, history, snapshot)
+                indicators = self._calc_indicators(
+                    conn, s.stock_code, trade_date, history, snapshot
+                )
                 risks = risk_map.get(s.stock_code, [])
 
                 profile = StockProfile(
@@ -78,7 +85,10 @@ class ProfileBuilder:
     # ---- 快照 ----------------------------------------------------------------
 
     def _build_snapshot(
-        self, s: StockScore, conn: sqlite3.Connection, trade_date: str,
+        self,
+        s: StockScore,
+        conn: sqlite3.Connection,
+        trade_date: str,
     ) -> dict:
         row = conn.execute(
             """SELECT price, open, high, low, change_pct, volume_ratio, amplitude,
@@ -109,8 +119,11 @@ class ProfileBuilder:
     # ---- 多日序列 ------------------------------------------------------------
 
     def _load_history(
-        self, conn: sqlite3.Connection, stock_code: str,
-        trade_date: str, days: int,
+        self,
+        conn: sqlite3.Connection,
+        stock_code: str,
+        trade_date: str,
+        days: int,
     ) -> list[dict]:
         rows = conn.execute(
             """SELECT trade_date, price, open, high, low, prev_close,
@@ -125,9 +138,16 @@ class ProfileBuilder:
 
     def _build_history(self, s: StockScore, history: list[dict]) -> dict:
         if not history:
-            return {"ma5": s.ma5, "ma10": s.ma10, "ma20": s.ma20,
-                    "consecutive_yang": 0, "ma_bull_days": 0,
-                    "mf_5d_cum": 0, "mf_consec_inflow": 0, "daily": []}
+            return {
+                "ma5": s.ma5,
+                "ma10": s.ma10,
+                "ma20": s.ma20,
+                "consecutive_yang": 0,
+                "ma_bull_days": 0,
+                "mf_5d_cum": 0,
+                "mf_consec_inflow": 0,
+                "daily": [],
+            }
 
         returns = [h.get("change_pct") or 0 for h in history[-5:]]
         vol_ratios = [h.get("volume_ratio") or 0 for h in history[-5:]]
@@ -158,16 +178,18 @@ class ProfileBuilder:
 
         daily = []
         for h in history[-10:]:
-            daily.append({
-                "date": (h.get("trade_date") or "")[-5:],
-                "open": h.get("open") or 0,
-                "high": h.get("high") or 0,
-                "low": h.get("low") or 0,
-                "close": h.get("price") or 0,
-                "chg": h.get("change_pct") or 0,
-                "vol_ratio": h.get("volume_ratio") or 0,
-                "mf_net": (h.get("main_force_net") or 0) / 10000,
-            })
+            daily.append(
+                {
+                    "date": (h.get("trade_date") or "")[-5:],
+                    "open": h.get("open") or 0,
+                    "high": h.get("high") or 0,
+                    "low": h.get("low") or 0,
+                    "close": h.get("price") or 0,
+                    "chg": h.get("change_pct") or 0,
+                    "vol_ratio": h.get("volume_ratio") or 0,
+                    "mf_net": (h.get("main_force_net") or 0) / 10000,
+                }
+            )
 
         return {
             "returns_5d": returns,
@@ -175,7 +197,9 @@ class ProfileBuilder:
             "high_20d": max(highs) if highs else 0,
             "low_20d": min(lows) if lows else 0,
             "consecutive_yang": yang_days,
-            "ma5": s.ma5, "ma10": s.ma10, "ma20": s.ma20,
+            "ma5": s.ma5,
+            "ma10": s.ma10,
+            "ma20": s.ma20,
             "ma_bull_days": bull_days,
             "mf_5d_cum": mf_cum,
             "mf_consec_inflow": mf_inflow,
@@ -185,7 +209,10 @@ class ProfileBuilder:
     # ---- RPS -----------------------------------------------------------------
 
     def _compute_rps(
-        self, conn: sqlite3.Connection, stock_code: str, trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        stock_code: str,
+        trade_date: str,
     ) -> dict:
         """计算 RPS_20 百分位。RPS_60/120 需要更长历史，当前仅 RPS_20 可用。"""
         result = {"rps_20": 0, "rps_60": 0, "rps_120": 0}
@@ -231,7 +258,9 @@ class ProfileBuilder:
     # ---- 板块 -----------------------------------------------------------------
 
     def _load_stock_sectors(
-        self, conn: sqlite3.Connection, codes: list[str],
+        self,
+        conn: sqlite3.Connection,
+        codes: list[str],
     ) -> dict:
         if not codes:
             return {}
@@ -247,7 +276,9 @@ class ProfileBuilder:
         return result
 
     def _load_sector_changes(
-        self, conn: sqlite3.Connection, trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        trade_date: str,
     ) -> dict:
         rows = conn.execute(
             """SELECT sector_code, change_percent, sector_name
@@ -260,13 +291,15 @@ class ProfileBuilder:
         return {r[0]: {"change_pct": r[1], "name": r[2]} for r in rows}
 
     def _load_sector_hot(
-        self, conn: sqlite3.Connection, trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        trade_date: str,
     ) -> dict:
-        """板块近 3 日上榜 top5 次数"""
+        """板块近 5 日上榜 top5 次数"""
         rows = conn.execute(
             """SELECT sector_code, COUNT(*) as cnt
             FROM sector_hot_history
-            WHERE trade_date >= date(?, '-3 days') AND trade_date <= ?
+            WHERE trade_date >= date(?, '-5 days') AND trade_date <= ?
               AND rank > 0 AND rank <= 5
             GROUP BY sector_code""",
             (trade_date, trade_date),
@@ -274,7 +307,9 @@ class ProfileBuilder:
         return {r[0]: r[1] for r in rows}
 
     def _load_sector_funds(
-        self, conn: sqlite3.Connection, trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        trade_date: str,
     ) -> dict:
         rows = conn.execute(
             """SELECT sector_code, main_force_net
@@ -287,7 +322,10 @@ class ProfileBuilder:
         return {r[0]: r[1] or 0 for r in rows}
 
     def _build_sector_ref(
-        self, s: StockScore, stock_sectors: dict, sector_changes: dict,
+        self,
+        s: StockScore,
+        stock_sectors: dict,
+        sector_changes: dict,
         sector_hot_map: dict,
     ) -> list[dict]:
         sectors = stock_sectors.get(s.stock_code, [])
@@ -305,15 +343,19 @@ class ProfileBuilder:
         result = []
         for sc in sorted(sectors, key=_priority)[:3]:
             info = sector_changes.get(sc, {})
-            result.append({
-                "code": sc,
-                "name": info.get("name", ""),
-                "change_pct": info.get("change_pct", 0),
-            })
+            result.append(
+                {
+                    "code": sc,
+                    "name": info.get("name", ""),
+                    "change_pct": info.get("change_pct", 0),
+                }
+            )
         return result
 
     def _build_resonance(
-        self, sector_refs: list[dict], sector_hot: dict,
+        self,
+        sector_refs: list[dict],
+        sector_hot: dict,
     ) -> dict:
         resonance = {}
         has_any = False
@@ -330,7 +372,10 @@ class ProfileBuilder:
     # ---- 估值 -----------------------------------------------------------------
 
     def _build_valuation(
-        self, s: StockScore, conn: sqlite3.Connection, trade_date: str,
+        self,
+        s: StockScore,
+        conn: sqlite3.Connection,
+        trade_date: str,
     ) -> dict:
         row = conn.execute(
             """SELECT pe_ttm, pb_ratio, total_market_cap,
@@ -353,7 +398,10 @@ class ProfileBuilder:
     # ---- 电报 -----------------------------------------------------------------
 
     def _load_telegraphs(
-        self, conn: sqlite3.Connection, s: StockScore, trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        s: StockScore,
+        trade_date: str,
     ) -> list[dict]:
         rows = conn.execute(
             """SELECT ctime, ai_summary, ai_sentiment, ai_stocks
@@ -370,25 +418,34 @@ class ProfileBuilder:
                 continue
             matched = any(
                 item.get("code", "") == s.stock_code
-                for item in stocks_list if isinstance(item, dict)
+                for item in stocks_list
+                if isinstance(item, dict)
             )
             if matched:
-                result.append({
-                    "time": r["ctime"],
-                    "summary": r["ai_summary"] or "",
-                    "sentiment": r["ai_sentiment"] or "",
-                })
+                result.append(
+                    {
+                        "time": r["ctime"],
+                        "summary": r["ai_summary"] or "",
+                        "sentiment": r["ai_sentiment"] or "",
+                    }
+                )
         return result[:5]
 
     # ---- 技术指标 -------------------------------------------------------------
 
     def _calc_indicators(
-        self, conn: sqlite3.Connection, stock_code: str, trade_date: str,
-        history: list[dict], snapshot: dict,
+        self,
+        conn: sqlite3.Connection,
+        stock_code: str,
+        trade_date: str,
+        history: list[dict],
+        snapshot: dict,
     ) -> dict:
         """从 stock_indicators 表读取当前 + 5日前指标值；形态检测实时计算"""
         from analysis.screening.indicators import (
-            calc_macd_series, detect_macd_cross, detect_divergence,
+            calc_macd_series,
+            detect_divergence,
+            detect_macd_cross,
         )
 
         # 1. 从 stock_indicators 读取当前值和 5 日前值
@@ -425,25 +482,39 @@ class ProfileBuilder:
         # 3. 组装结果
         if today_row:
             result = {
-                "macd": {"dif": today_row["macd_dif"], "dea": today_row["macd_dea"],
-                         "bar": today_row["macd_bar"]},
-                "rsi6": today_row["rsi6"], "rsi12": today_row["rsi12"],
+                "macd": {
+                    "dif": today_row["macd_dif"],
+                    "dea": today_row["macd_dea"],
+                    "bar": today_row["macd_bar"],
+                },
+                "rsi6": today_row["rsi6"],
+                "rsi12": today_row["rsi12"],
                 "rsi24": today_row["rsi24"],
-                "kdj": {"k": today_row["kdj_k"], "d": today_row["kdj_d"],
-                        "j": today_row["kdj_j"]},
-                "boll": {"upper": today_row["bb_upper"] or 0,
-                         "mid": today_row["bb_mid"] or 0,
-                         "lower": today_row["bb_lower"] or 0,
-                         "width": today_row["bb_width"] or 0,
-                         "pct_b": today_row["bb_pct_b"] or 0},
+                "kdj": {
+                    "k": today_row["kdj_k"],
+                    "d": today_row["kdj_d"],
+                    "j": today_row["kdj_j"],
+                },
+                "boll": {
+                    "upper": today_row["bb_upper"] or 0,
+                    "mid": today_row["bb_mid"] or 0,
+                    "lower": today_row["bb_lower"] or 0,
+                    "width": today_row["bb_width"] or 0,
+                    "pct_b": today_row["bb_pct_b"] or 0,
+                },
                 "patterns": patterns,
                 "trend_5d": {},
             }
         else:
             result = {
-                "macd": {}, "rsi6": 0, "rsi12": 0, "rsi24": 0,
-                "kdj": {}, "boll": {},
-                "patterns": patterns, "trend_5d": {},
+                "macd": {},
+                "rsi6": 0,
+                "rsi12": 0,
+                "rsi24": 0,
+                "kdj": {},
+                "boll": {},
+                "patterns": patterns,
+                "trend_5d": {},
             }
 
         if today_row and prev_row:
@@ -460,7 +531,10 @@ class ProfileBuilder:
     # ---- 风险扫描 -------------------------------------------------------------
 
     def _load_risks(
-        self, conn: sqlite3.Connection, codes: list[str], trade_date: str,
+        self,
+        conn: sqlite3.Connection,
+        codes: list[str],
+        trade_date: str,
     ) -> dict[str, list[dict]]:
         """批量加载候选股票的风险信息"""
         if not codes:
@@ -479,13 +553,15 @@ class ProfileBuilder:
             codes + [trade_date],
         ).fetchall()
         for r in reg_rows:
-            result.setdefault(r["stock_code"], []).append({
-                "type": "监管函",
-                "level": r["risk_level"],
-                "risk_type": r["risk_type"] or "",
-                "title": (r["title"] or "")[:80],
-                "date": r["trade_date"],
-            })
+            result.setdefault(r["stock_code"], []).append(
+                {
+                    "type": "监管函",
+                    "level": r["risk_level"],
+                    "risk_type": r["risk_type"] or "",
+                    "title": (r["title"] or "")[:80],
+                    "date": r["trade_date"],
+                }
+            )
 
         # 2. 电报：近 3 天利空消息
         tel_rows = conn.execute(
@@ -506,13 +582,15 @@ class ProfileBuilder:
                 item.get("code", "") for item in stocks_list if isinstance(item, dict)
             }
             for code in mentioned_codes & set(codes):
-                result.setdefault(code, []).append({
-                    "type": "电报利空",
-                    "level": 2,
-                    "risk_type": "利空消息",
-                    "title": (r["ai_summary"] or "")[:80],
-                    "date": r["ctime"][:10] if r["ctime"] else "",
-                })
+                result.setdefault(code, []).append(
+                    {
+                        "type": "电报利空",
+                        "level": 2,
+                        "risk_type": "利空消息",
+                        "title": (r["ai_summary"] or "")[:80],
+                        "date": r["ctime"][:10] if r["ctime"] else "",
+                    }
+                )
 
         # 3. 炸板池：今日炸板未回封的股票
         zhapa_rows = conn.execute(
@@ -523,12 +601,14 @@ class ProfileBuilder:
         ).fetchall()
         zhapa_codes = {r[0] for r in zhapa_rows}
         for code in zhapa_codes:
-            result.setdefault(code, []).append({
-                "type": "炸板未回封",
-                "level": 2,
-                "risk_type": "炸板",
-                "title": "今日触及涨停但未封板，高位抛压重，需区分试盘还是出货",
-                "date": trade_date,
-            })
+            result.setdefault(code, []).append(
+                {
+                    "type": "炸板未回封",
+                    "level": 2,
+                    "risk_type": "炸板",
+                    "title": "今日触及涨停但未封板，高位抛压重，需区分试盘还是出货",
+                    "date": trade_date,
+                }
+            )
 
         return result

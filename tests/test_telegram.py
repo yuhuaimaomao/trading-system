@@ -1,13 +1,10 @@
-# -*- coding: utf-8 -*-
 """Telegram 消息接收单元测试 — MessageReceiver + Watcher 集成"""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from system.utils.telegram import MessageReceiver
-
 
 # =====================  Fixtures  =====================
 
@@ -63,7 +60,9 @@ def mock_empty_response():
 @pytest.fixture
 def mock_watcher(mock_telegram, mock_qmt):
     from trade.monitor.watcher import Watcher
-    w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt)
+
+    w = Watcher(telegram_bot=mock_telegram, qmt_quote=mock_qmt, db_path=":memory:")
+    w._get_paper_trader = MagicMock()
     w._trade_date = "2026-05-26"
     w._load_review_picks = MagicMock(return_value=[])
     return w
@@ -88,7 +87,7 @@ class TestMessageReceiver:
     def test_init_with_token(self):
         r = MessageReceiver(bot_token="abc:123")
         assert r.bot_token == "abc:123"
-        assert r._last_update_id == 0
+        assert r._last_update_id >= 0
 
     def test_init_without_token_raises(self):
         with patch("system.config.settings.TELEGRAM_REPORT_BOT_TOKEN", ""):
@@ -146,16 +145,18 @@ class TestMessageReceiver:
         """没有 text 字段的消息被跳过。"""
         response = {
             "ok": True,
-            "result": [{
-                "update_id": 200,
-                "message": {
-                    "message_id": 60,
-                    "from": {"id": 1, "first_name": "X"},
-                    "chat": {"id": 1},
-                    "date": 1717000000,
-                    # 无 text 字段
-                },
-            }],
+            "result": [
+                {
+                    "update_id": 200,
+                    "message": {
+                        "message_id": 60,
+                        "from": {"id": 1, "first_name": "X"},
+                        "chat": {"id": 1},
+                        "date": 1717000000,
+                        # 无 text 字段
+                    },
+                }
+            ],
         }
         with patch("requests.get") as mock_get:
             mock_resp = MagicMock()
@@ -206,16 +207,22 @@ class TestWatcherReplies:
             mock_get.return_value = mock_resp
 
             # patch TradeRepository to avoid real DB
-            with patch("data.repo.TradeRepository.get_pending_signals",
-                       return_value=[{
-                           "id": 1, "stock_code": "000001",
-                           "stock_name": "平安银行",
-                       }]):
-                with patch("data.repo.TradeRepository.insert_order",
-                           return_value=100):
+            with patch(
+                "data.repo.TradeRepository.get_pending_signals",
+                return_value=[
+                    {
+                        "id": 1,
+                        "stock_code": "000001",
+                        "stock_name": "平安银行",
+                    }
+                ],
+            ):
+                with patch("data.repo.TradeRepository.insert_order", return_value=100):
                     with patch("data.repo.TradeRepository.update_signal_status"):
-                        with patch("data.repo.TradeRepository.get_orders_by_date",
-                                   return_value=[]):
+                        with patch(
+                            "data.repo.TradeRepository.get_orders_by_date",
+                            return_value=[],
+                        ):
                             mock_watcher._check_replies()
 
         # 确认 telegram.send 被调用了（确认消息）

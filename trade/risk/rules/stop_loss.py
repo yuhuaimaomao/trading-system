@@ -21,8 +21,10 @@ def check_ma_stop(pos: Position, ma_value: float) -> str:
     return ""
 
 
-def check_time_stop(pos: Position, hold_days: int, max_days: int = 10) -> str:
-    """时间止损：持有超 N 天未盈利"""
-    if hold_days > max_days and pos.pnl_pct < 0:
+def check_time_stop(
+    pos: Position, hold_days: int, max_days: int = 5, min_loss: float = -0.03
+) -> str:
+    """时间止损：持有超 N 天且亏损超过阈值才触发。"""
+    if hold_days > max_days and pos.pnl_pct < min_loss:
         return f"时间止损 (持有 {hold_days} 天，亏损 {pos.pnl_pct:.1%})"
     return ""

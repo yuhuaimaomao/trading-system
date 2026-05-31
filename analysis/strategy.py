@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """盘前交易管线 — 趋势筛选 → AI 分析 → 信号入库
 
 用法:
@@ -13,11 +12,21 @@ CLI:
 from datetime import datetime
 from typing import Optional
 
-from analysis.screening.trend import TrendScreener
+from analysis.advisor import AIAdvisor
 from analysis.screening.breadth import MarketBreadth
 from analysis.screening.profiles import ProfileBuilder
-from analysis.advisor import AIAdvisor
-from analysis.signals import StockScore, StockProfile, OrderSignal, HoldingInfo, AccountSummary, ReviewContext, SignalType, SignalSource
+from analysis.screening.trend import TrendScreener
+from system.config import settings
+from analysis.signals import (
+    AccountSummary,
+    HoldingInfo,
+    OrderSignal,
+    ReviewContext,
+    SignalSource,
+    SignalType,
+    StockProfile,
+    StockScore,
+)
 from data.repo import TradeRepository
 from system.utils.logger import get_system_logger
 
@@ -27,11 +36,11 @@ logger = get_system_logger("strategy")
 class StrategyPipeline:
     """盘前管线：市场宽度 → 趋势筛选 → 画像富化 → AI 分析 → 信号入库"""
 
-    def __init__(self, telegram_bot=None):
-        self.breadth = MarketBreadth()
-        self.screener = TrendScreener()
-        self.profiler = ProfileBuilder()
-        self.repo = TradeRepository()
+    def __init__(self, telegram_bot=None, db_path: str = None):
+        self.breadth = MarketBreadth(db_path=db_path or "")
+        self.screener = TrendScreener(db_path=db_path)
+        self.profiler = ProfileBuilder(db_path=db_path or "")
+        self.repo = TradeRepository(db_path=db_path)
         self.telegram = telegram_bot
 
     # ------------------------------------------------------------------
@@ -49,9 +58,11 @@ class StrategyPipeline:
         # 步骤 0.5: 加载持仓（实盘 + 模拟盘）+ 保存快照
         holdings, account_summaries = self._load_holdings(trade_date)
         if holdings:
-            logger.info(f"当前持仓: {len(holdings)} 只 "
-                        f"(模拟盘{sum(1 for h in holdings if h.account=='paper')}只 "
-                        f"实盘{sum(1 for h in holdings if h.account=='real')}只)")
+            logger.info(
+                f"当前持仓: {len(holdings)} 只 "
+                f"(模拟盘{sum(1 for h in holdings if h.account == 'paper')}只 "
+                f"实盘{sum(1 for h in holdings if h.account == 'real')}只)"
+            )
 
         # 保存实盘/模拟盘快照到 trade_portfolio_snapshots
         if account_summaries:
@@ -74,7 +85,9 @@ class StrategyPipeline:
             logger.info(f"昨日遗留: {len(legacy_candidates)} 只")
             # 去重（同日已筛选出的不再重复）
             screened_codes = {c.stock_code for c in candidates}
-            legacy_candidates = [c for c in legacy_candidates if c.stock_code not in screened_codes]
+            legacy_candidates = [
+                c for c in legacy_candidates if c.stock_code not in screened_codes
+            ]
             candidates = candidates + legacy_candidates
 
         if not candidates:
@@ -90,20 +103,24 @@ class StrategyPipeline:
                 if p.code in legacy_codes:
                     p.tags.insert(0, "昨日遗留")
                     p.legacy_note = legacy_reasons.get(p.code, "")
-        logger.info(f"画像富化完成，候选详情:")
+        logger.info("画像富化完成，候选详情:")
         for p in profiles:
             bias = ""
             if p.snapshot.get("price") and p.history.get("ma5"):
                 b5 = (p.snapshot["price"] - p.history["ma5"]) / p.history["ma5"] * 100
                 bias = f"bias5:{b5:+.1f}%"
-            logger.info(f"  {p.code} {p.name} "
-                        f"趋势:{'5日强' if p.trend_mode == 'strong' else '20日稳'} "
-                        f"评分{p.score:.0f} {bias} "
-                        f"场景:{','.join(p.scenarios) if p.scenarios else '无'} "
-                        f"标签:{','.join(p.tags) if p.tags else '无'}")
+            logger.info(
+                f"  {p.code} {p.name} "
+                f"趋势:{'5日强' if p.trend_mode == 'strong' else '20日稳'} "
+                f"评分{p.score:.0f} {bias} "
+                f"场景:{','.join(p.scenarios) if p.scenarios else '无'} "
+                f"标签:{','.join(p.tags) if p.tags else '无'}"
+            )
 
         # 步骤 3: AI 分析
-        signals, holdings_review = self._analyze(profiles, trade_date, holdings, account_summaries, review_ctx)
+        signals, holdings_review = self._analyze(
+            profiles, trade_date, holdings, account_summaries, review_ctx
+        )
 
         # 步骤 3.1: 持仓审查落库 + 应用止损止盈
         if holdings_review:
@@ -112,12 +129,15 @@ class StrategyPipeline:
         # 步骤 3.5: 复盘趋势精选 → 结构化信号（与 AI 信号合并，统一盯盘）
         if review_ctx and review_ctx.review_stocks_raw:
             review_signals = self._build_review_signals(
-                review_ctx.review_stocks_raw, trade_date)
+                review_ctx.review_stocks_raw, trade_date
+            )
             # 去重：复盘信号中与 AI 信号重复的股票跳过
             ai_codes = {s.stock_code for s in signals}
             new_review = [rs for rs in review_signals if rs.stock_code not in ai_codes]
             signals = signals + new_review
-            logger.info(f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)")
+            logger.info(
+                f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)"
+            )
 
         # 即使没有买入信号，持仓审查也要推送
         if not signals and not holdings_review:
@@ -132,12 +152,17 @@ class StrategyPipeline:
                     s.trend_mode = profile_map[s.stock_code].trend_mode
 
             saved = self._save_signals(signals, trade_date)
-            logger.info(f"策略管线完成: 候选{len(candidates)} → 画像{len(profiles)} → AI信号{len(signals)} → 入库{saved}")
+            self._backfill_signal_ids(signals, trade_date)
+            logger.info(
+                f"策略管线完成: 候选{len(candidates)} → 画像{len(profiles)} → AI信号{len(signals)} → 入库{saved}"
+            )
             for s in signals:
-                logger.info(f"  → 入库: {s.stock_code} {s.stock_name} "
-                            f"买入{s.buy_zone_min}-{s.buy_zone_max} "
-                            f"止损{s.stop_loss} 止盈{s.take_profit} "
-                            f"评分{s.signal_score:.0f}")
+                logger.info(
+                    f"  → 入库: {s.stock_code} {s.stock_name} "
+                    f"买入{s.buy_zone_min}-{s.buy_zone_max} "
+                    f"止损{s.stop_loss} 止盈{s.take_profit} "
+                    f"评分{s.signal_score:.0f}"
+                )
 
         # 有信号或有持仓审查就推送
         if signals or holdings_review:
@@ -166,10 +191,9 @@ class StrategyPipeline:
     # 步骤 0.5: 加载持仓（实盘 + 模拟盘独立统计）
     # ------------------------------------------------------------------
 
-    PAPER_INITIAL = 200_000
-    REAL_INITIAL_DEFAULT = 200_000  # 实盘初始资金，可在 config 覆盖
-
-    def _load_holdings(self, trade_date: str) -> tuple[list[HoldingInfo], list[AccountSummary]]:
+    def _load_holdings(
+        self, trade_date: str
+    ) -> tuple[list[HoldingInfo], list[AccountSummary]]:
         """查询当前持仓（实盘+模拟盘），返回 (持仓列表, 账户概况)。"""
         import sqlite3
         from datetime import date
@@ -224,7 +248,11 @@ class StrategyPipeline:
             sl_map: dict[str, dict] = {}
             for r in sl_rows:
                 if r[0] not in sl_map:
-                    sl_map[r[0]] = {"stop_loss": r[1] or 0, "take_profit": r[2] or 0, "score": r[3] or 0}
+                    sl_map[r[0]] = {
+                        "stop_loss": r[1] or 0,
+                        "take_profit": r[2] or 0,
+                        "score": r[3] or 0,
+                    }
 
             # 4. 日内最高价（从 stock_indicators 的高点近似，或从当日行情）
             hi_rows = conn.execute(
@@ -241,7 +269,17 @@ class StrategyPipeline:
 
             # 5. 组装 HoldingInfo
             for row in rows:
-                code, account, entry_time, net_vol, buy_amt, buy_vol, buy_comm, sell_amt, sell_comm = row
+                (
+                    code,
+                    account,
+                    entry_time,
+                    net_vol,
+                    buy_amt,
+                    buy_vol,
+                    buy_comm,
+                    sell_amt,
+                    sell_comm,
+                ) = row
                 if net_vol <= 0 or buy_vol <= 0:
                     continue
 
@@ -258,35 +296,41 @@ class StrategyPipeline:
                 pnl_pct = (cur_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
                 market_val = cur_price * net_vol
                 entry_date_str = str(entry_time)[:10] if entry_time else trade_date
-                hold_days = (td - date.fromisoformat(entry_date_str)).days if entry_date_str else 0
+                hold_days = (
+                    (td - date.fromisoformat(entry_date_str)).days
+                    if entry_date_str
+                    else 0
+                )
 
                 sl_info = sl_map.get(code, {})
-                holdings.append(HoldingInfo(
-                    stock_code=code,
-                    stock_name=name,
-                    account=account,
-                    entry_date=entry_date_str,
-                    holding_days=hold_days,
-                    avg_cost=round(avg_cost, 3),
-                    volume=int(net_vol),
-                    current_price=cur_price,
-                    pnl_pct=round(pnl_pct, 2),
-                    market_value=round(market_val, 2),
-                    stop_loss=sl_info.get("stop_loss", 0),
-                    take_profit=sl_info.get("take_profit", 0),
-                    industry=pinfo[6] or "",
-                    ma5=pinfo[3] or 0,
-                    ma10=pinfo[4] or 0,
-                    ma20=pinfo[5] or 0,
-                    highest_price=hi_map.get(code, 0),
-                    signal_score=sl_info.get("score", 0),
-                    is_today_buy=(entry_date_str == trade_date),
-                ))
+                holdings.append(
+                    HoldingInfo(
+                        stock_code=code,
+                        stock_name=name,
+                        account=account,
+                        entry_date=entry_date_str,
+                        holding_days=hold_days,
+                        avg_cost=round(avg_cost, 3),
+                        volume=int(net_vol),
+                        current_price=cur_price,
+                        pnl_pct=round(pnl_pct, 2),
+                        market_value=round(market_val, 2),
+                        stop_loss=sl_info.get("stop_loss", 0),
+                        take_profit=sl_info.get("take_profit", 0),
+                        industry=pinfo[6] or "",
+                        ma5=pinfo[3] or 0,
+                        ma10=pinfo[4] or 0,
+                        ma20=pinfo[5] or 0,
+                        highest_price=hi_map.get(code, 0),
+                        signal_score=sl_info.get("score", 0),
+                        is_today_buy=(entry_date_str == trade_date),
+                    )
+                )
 
             # 6. 账户概况
             for account, label, initial in [
-                ("paper", "模拟盘", self.PAPER_INITIAL),
-                ("real", "实盘", self.REAL_INITIAL_DEFAULT),
+                ("paper", "模拟盘", settings.PAPER_INITIAL_CAPITAL),
+                ("real", "实盘", settings.REAL_INITIAL_CAPITAL),
             ]:
                 acct_holdings = [h for h in holdings if h.account == account]
                 if not acct_holdings:
@@ -325,17 +369,19 @@ class StrategyPipeline:
                 except Exception:
                     pass
 
-                summaries.append(AccountSummary(
-                    account=account,
-                    label=label,
-                    initial_capital=initial,
-                    total_value=round(total_val, 2),
-                    cash=round(cash_est, 2),
-                    market_value=round(mkt_val, 2),
-                    position_ratio=round(pos_ratio, 4),
-                    daily_pnl=round(daily_pnl, 2),
-                    position_count=len(acct_holdings),
-                ))
+                summaries.append(
+                    AccountSummary(
+                        account=account,
+                        label=label,
+                        initial_capital=initial,
+                        total_value=round(total_val, 2),
+                        cash=round(cash_est, 2),
+                        market_value=round(mkt_val, 2),
+                        position_ratio=round(pos_ratio, 4),
+                        daily_pnl=round(daily_pnl, 2),
+                        position_count=len(acct_holdings),
+                    )
+                )
 
         except Exception as e:
             logger.warning(f"加载持仓失败: {e}")
@@ -348,8 +394,8 @@ class StrategyPipeline:
 
     def _load_review_context(self, trade_date: str) -> Optional[ReviewContext]:
         """解析复盘报告，提取策略管线需要的上下文。"""
-        import json as _json
         from pathlib import Path
+
         from system.config.settings import STORAGE_PATH
 
         report_dir = Path(STORAGE_PATH) / "reports"
@@ -381,21 +427,24 @@ class StrategyPipeline:
         section_10 = self._extract_report_section(text, "十", None)
         if section_10:
             import re
-            cap_m = re.search(r'仓位上限[：:]?\s*(\d+)%', section_10)
+
+            cap_m = re.search(r"仓位上限[：:]?\s*(\d+)%", section_10)
             if cap_m:
                 ctx.position_cap = int(cap_m.group(1)) / 100
-            sug_m = re.search(r'建议仓位[：:]?\s*(\d+)%', section_10)
+            sug_m = re.search(r"建议仓位[：:]?\s*(\d+)%", section_10)
             if sug_m:
                 ctx.suggested_position = int(sug_m.group(1)) / 100
-            attack_m = re.search(r'主攻方向[：:]?\s*(.+?)(?:\n|$)', section_10)
+            attack_m = re.search(r"主攻方向[：:]?\s*(.+?)(?:\n|$)", section_10)
             if attack_m:
                 ctx.main_attack = attack_m.group(1).strip()
-            avoid_m = re.search(r'回避方向[：:]?\s*(.+?)(?:\n|$)', section_10)
+            avoid_m = re.search(r"回避方向[：:]?\s*(.+?)(?:\n|$)", section_10)
             if avoid_m:
                 ctx.avoid_direction = avoid_m.group(1).strip()
 
         # 第七节: 从 STOCKS JSON 提取趋势精选 codes + 结构化数据
-        ctx.review_picks, ctx.review_stocks_raw = self._extract_review_picks(text, with_raw=True)
+        ctx.review_picks, ctx.review_stocks_raw = self._extract_review_picks(
+            text, with_raw=True
+        )
 
         logger.info(
             f"复盘上下文提取完成: 情绪={ctx.sentiment_cycle[:30] if ctx.sentiment_cycle else '无'}..., "
@@ -404,12 +453,15 @@ class StrategyPipeline:
         return ctx
 
     @staticmethod
-    def _extract_report_section(text: str, section_num: str, next_num: Optional[str]) -> str:
+    def _extract_report_section(
+        text: str, section_num: str, next_num: Optional[str]
+    ) -> str:
         """提取复盘报告中两个节标题之间的内容。"""
         import re
+
         # 节标题: 行首 emoji + 空格 + 中文数字 + 、
         start_pattern = re.compile(
-            rf'^[^\x00-\x7F].*?{re.escape(section_num)}、', re.MULTILINE
+            rf"^[^\x00-\x7F].*?{re.escape(section_num)}、", re.MULTILINE
         )
         start_m = start_pattern.search(text)
         if not start_m:
@@ -421,7 +473,7 @@ class StrategyPipeline:
 
         if next_num:
             next_pattern = re.compile(
-                rf'^[^\x00-\x7F].*?{re.escape(next_num)}、', re.MULTILINE
+                rf"^[^\x00-\x7F].*?{re.escape(next_num)}、", re.MULTILINE
             )
             next_m = next_pattern.search(text, content_start)
             content_end = next_m.start() if next_m else len(text)
@@ -435,12 +487,13 @@ class StrategyPipeline:
     def _extract_sub_section(text: str, keyword: str) -> str:
         """从第四节中提取子节（绝对主线/次线/退潮方向）。"""
         import re
-        pattern = rf'•\s*{keyword}[：:]?\s*(.+)'
+
+        pattern = rf"•\s*{keyword}[：:]?\s*(.+)"
         m = re.search(pattern, text)
         if not m:
             return ""
         start = m.start()
-        rest = text[m.end():]
+        rest = text[m.end() :]
         next_bullet = re.search(r"\n•\s", rest)
         end = m.end() + next_bullet.start() if next_bullet else len(text)
         return text[start:end].strip()
@@ -452,9 +505,8 @@ class StrategyPipeline:
         """
         import json as _json
         import re
-        stocks_m = re.search(
-            r"<<<STOCKS>>>\s*(\{.*?\})\s*<<<END>>>", text, re.DOTALL
-        )
+
+        stocks_m = re.search(r"<<<STOCKS>>>\s*(\{.*?\})\s*<<<END>>>", text, re.DOTALL)
         if not stocks_m:
             return ([], []) if with_raw else []
         try:
@@ -484,10 +536,59 @@ class StrategyPipeline:
         if candidates:
             strong = sum(1 for c in candidates if c.trend_mode == "strong")
             normal = len(candidates) - strong
-            logger.info(f"趋势筛选: {len(candidates)} 只 (5日强:{strong} 20日稳:{normal})")
+            logger.info(
+                f"趋势筛选: {len(candidates)} 只 (5日强:{strong} 20日稳:{normal})"
+            )
+            self._save_funnel(candidates, trade_date)
         else:
             logger.info("趋势筛选: 0 只候选")
         return candidates
+
+    def _save_funnel(self, candidates: list[StockScore], trade_date: str):
+        """筛选完成后，全量写入 strategy_funnel"""
+        import json as _json
+        from datetime import datetime
+
+        repo = self.repo
+        now = datetime.now().isoformat()
+
+        rows = []
+        for i, c in enumerate(candidates):
+            raw = {
+                "price": c.price,
+                "change_pct": c.change_pct,
+                "mcap": c.mcap,
+                "circ_mcap": c.circ_mcap,
+                "turnover_rate": c.turnover_rate,
+                "volume_ratio": c.volume_ratio,
+                "ma5": c.ma5,
+                "ma10": c.ma10,
+                "ma20": c.ma20,
+                "ma5_angle": c.ma5_angle,
+                "industry": c.industry,
+                "mf_wan": c.mf_wan,
+                "mf_ratio": c.mf_ratio,
+                "bias_ma5": c.bias_ma5,
+                "bias_ma20": c.bias_ma20,
+            }
+            row_dict = {
+                "push_date": trade_date,
+                "trade_date": trade_date,
+                "stock_code": c.stock_code,
+                "stock_name": c.stock_name,
+                "rank_position": i + 1,
+                "raw_snapshot": _json.dumps(raw, ensure_ascii=False),
+                "factors_passed": _json.dumps(c.tags, ensure_ascii=False),
+                "factors_detail": _json.dumps({}, ensure_ascii=False),
+                "scenarios": _json.dumps(c.scenarios, ensure_ascii=False),
+                "trend_mode": c.trend_mode,
+                "score": c.score,
+                "created_at": now,
+            }
+            rows.append(row_dict)
+
+        repo.insert_funnel_batch(rows)
+        logger.info(f"漏斗记录已入库: {len(rows)} 只")
 
     # ------------------------------------------------------------------
     # 步骤 1.5: 昨日遗留
@@ -511,6 +612,7 @@ class StrategyPipeline:
         # 从 stock_basic 取今日基础数据
         try:
             import sqlite3
+
             conn = sqlite3.connect(self.screener.db_path)
             placeholders = ",".join(["?" for _ in codes])
             rows = conn.execute(
@@ -563,9 +665,12 @@ class StrategyPipeline:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_review_signals(raw_stocks: list[dict], trade_date: str) -> list[OrderSignal]:
+    def _build_review_signals(
+        raw_stocks: list[dict], trade_date: str
+    ) -> list[OrderSignal]:
         """将复盘 STOCKS JSON 中的全部推荐票（龙头/中军/补涨/趋势票）转为 OrderSignal。"""
         import re
+
         signals = []
         for s in raw_stocks:
             code = s.get("code", "")
@@ -578,7 +683,7 @@ class StrategyPipeline:
 
             # 从买入条件文字提取参考价格
             buy_min, buy_max = None, None
-            ma_match = re.search(r'约(\d+\.?\d*)', buy_cond)
+            ma_match = re.search(r"约(\d+\.?\d*)", buy_cond)
             if ma_match:
                 ref = float(ma_match.group(1))
                 buy_min = round(ref * 0.99, 2)
@@ -587,21 +692,23 @@ class StrategyPipeline:
                 buy_min = round(sl * 1.02, 2)
                 buy_max = round(sl * 1.06, 2)
 
-            signals.append(OrderSignal(
-                stock_code=code,
-                stock_name=name,
-                signal_type=SignalType.BUY,
-                source=SignalSource.REVIEW,
-                buy_zone_min=buy_min,
-                buy_zone_max=buy_max,
-                stop_loss=sl if sl > 0 else None,
-                take_profit=tp if tp > 0 else None,
-                target_position=0.08,
-                signal_score=70,
-                strategy_name="review_trend_pick",
-                reason=f"复盘趋势精选: {buy_cond[:50]}",
-                sector_name=s.get("sector_name", ""),
-            ))
+            signals.append(
+                OrderSignal(
+                    stock_code=code,
+                    stock_name=name,
+                    signal_type=SignalType.BUY,
+                    source=SignalSource.REVIEW,
+                    buy_zone_min=buy_min,
+                    buy_zone_max=buy_max,
+                    stop_loss=sl if sl > 0 else None,
+                    take_profit=tp if tp > 0 else None,
+                    target_position=settings.REVIEW_PICK_POSITION_PCT,
+                    signal_score=70,
+                    strategy_name="review_trend_pick",
+                    reason=f"复盘趋势精选: {buy_cond[:50]}",
+                    sector_name=s.get("sector_name", ""),
+                )
+            )
         return signals
 
     # ------------------------------------------------------------------
@@ -609,12 +716,18 @@ class StrategyPipeline:
     # ------------------------------------------------------------------
 
     def _enrich(
-        self, candidates: list[StockScore], trade_date: str, market_state: str,
+        self,
+        candidates: list[StockScore],
+        trade_date: str,
+        market_state: str,
     ) -> list[StockProfile]:
         return self.profiler.build(candidates, trade_date, market_state=market_state)
 
     def _enrich_holdings(
-        self, holdings: list[HoldingInfo], trade_date: str, market_state: str = "",
+        self,
+        holdings: list[HoldingInfo],
+        trade_date: str,
+        market_state: str = "",
     ):
         """为持仓构建完整 StockProfile 画像，注入 AI 审查用技术数据。"""
         import sqlite3
@@ -645,74 +758,89 @@ class StrategyPipeline:
             row = basic_map.get(h.stock_code)
             if not row:
                 continue
-            _, name, price, chg, mcap, turnover, vol_ratio, ma5, ma10, ma20, ma5_angle, industry, mf_net, mf_ratio = row
+            (
+                _,
+                name,
+                price,
+                chg,
+                mcap,
+                turnover,
+                vol_ratio,
+                ma5,
+                ma10,
+                ma20,
+                ma5_angle,
+                industry,
+                mf_net,
+                mf_ratio,
+            ) = row
             mcap_yi = (mcap or 0) / 1_0000_0000
-            scores.append(StockScore(
-                stock_code=h.stock_code,
-                stock_name=name or h.stock_name,
-                trend_mode="",
-                score=0,
-                price=price or 0,
-                change_pct=chg or 0,
-                mcap=round(mcap_yi, 1),
-                circ_mcap=round(mcap_yi, 1),
-                turnover_rate=turnover or 0,
-                volume_ratio=vol_ratio or 0,
-                ma5=ma5 or 0,
-                ma10=ma10 or 0,
-                ma20=ma20 or 0,
-                ma5_angle=ma5_angle or 0,
-                industry=industry or h.industry,
-                mf_wan=(mf_net or 0) / 10000,
-                mf_ratio=mf_ratio or 0,
-            ))
+            scores.append(
+                StockScore(
+                    stock_code=h.stock_code,
+                    stock_name=name or h.stock_name,
+                    trend_mode="",
+                    score=0,
+                    price=price or 0,
+                    change_pct=chg or 0,
+                    mcap=round(mcap_yi, 1),
+                    circ_mcap=round(mcap_yi, 1),
+                    turnover_rate=turnover or 0,
+                    volume_ratio=vol_ratio or 0,
+                    ma5=ma5 or 0,
+                    ma10=ma10 or 0,
+                    ma20=ma20 or 0,
+                    ma5_angle=ma5_angle or 0,
+                    industry=industry or h.industry,
+                    mf_wan=(mf_net or 0) / 10000,
+                    mf_ratio=mf_ratio or 0,
+                )
+            )
 
         if scores:
-            holding_profiles = self.profiler.build(scores, trade_date, market_state=market_state)
+            holding_profiles = self.profiler.build(
+                scores, trade_date, market_state=market_state
+            )
             profile_map = {p.code: p for p in holding_profiles}
             for h in holdings:
                 h.profile = profile_map.get(h.stock_code)
 
-        logger.info(f"持仓画像富化: {len(scores)} 只 → {len([h for h in holdings if h.profile])} 个完整画像")
+        logger.info(
+            f"持仓画像富化: {len(scores)} 只 → {len([h for h in holdings if h.profile])} 个完整画像"
+        )
 
     # ------------------------------------------------------------------
     # 步骤 3: AI 分析（千问优先，DeepSeek fallback）
     # ------------------------------------------------------------------
 
-    def _analyze(self, profiles: list[StockProfile], trade_date: str,
-                 holdings: list[HoldingInfo] = None,
-                 summaries: list[AccountSummary] = None,
-                 review_ctx: Optional[ReviewContext] = None) -> tuple[list[OrderSignal], list]:
-        # 千问优先
-        advisor = AIAdvisor(model="qwen")
+    def _analyze(
+        self,
+        profiles: list[StockProfile],
+        trade_date: str,
+        holdings: list[HoldingInfo] = None,
+        summaries: list[AccountSummary] = None,
+        review_ctx: Optional[ReviewContext] = None,
+    ) -> tuple[list[OrderSignal], list]:
+        advisor = AIAdvisor(model="deepseek", db_path=self.repo.db_path)
         if advisor._analyzers:
             try:
-                signals, holdings_review = advisor.analyze(profiles, trade_date=trade_date,
-                                          holdings=holdings, account_summaries=summaries,
-                                          review_context=review_ctx)
+                signals, holdings_review = advisor.analyze(
+                    profiles,
+                    trade_date=trade_date,
+                    holdings=holdings,
+                    account_summaries=summaries,
+                    review_context=review_ctx,
+                )
                 if signals:
-                    logger.info(f"千问分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查")
-                    return signals, holdings_review
-                logger.warning("千问分析返回空结果")
-            except Exception as e:
-                logger.warning(f"千问分析异常: {e}")
-
-        # fallback 到 DeepSeek
-        ds_advisor = AIAdvisor(model="deepseek")
-        if ds_advisor._analyzers:
-            logger.info("fallback 到 DeepSeek 分析")
-            try:
-                signals, holdings_review = ds_advisor.analyze(profiles, trade_date=trade_date,
-                                             holdings=holdings, account_summaries=summaries,
-                                             review_context=review_ctx)
-                if signals:
-                    logger.info(f"DeepSeek 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查")
+                    logger.info(
+                        f"DeepSeek 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查"
+                    )
                     return signals, holdings_review
                 logger.warning("DeepSeek 分析返回空结果")
             except Exception as e:
                 logger.error(f"DeepSeek 分析异常: {e}")
 
-        logger.error("所有 AI 模型分析均失败")
+        logger.error("AI 模型分析失败")
         return [], []
 
     # ------------------------------------------------------------------
@@ -723,8 +851,10 @@ class StrategyPipeline:
     def _validate_signal(signal: OrderSignal) -> bool:
         """防止 AI 幻觉生成未通过筛选的股票。"""
         import sqlite3
-        from system.config import settings
+
         from analysis.screening.factors import check_hard_gates
+        from system.config import settings
+
         try:
             conn = sqlite3.connect(settings.DATABASE_PATH)
             row = conn.execute(
@@ -748,11 +878,9 @@ class StrategyPipeline:
     @staticmethod
     def _save_portfolio_snapshots(summaries: list, trade_date: str):
         """保存实盘/模拟盘账户快照到 DB"""
-        import json as _json
         from datetime import datetime
-        from data.repo import TradeRepository
 
-        repo = TradeRepository()
+        repo = self.repo
         now = datetime.now().isoformat()
         for s in summaries:
             snap_dict = {
@@ -769,34 +897,36 @@ class StrategyPipeline:
                 "created_at": now,
             }
             repo.insert_snapshot(snap_dict)
-            logger.info(f"{s.label}快照已保存: 总资产{s.total_value:,.0f} 仓位{s.position_ratio:.1%}")
+            logger.info(
+                f"{s.label}快照已保存: 总资产{s.total_value:,.0f} 仓位{s.position_ratio:.1%}"
+            )
 
     @staticmethod
     def _save_portfolio_positions(holdings: list, trade_date: str):
         """保存持仓明细到 trade_portfolio_positions（按账户分组落库）。"""
-        from data.repo import TradeRepository
-
-        repo = TradeRepository()
+        repo = self.repo
         for account in ("paper", "real"):
             acct_holdings = [h for h in holdings if h.account == account]
             if not acct_holdings:
                 continue
             rows = []
             for h in acct_holdings:
-                rows.append({
-                    "stock_code": h.stock_code,
-                    "stock_name": h.stock_name,
-                    "volume": h.volume,
-                    "avg_cost": h.avg_cost,
-                    "current_price": h.current_price,
-                    "market_value": h.market_value,
-                    "pnl": (h.current_price - h.avg_cost) * h.volume,
-                    "pnl_pct": h.pnl_pct,
-                    "stop_loss": h.stop_loss,
-                    "take_profit": h.take_profit,
-                    "holding_days": h.holding_days,
-                    "sector_code": h.industry or "",
-                })
+                rows.append(
+                    {
+                        "stock_code": h.stock_code,
+                        "stock_name": h.stock_name,
+                        "volume": h.volume,
+                        "avg_cost": h.avg_cost,
+                        "current_price": h.current_price,
+                        "market_value": h.market_value,
+                        "pnl": (h.current_price - h.avg_cost) * h.volume,
+                        "pnl_pct": h.pnl_pct,
+                        "stop_loss": h.stop_loss,
+                        "take_profit": h.take_profit,
+                        "holding_days": h.holding_days,
+                        "sector_code": h.industry or "",
+                    }
+                )
             repo.insert_positions(trade_date, account, rows)
         logger.info(f"持仓明细已保存: {len(holdings)} 只")
 
@@ -827,11 +957,14 @@ class StrategyPipeline:
             # 应用止损止盈（实盘 + 模拟盘都需要）
             if hr.new_stop_loss or hr.new_take_profit:
                 self.repo.apply_holdings_review_sl_tp(
-                    trade_date, hr.stock_code,
+                    trade_date,
+                    hr.stock_code,
                     new_stop_loss=hr.new_stop_loss,
                     new_take_profit=hr.new_take_profit,
                 )
-                logger.info(f"  已应用止损止盈: {hr.stock_code} sl={hr.new_stop_loss} tp={hr.new_take_profit}")
+                logger.info(
+                    f"  已应用止损止盈: {hr.stock_code} sl={hr.new_stop_loss} tp={hr.new_take_profit}"
+                )
 
     # ------------------------------------------------------------------
     # 步骤 4: 信号入库
@@ -840,12 +973,18 @@ class StrategyPipeline:
     def _save_signals(self, signals: list[OrderSignal], trade_date: str) -> int:
         now = datetime.now().isoformat()
         saved = 0
+        # 先清理旧 pending 信号（避免多日积压）
+        self.repo.expire_old_pending_signals(trade_date)
         # AI 精选信号后保存，确保 REPLACE 时覆盖复盘精选的同票记录
-        ordered = sorted(signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1)
+        ordered = sorted(
+            signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1
+        )
         for s in ordered:
             if s.source != SignalSource.REVIEW:
                 if not self._validate_signal(s):
-                    logger.warning(f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过")
+                    logger.warning(
+                        f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过"
+                    )
                     continue
             signal_dict = {
                 "trade_date": trade_date,
@@ -856,10 +995,10 @@ class StrategyPipeline:
                 "stock_name": s.stock_name,
                 "buy_zone_min": s.buy_zone_min,
                 "buy_zone_max": s.buy_zone_max,
-                "target_position": s.target_position or 0.10,
+                "target_position": s.target_position or settings.DEFAULT_POSITION_PCT,
                 "stop_loss": s.stop_loss,
                 "take_profit": s.take_profit,
-                "trailing_stop": s.trailing_stop or 0.05,
+                "trailing_stop": s.trailing_stop or settings.DEFAULT_TRAILING_STOP,
                 "signal_score": s.signal_score,
                 "strategy_name": s.strategy_name or "ai_advisor",
                 "reason": s.reason or "",
@@ -869,21 +1008,57 @@ class StrategyPipeline:
             sid = self.repo.insert_signal(signal_dict)
             if sid:
                 saved += 1
-                logger.info(f"  信号入库: {s.stock_code} {s.stock_name} zone={s.buy_zone_min}-{s.buy_zone_max}")
+                logger.info(
+                    f"  信号入库: {s.stock_code} {s.stock_name} zone={s.buy_zone_min}-{s.buy_zone_max}"
+                )
 
         logger.info(f"信号入库: {saved}/{len(signals)}")
         return saved
+
+    def _backfill_signal_ids(self, signals: list[OrderSignal], trade_date: str):
+        """AI 信号入库后，把 signal_id 回填到 strategy_ai_decisions"""
+        import sqlite3
+
+        repo = self.repo
+        conn = sqlite3.connect(repo.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, stock_code FROM trade_signals WHERE trade_date=? AND signal_source='AI_ENHANCED'",
+                (trade_date,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        code_to_signal_id = {r[1]: r[0] for r in rows}
+
+        for s in signals:
+            sid = code_to_signal_id.get(s.stock_code)
+            if sid:
+                conn = sqlite3.connect(repo.db_path)
+                conn.execute(
+                    "UPDATE strategy_ai_decisions SET signal_id=? WHERE push_date=? AND stock_code=?",
+                    (sid, trade_date, s.stock_code),
+                )
+                conn.commit()
+                conn.close()
 
     # ------------------------------------------------------------------
     # 推送摘要
     # ------------------------------------------------------------------
 
     def _push_summary(
-        self, signals: list[OrderSignal], profiles: list[StockProfile],
-        trade_date: str, holdings_review: list = None,
+        self,
+        signals: list[OrderSignal],
+        profiles: list[StockProfile],
+        trade_date: str,
+        holdings_review: list = None,
     ):
+        from system.config.settings import (
+            TELEGRAM_PRIVATE_CHAT_ID,
+            TELEGRAM_REPORT_BOT_TOKEN,
+            TELEGRAM_REPORT_CHAT_ID,
+        )
         from system.utils.telegram import MessageSender
-        from system.config.settings import TELEGRAM_REPORT_CHAT_ID, TELEGRAM_PRIVATE_CHAT_ID, TELEGRAM_REPORT_BOT_TOKEN
 
         pmap = {p.code: p for p in profiles}
         lines = [f"📋 明天交易信号 ({trade_date})", ""]
@@ -920,8 +1095,7 @@ class StrategyPipeline:
         if TELEGRAM_REPORT_CHAT_ID:
             try:
                 sender = MessageSender(
-                    chat_id=TELEGRAM_REPORT_CHAT_ID,
-                    bot_token=TELEGRAM_REPORT_BOT_TOKEN
+                    chat_id=TELEGRAM_REPORT_CHAT_ID, bot_token=TELEGRAM_REPORT_BOT_TOKEN
                 )
                 sender.send(group_msg)
                 logger.info("交易信号推送成功 (群)")
@@ -933,7 +1107,7 @@ class StrategyPipeline:
             try:
                 sender = MessageSender(
                     chat_id=TELEGRAM_PRIVATE_CHAT_ID,
-                    bot_token=TELEGRAM_REPORT_BOT_TOKEN
+                    bot_token=TELEGRAM_REPORT_BOT_TOKEN,
                 )
                 sender.send(private_msg)
                 logger.info("交易信号推送成功 (私聊)")
@@ -949,8 +1123,12 @@ class StrategyPipeline:
             if mcap:
                 mcap_str = f"，市值{mcap:.0f}亿"
 
-        source_tag = "🤖AI精选" if s.source == SignalSource.AI_ENHANCED else "📊复盘精选"
-        lines = [f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）{source_tag}"]
+        source_tag = (
+            "🤖AI精选" if s.source == SignalSource.AI_ENHANCED else "📊复盘精选"
+        )
+        lines = [
+            f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）{source_tag}"
+        ]
 
         # 趋势定级
         trend_rating = StrategyPipeline._derive_trend_rating(s, p)
@@ -1021,7 +1199,11 @@ class StrategyPipeline:
 
     @staticmethod
     def _build_buy_note(s: OrderSignal, p: Optional[StockProfile]) -> str:
-        zone = f"{s.buy_zone_min:.2f}-{s.buy_zone_max:.2f}" if s.buy_zone_min and s.buy_zone_max else "待定"
+        zone = (
+            f"{s.buy_zone_min:.2f}-{s.buy_zone_max:.2f}"
+            if s.buy_zone_min and s.buy_zone_max
+            else "待定"
+        )
         if not p:
             return f"买入区间 {zone}"
         h = p.history

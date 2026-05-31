@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """复盘推荐盯盘 — 与趋势信号同一逻辑：盘中持续盯买入区间，进入/离开/再进入可重复提醒。
 
 数据来源: stock_tracker (source='复盘')
@@ -138,9 +137,12 @@ class ReviewPickMonitor:
     # 开盘参考
     # ------------------------------------------------------------------
 
-    def build_opening_reference(self, prices: dict[str, float],
-                                market_state: dict = None,
-                                sector_data: dict[str, float] = None) -> Optional[str]:
+    def build_opening_reference(
+        self,
+        prices: dict[str, float],
+        market_state: dict = None,
+        sector_data: dict[str, float] = None,
+    ) -> Optional[str]:
         """生成开盘买入参考（只在第一轮调用）。"""
         if not self._picks:
             return None

@@ -95,7 +95,11 @@ class MarketBreadth:
         limit_down_peak = self._get_limit_down_peak(trade_date)
 
         state = classify_market_state(
-            up, down, limit_up, limit_down, index_chg,
+            up,
+            down,
+            limit_up,
+            limit_down,
+            index_chg,
             prev_state=prev_state,
             consecutive_down_days=consec_downs,
             limit_down_peak=limit_down_peak,

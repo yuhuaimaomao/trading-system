@@ -1,16 +1,18 @@
-# -*- coding: utf-8 -*-
 """执行层单元测试 — ManualExecutor & PaperExecutor"""
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from system.config.settings import MIN_COMMISSION, STAMP_TAX_RATE, DEFAULT_COMMISSION_RATE
+from analysis.signals import OrderSignal, SignalSource, SignalType
+from system.config.settings import (
+    DEFAULT_COMMISSION_RATE,
+    MIN_COMMISSION,
+    STAMP_TAX_RATE,
+)
 from trade.execution.manual import ManualExecutor
 from trade.execution.paper import PaperExecutor
 from trade.portfolio.portfolio import Portfolio
-from analysis.signals import OrderSignal, SignalType, SignalSource
-
 
 # =====================  Fixtures  =====================
 
@@ -68,13 +70,13 @@ def portfolio():
 
 class TestManualExecutorSubmit:
     def test_submit_returns_signal_id(self, buy_signal, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         signal_id = executor.submit(buy_signal)
         assert signal_id == 42
 
     def test_submit_calls_telegram(self, buy_signal, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.submit(buy_signal)
         mock_telegram.send.assert_called_once()
@@ -86,7 +88,7 @@ class TestManualExecutorSubmit:
         # Should not raise
 
     def test_submit_inserts_correct_fields(self, buy_signal, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.submit(buy_signal)
         call_args = mock_repo.insert_signal.call_args[0][0]
@@ -97,7 +99,7 @@ class TestManualExecutorSubmit:
         assert call_args["trade_date"] is not None
 
     def test_submit_caches_pending_signal(self, buy_signal, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.submit(buy_signal)
         assert 42 in executor._pending_signals
@@ -106,13 +108,13 @@ class TestManualExecutorSubmit:
 
 class TestManualExecutorConfirm:
     def test_confirm_updates_signal_status(self, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.confirm(signal_id=1, price=12.50, volume=1000, code="000001")
         mock_repo.update_signal_status.assert_called_with(1, "executed")
 
     def test_confirm_inserts_order(self, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.confirm(signal_id=1, price=12.50, volume=1000, code="000001")
         order = mock_repo.insert_order.call_args[0][0]
@@ -123,23 +125,31 @@ class TestManualExecutorConfirm:
         assert order["filled_amount"] == 12500.0
 
     def test_confirm_returns_order_id(self, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
-        order_id = executor.confirm(signal_id=1, price=12.50, volume=1000, code="000001")
+        order_id = executor.confirm(
+            signal_id=1, price=12.50, volume=1000, code="000001"
+        )
         assert order_id == 99
 
-    def test_confirm_creates_portfolio_position(self, mock_repo, mock_telegram, portfolio):
+    def test_confirm_creates_portfolio_position(
+        self, mock_repo, mock_telegram, portfolio
+    ):
         executor = ManualExecutor(telegram_bot=mock_telegram, portfolio=portfolio)
         executor.repo = mock_repo
-        executor.confirm(signal_id=1, price=12.50, volume=1000, code="000001", name="平安银行")
+        executor.confirm(
+            signal_id=1, price=12.50, volume=1000, code="000001", name="平安银行"
+        )
         pos = portfolio.positions.get("000001")
         assert pos is not None
         assert pos.volume == 1000
         assert pos.avg_cost == 12.50
         assert portfolio.cash < 100000  # 现金减少
 
-    def test_confirm_uses_cached_info_when_code_empty(self, buy_signal, mock_repo, mock_telegram):
-        executor = ManualExecutor(telegram_bot=mock_telegram)
+    def test_confirm_uses_cached_info_when_code_empty(
+        self, buy_signal, mock_repo, mock_telegram
+    ):
+        executor = ManualExecutor(telegram_bot=mock_telegram, db_path=":memory:")
         executor.repo = mock_repo
         executor.submit(buy_signal)
         executor.confirm(signal_id=42, price=12.50, volume=500)
@@ -154,7 +164,7 @@ class TestManualExecutorConfirm:
 
 class TestManualExecutorReject:
     def test_reject_updates_status(self, mock_repo):
-        executor = ManualExecutor()
+        executor = ManualExecutor(db_path=":memory:")
         executor.repo = mock_repo
         executor.reject(signal_id=5)
         mock_repo.update_signal_status.assert_called_with(5, "rejected")
@@ -165,13 +175,13 @@ class TestManualExecutorReject:
 
 class TestPaperExecutorCommission:
     def test_buy_commission_min(self):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         # 金额很小，佣金低于最低5元
         result = executor._calc_commission(1000, is_sell=False)
         assert result == MIN_COMMISSION  # 至少5元
 
     def test_sell_commission_includes_stamp_tax(self):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         amount = 100000
         result = executor._calc_commission(amount, is_sell=True)
         expected_brokerage = max(amount * DEFAULT_COMMISSION_RATE, MIN_COMMISSION)
@@ -179,14 +189,14 @@ class TestPaperExecutorCommission:
         assert result == pytest.approx(expected_brokerage + expected_stamp)
 
     def test_commission_large_amount(self):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         amount = 500000
         result = executor._calc_commission(amount, is_sell=False)
         expected = amount * DEFAULT_COMMISSION_RATE
         assert result == pytest.approx(expected)
 
     def test_commission_sell_below_min_still_pays_stamp(self):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         amount = 10000
         result = executor._calc_commission(amount, is_sell=True)
         # brokerage reaches MIN_COMMISSION, stamp is on top
@@ -232,14 +242,14 @@ class TestPaperExecutorBuy:
         assert p.cash < 100000
 
     def test_execute_buy_inserts_signal(self, buy_signal, mock_repo):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         executor.repo = mock_repo
         executor.execute_buy(buy_signal, current_price=12.50, volume=1000)
         call_args = mock_repo.insert_signal.call_args[0][0]
         assert call_args["status"] == "executed"
 
     def test_execute_buy_inserts_order(self, buy_signal, mock_repo):
-        executor = PaperExecutor()
+        executor = PaperExecutor(db_path=":memory:")
         executor.repo = mock_repo
         executor.execute_buy(buy_signal, current_price=12.50, volume=1000)
         order = mock_repo.insert_order.call_args[0][0]

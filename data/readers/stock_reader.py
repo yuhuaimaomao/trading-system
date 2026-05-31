@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 个股数据读取器
 
@@ -19,7 +18,8 @@ class StockReader:
         """查询今日异动股（主板 20 + 创业板 20，合并后按涨幅排序）"""
 
         def _fetch_pool(extra_where: str, limit: int) -> list:
-            cursor = conn.execute(f"""
+            cursor = conn.execute(
+                f"""
                 SELECT s.stock_code, s.stock_name, s.change_pct,
                        s.main_force_net, s.total_market_cap/100000000 as mcap,
                        s.circ_market_cap/100000000 as circ_mcap,
@@ -48,40 +48,46 @@ class StockReader:
                     AND {extra_where}
                 ORDER BY s.change_pct DESC
                 LIMIT {limit}
-            """, (trade_date,))
+            """,
+                (trade_date,),
+            )
             return [dict(row) for row in cursor.fetchall()]
 
         main_board = _fetch_pool(
-            "(s.stock_code LIKE '60%' OR s.stock_code LIKE '00%')", 20)
+            "(s.stock_code LIKE '60%' OR s.stock_code LIKE '00%')", 20
+        )
         gem_board = _fetch_pool("s.stock_code LIKE '30%'", 20)
         candidate_rows = main_board + gem_board
-        candidate_rows.sort(key=lambda x: x['change_pct'] or 0, reverse=True)
+        candidate_rows.sort(key=lambda x: x["change_pct"] or 0, reverse=True)
 
         candidates = []
         for row in candidate_rows:
-            candidates.append({
-                'code': row['stock_code'], 'name': row['stock_name'],
-                'change': row['change_pct'] or 0,
-                'mf_net': row['main_force_net'] or 0,
-                'mcap': row['mcap'] or 0,
-                'circ_mcap': row['circ_mcap'] or 0,
-                'sl_wan': row['sl_wan'] or 0,
-                'lg_wan': row['lg_wan'] or 0,
-                'md_wan': row['md_wan'] or 0,
-                'sm_wan': row['sm_wan'] or 0,
-                'mf_ratio': row['main_force_ratio'] or 0,
-                'turnover': row['turnover_rate'] or 0,
-                'vol_ratio': row['volume_ratio'] or 0,
-                'amplitude': row['amplitude'] or 0,
-                'industry': row['industry'] or '',
-                'is_zt': row['limit_type'] == '涨停',
-                'cons_boards': row['cons_boards'] or 0,
-                'lhb_net_yi': row['lhb_net_yi'],
-                'price': row['price'] or 0,
-                'ma5': row['ma5'] or 0,
-                'ma20': row['ma20'] or 0,
-                'ma5_angle': row['ma5_angle'] or 0,
-            })
+            candidates.append(
+                {
+                    "code": row["stock_code"],
+                    "name": row["stock_name"],
+                    "change": row["change_pct"] or 0,
+                    "mf_net": row["main_force_net"] or 0,
+                    "mcap": row["mcap"] or 0,
+                    "circ_mcap": row["circ_mcap"] or 0,
+                    "sl_wan": row["sl_wan"] or 0,
+                    "lg_wan": row["lg_wan"] or 0,
+                    "md_wan": row["md_wan"] or 0,
+                    "sm_wan": row["sm_wan"] or 0,
+                    "mf_ratio": row["main_force_ratio"] or 0,
+                    "turnover": row["turnover_rate"] or 0,
+                    "vol_ratio": row["volume_ratio"] or 0,
+                    "amplitude": row["amplitude"] or 0,
+                    "industry": row["industry"] or "",
+                    "is_zt": row["limit_type"] == "涨停",
+                    "cons_boards": row["cons_boards"] or 0,
+                    "lhb_net_yi": row["lhb_net_yi"],
+                    "price": row["price"] or 0,
+                    "ma5": row["ma5"] or 0,
+                    "ma20": row["ma20"] or 0,
+                    "ma5_angle": row["ma5_angle"] or 0,
+                }
+            )
         return candidates
 
     @staticmethod
@@ -93,7 +99,8 @@ class StockReader:
             sectors: 行业板块列表（用于补充 60 日新高股）
         """
         # 第一优先级：60日新高且近期多次涨停
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT ss.stock_code, ss.stock_name, ss.limit_up_days, ss.limit_up_count,
                    ss.is_limit_up, ss.reason,
                    sb.change_pct, sb.total_market_cap/100000000 as mcap,
@@ -110,18 +117,21 @@ class StockReader:
             WHERE ss.trade_date = ?
                 AND ss.reason IN ('60日新高且近期多次涨停', '近期多次涨停')
             ORDER BY ss.limit_up_days DESC, ss.limit_up_count DESC
-        """, (trade_date, trade_date))
+        """,
+            (trade_date, trade_date),
+        )
         strong_stocks = [dict(row) for row in cursor.fetchall()]
 
         # 不够 30 只，从涨幅靠前板块中补 60 日新高
         if len(strong_stocks) < 30:
-            existing_codes = {s['stock_code'] for s in strong_stocks}
+            existing_codes = {s["stock_code"] for s in strong_stocks}
             need = 30 - len(strong_stocks)
-            top_sector_names = [s['name'] for s in sectors[:10]] if sectors else []
+            top_sector_names = [s["name"] for s in sectors[:10]] if sectors else []
             if top_sector_names:
-                s_placeholders = ','.join('?' * len(top_sector_names))
-                exc_placeholders = ','.join('?' * len(existing_codes))
-                cursor = conn.execute(f"""
+                s_placeholders = ",".join("?" * len(top_sector_names))
+                exc_placeholders = ",".join("?" * len(existing_codes))
+                cursor = conn.execute(
+                    f"""
                     SELECT ss.stock_code, ss.stock_name, ss.limit_up_days, ss.limit_up_count,
                            ss.is_limit_up, ss.reason,
                            sb.change_pct, sb.total_market_cap/100000000 as mcap,
@@ -144,7 +154,12 @@ class StockReader:
                         AND ss.stock_code NOT IN ({exc_placeholders})
                     ORDER BY ss.limit_up_days DESC
                     LIMIT ?
-                """, [trade_date, trade_date] + top_sector_names + list(existing_codes) + [need])
+                """,
+                    [trade_date, trade_date]
+                    + top_sector_names
+                    + list(existing_codes)
+                    + [need],
+                )
                 supplement = [dict(row) for row in cursor.fetchall()]
                 strong_stocks.extend(supplement)
 
@@ -168,7 +183,8 @@ class StockReader:
         Returns:
             {'strong': [...], 'normal': [...]} 各 TOP10
         """
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             SELECT stock_code, stock_name, change_pct,
                    total_market_cap/100000000 as mcap,
                    circ_market_cap/100000000 as circ_mcap,
@@ -188,7 +204,9 @@ class StockReader:
               AND avg_vol_5d >= avg_vol_20d * 0.9
               AND price > 0 AND ma5 > 0 AND ma10 > 0 AND ma20 > 0
             ORDER BY ma5_angle DESC
-        """, (trade_date,))
+        """,
+            (trade_date,),
+        )
 
         strong = []
         normal = []
@@ -206,18 +224,27 @@ class StockReader:
             ma10 = row[8] or 0
             ma20 = row[9] or 0
             ma5_angle = row[10] or 0
-            industry = row[11] or ''
+            industry = row[11] or ""
             price = row[12] or 0
             mf_wan = row[13] or 0
             mf_ratio = row[14] or 0
 
             record = {
-                'stock_code': code, 'stock_name': name,
-                'change_pct': change_pct, 'mcap': mcap, 'circ_mcap': circ_mcap,
-                'turnover_rate': turnover_rate, 'volume_ratio': volume_ratio,
-                'ma5': ma5, 'ma10': ma10, 'ma20': ma20, 'ma5_angle': ma5_angle,
-                'industry': industry, 'price': price,
-                'mf_wan': mf_wan, 'mf_ratio': mf_ratio,
+                "stock_code": code,
+                "stock_name": name,
+                "change_pct": change_pct,
+                "mcap": mcap,
+                "circ_mcap": circ_mcap,
+                "turnover_rate": turnover_rate,
+                "volume_ratio": volume_ratio,
+                "ma5": ma5,
+                "ma10": ma10,
+                "ma20": ma20,
+                "ma5_angle": ma5_angle,
+                "industry": industry,
+                "price": price,
+                "mf_wan": mf_wan,
+                "mf_ratio": mf_ratio,
             }
 
             # --- 5日线强趋势判断 ---
@@ -232,45 +259,44 @@ class StockReader:
 
             if is_strong:
                 slope_score = min(40 + spread_5_20 * 100, 100)
-                record['mode'] = 'strong'
-                record['score'] = round(slope_score, 1)
-                record['bias_ma5'] = round(bias_ma5 * 100, 2)
+                record["mode"] = "strong"
+                record["score"] = round(slope_score, 1)
+                record["bias_ma5"] = round(bias_ma5 * 100, 2)
                 strong.append(record)
                 strong_codes.add(code)
                 continue
 
             # --- 20日线稳健趋势判断 ---
             bias_ma20 = (price - ma20) / ma20 if ma20 > 0 else 999
-            is_normal = (
-                price > ma20
-                and bias_ma20 < 0.10
-                and ma5_angle > 0
-            )
+            is_normal = price > ma20 and bias_ma20 < 0.10 and ma5_angle > 0
 
             if is_normal:
                 dev_pct = bias_ma20 * 100
                 normal_score = 60 + (20 - dev_pct) * 0.5
                 normal_score = min(max(normal_score, 50), 90)
-                record['mode'] = 'normal'
-                record['score'] = round(normal_score, 1)
-                record['bias_ma20'] = round(dev_pct, 2)
+                record["mode"] = "normal"
+                record["score"] = round(normal_score, 1)
+                record["bias_ma20"] = round(dev_pct, 2)
                 normal.append(record)
 
             if len(strong) >= 10 and len(normal) >= 10:
                 break
 
-        strong.sort(key=lambda x: x['score'], reverse=True)
-        normal.sort(key=lambda x: x['score'], reverse=True)
+        strong.sort(key=lambda x: x["score"], reverse=True)
+        normal.sort(key=lambda x: x["score"], reverse=True)
 
         # 板块趋势过滤
-        all_codes = [r['stock_code'] for r in strong[:10]] + [r['stock_code'] for r in normal[:10]]
+        all_codes = [r["stock_code"] for r in strong[:10]] + [
+            r["stock_code"] for r in normal[:10]
+        ]
         if all_codes:
             from data.readers.sector_reader import SectorReader
+
             passed = SectorReader.filter_by_sector_trend(conn, trade_date, all_codes)
-            strong = [r for r in strong if r['stock_code'] in passed][:10]
-            normal = [r for r in normal if r['stock_code'] in passed][:10]
+            strong = [r for r in strong if r["stock_code"] in passed][:10]
+            normal = [r for r in normal if r["stock_code"] in passed][:10]
 
         return {
-            'strong': strong,
-            'normal': normal,
+            "strong": strong,
+            "normal": normal,
         }

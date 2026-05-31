@@ -1,0 +1,68 @@
+# Pre-commit hooks — 提交前自动检查
+# 安装: pip install pre-commit && pre-commit install
+# 跳过: git commit --no-verify (紧急情况，CI 会补拦)
+
+repos:
+  # ══════════════════════════════════════════════
+  # 第1级: 基础卫生 — 所有文件强制执行 ★现在生效★
+  # ══════════════════════════════════════════════
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict          # 未解决的合并冲突
+      - id: debug-statements              # breakpoint() / pdb
+      - id: detect-private-key            # 私钥泄露
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: ['--fix', '--select=E,F,W,I,N,UP,B,SIM']  # 风格+导入排序+语法升级
+      - id: ruff-format
+
+  # ══════════════════════════════════════════════
+  # 第2级: 魔法数字 — 只检查变更行 ★现在生效★
+  # ══════════════════════════════════════════════
+
+  - repo: local
+    hooks:
+      - id: no-magic-numbers
+        name: 禁止魔法数字（仅检查变更行）
+        entry: python scripts/pre_commit/check_magic_numbers.py
+        language: python
+        files: '^(analysis|trade|system|data)/.*\.py$'
+        pass_filenames: true
+        additional_dependencies: []
+
+      - id: no-hardcoded-config
+        name: 禁止新增配置硬编码
+        entry: python scripts/pre_commit/check_hardcoded_config.py
+        language: python
+        files: '^(analysis|trade|system|data)/.*\.py$'
+        pass_filenames: true
+
+  # ══════════════════════════════════════════════
+  # 第3级: 架构规则 — 仅新文件 ★现在生效★
+  # ══════════════════════════════════════════════
+
+  - repo: local
+    hooks:
+      - id: file-size-new
+        name: 新文件不超过 400 行
+        entry: python scripts/pre_commit/check_file_size_new.py
+        language: python
+        pass_filenames: true
+
+      - id: domain-purity-new
+        name: 新文件禁止 domain 依赖 IO
+        entry: python scripts/pre_commit/check_domain_purity_new.py
+        language: python
+        files: '^(analysis|trade|system|data)/.*\.py$'
+        pass_filenames: true

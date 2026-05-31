@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 个股行情采集器
 
@@ -13,14 +12,11 @@
 """
 
 import sqlite3
-import time
 from collections import defaultdict
 from datetime import datetime
-from typing import List, Dict, Optional
-from math import ceil
+from typing import Dict, List
 
-from data.collectors.proxy.proxy_base_collector import ProxyBaseCollector, USER_AGENTS
-
+from data.collectors.proxy.proxy_base_collector import USER_AGENTS, ProxyBaseCollector
 
 
 class StockBasicCollector(ProxyBaseCollector):
@@ -49,7 +45,7 @@ class StockBasicCollector(ProxyBaseCollector):
         "invt": "2",
         "fid": "f3",
         "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:262144",
-        "fields": "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f38,f39,f41,f46,f48,f57,f62,f66,f69,f72,f75,f78,f81,f84,f87,f88,f100,f102,f103,f113,f115,f26"
+        "fields": "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f10,f15,f16,f17,f18,f20,f21,f23,f38,f39,f41,f46,f48,f57,f62,f66,f69,f72,f75,f78,f81,f84,f87,f88,f100,f102,f103,f113,f115,f26",
     }
 
     # Referer
@@ -58,7 +54,7 @@ class StockBasicCollector(ProxyBaseCollector):
     # User-Agent 池
     USER_AGENTS = USER_AGENTS
 
-    def __init__(self, trade_date: str = None, task_mgr = None):
+    def __init__(self, trade_date: str = None, task_mgr=None):
         """
         初始化采集器
 
@@ -67,11 +63,9 @@ class StockBasicCollector(ProxyBaseCollector):
             task_mgr: 任务状态管理器
         """
         super().__init__(
-            logger_name="StockBasicCollector",
-            trade_date=trade_date,
-            task_mgr=task_mgr
+            logger_name="StockBasicCollector", trade_date=trade_date, task_mgr=task_mgr
         )
-        self.logger.info(f"个股行情采集器初始化完成")
+        self.logger.info("个股行情采集器初始化完成")
         self.logger.info(f"交易日期:{self.trade_date}")
 
     def _parse_data(self, data: Dict) -> List[Dict]:
@@ -86,13 +80,13 @@ class StockBasicCollector(ProxyBaseCollector):
         """
         stocks = []
 
-        if not data.get('data') or not data['data'].get('diff'):
+        if not data.get("data") or not data["data"].get("diff"):
             return stocks
 
-        for item in data['data']['diff']:
+        for item in data["data"]["diff"]:
             # 辅助函数:安全转换为 float
             def safe_float(value, default=0):
-                if value is None or value == '' or value == '-':
+                if value is None or value == "" or value == "-":
                     return default
                 try:
                     return float(value)
@@ -100,77 +94,77 @@ class StockBasicCollector(ProxyBaseCollector):
                     return default
 
             # 上市日期格式化 (YYYYMMDD → YYYY-MM-DD)
-            listing_date_raw = item.get('f26', '')
-            listing_date = ''
+            listing_date_raw = item.get("f26", "")
+            listing_date = ""
             if listing_date_raw:
-                listing_date_str = str(int(listing_date_raw)) if isinstance(listing_date_raw, (int, float)) else str(listing_date_raw)
+                listing_date_str = (
+                    str(int(listing_date_raw))
+                    if isinstance(listing_date_raw, (int, float))
+                    else str(listing_date_raw)
+                )
                 if len(listing_date_str) == 8 and listing_date_str.isdigit():
                     listing_date = f"{listing_date_str[:4]}-{listing_date_str[4:6]}-{listing_date_str[6:]}"
 
             stock = {
-                'trade_date': self.trade_date,
-                'stock_code': item.get('f12', ''),
-                'stock_name': item.get('f14', ''),
-
+                "trade_date": self.trade_date,
+                "stock_code": item.get("f12", ""),
+                "stock_name": item.get("f14", ""),
                 # 基础信息 (6 个)
-                'industry': item.get('f100', ''),
-                'region': item.get('f102', ''),
-                'concepts': item.get('f103', ''),
-                'listing_date': listing_date,
-                'total_shares': safe_float(item.get('f38'), 0),
-                'circ_shares': safe_float(item.get('f39'), 0),
-
+                "industry": item.get("f100", ""),
+                "region": item.get("f102", ""),
+                "concepts": item.get("f103", ""),
+                "listing_date": listing_date,
+                "total_shares": safe_float(item.get("f38"), 0),
+                "circ_shares": safe_float(item.get("f39"), 0),
                 # 市值数据 (2 个)
-                'total_market_cap': safe_float(item.get('f20'), 0),
-                'circ_market_cap': safe_float(item.get('f21'), 0),
-
+                "total_market_cap": safe_float(item.get("f20"), 0),
+                "circ_market_cap": safe_float(item.get("f21"), 0),
                 # 每股指标 (2 个)
-                'bps': safe_float(item.get('f113'), 0),
-                'undistributed_profit': safe_float(item.get('f48'), 0),
-
+                "bps": safe_float(item.get("f113"), 0),
+                "undistributed_profit": safe_float(item.get("f48"), 0),
                 # 财务指标 (3 个)
-                'asset_liability_ratio': safe_float(item.get('f57'), 0),
-                'profit_growth': safe_float(item.get('f46'), 0),
-                'revenue_growth': safe_float(item.get('f41'), 0),
-
+                "asset_liability_ratio": safe_float(item.get("f57"), 0),
+                "profit_growth": safe_float(item.get("f46"), 0),
+                "revenue_growth": safe_float(item.get("f41"), 0),
                 # 行情数据 (8 个)
-                'price': safe_float(item.get('f2'), 0),
-                'change_pct': safe_float(item.get('f3'), 0),
-                'change_amount': safe_float(item.get('f4'), 0),
-                'prev_close': safe_float(item.get('f18'), 0),
-                'open': safe_float(item.get('f17'), 0),
-                'high': safe_float(item.get('f15'), 0),
-                'low': safe_float(item.get('f16'), 0),
-
+                "price": safe_float(item.get("f2"), 0),
+                "change_pct": safe_float(item.get("f3"), 0),
+                "change_amount": safe_float(item.get("f4"), 0),
+                "prev_close": safe_float(item.get("f18"), 0),
+                "open": safe_float(item.get("f17"), 0),
+                "high": safe_float(item.get("f15"), 0),
+                "low": safe_float(item.get("f16"), 0),
                 # 成交数据 (5 个)
-                'amplitude': safe_float(item.get('f7'), 0),
-                'volume': safe_float(item.get('f5'), 0),  # 手
-                'turnover': safe_float(item.get('f6'), 0),  # 元
-                'turnover_rate': safe_float(item.get('f8'), 0),
-
+                "amplitude": safe_float(item.get("f7"), 0),
+                "volume": safe_float(item.get("f5"), 0),  # 手
+                "turnover": safe_float(item.get("f6"), 0),  # 元
+                "turnover_rate": safe_float(item.get("f8"), 0),
                 # 平均股价(计算字段)
                 # avg_price = 成交额 / (成交量 × 100)  注意:1 手=100 股
-                'avg_price': round(safe_float(item.get('f6'), 0) / (safe_float(item.get('f5'), 0) * 100), 2) if safe_float(item.get('f5'), 0) > 0 else 0,
-                'volume_ratio': safe_float(item.get('f10'), 0),
-
+                "avg_price": round(
+                    safe_float(item.get("f6"), 0)
+                    / (safe_float(item.get("f5"), 0) * 100),
+                    2,
+                )
+                if safe_float(item.get("f5"), 0) > 0
+                else 0,
+                "volume_ratio": safe_float(item.get("f10"), 0),
                 # 资金流向 (9 个)
-                'main_force_net': safe_float(item.get('f62'), 0),
-                'super_large_net': safe_float(item.get('f66'), 0),
-                'large_net': safe_float(item.get('f72'), 0),
-                'medium_net': safe_float(item.get('f78'), 0),
-                'small_net': safe_float(item.get('f84'), 0),
-                'main_force_ratio': safe_float(item.get('f88'), 0),
-                'super_large_ratio': safe_float(item.get('f69'), 0),
-                'large_ratio': safe_float(item.get('f75'), 0),
-                'medium_ratio': safe_float(item.get('f81'), 0),
-                'small_ratio': safe_float(item.get('f87'), 0),
-
+                "main_force_net": safe_float(item.get("f62"), 0),
+                "super_large_net": safe_float(item.get("f66"), 0),
+                "large_net": safe_float(item.get("f72"), 0),
+                "medium_net": safe_float(item.get("f78"), 0),
+                "small_net": safe_float(item.get("f84"), 0),
+                "main_force_ratio": safe_float(item.get("f88"), 0),
+                "super_large_ratio": safe_float(item.get("f69"), 0),
+                "large_ratio": safe_float(item.get("f75"), 0),
+                "medium_ratio": safe_float(item.get("f81"), 0),
+                "small_ratio": safe_float(item.get("f87"), 0),
                 # 估值指标 (3 个)
-                'pe_dynamic': safe_float(item.get('f9'), 0),
-                'pe_ttm': safe_float(item.get('f115'), 0),
-                'pb_ratio': safe_float(item.get('f23'), 0),
-
-                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                "pe_dynamic": safe_float(item.get("f9"), 0),
+                "pe_ttm": safe_float(item.get("f115"), 0),
+                "pb_ratio": safe_float(item.get("f23"), 0),
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
             stocks.append(stock)
@@ -191,7 +185,7 @@ class StockBasicCollector(ProxyBaseCollector):
             from system.config.settings import DATABASE_PATH
 
             trade_date = self.trade_date
-            updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
@@ -200,57 +194,60 @@ class StockBasicCollector(ProxyBaseCollector):
             insert_data = []
             seen = set()  # 同一批次去重
             for row in data:
-                code = row.get('stock_code', '')
+                code = row.get("stock_code", "")
                 if code in seen:
                     continue
                 seen.add(code)
-                insert_data.append((
-                    trade_date,
-                    code,
-                    row.get('stock_name', ''),
-                    row.get('price', 0),
-                    row.get('change_pct', 0),
-                    row.get('change_amount', 0),
-                    row.get('volume', 0),
-                    row.get('turnover', 0),
-                    row.get('amplitude', 0),
-                    row.get('turnover_rate', 0),
-                    row.get('pe_dynamic', 0),
-                    row.get('volume_ratio', 0),
-                    row.get('high', 0),
-                    row.get('low', 0),
-                    row.get('open', 0),
-                    row.get('prev_close', 0),
-                    row.get('total_market_cap', 0),
-                    row.get('circ_market_cap', 0),
-                    row.get('pb_ratio', 0),
-                    row.get('total_shares', 0),
-                    row.get('circ_shares', 0),
-                    row.get('revenue_growth', 0),
-                    row.get('profit_growth', 0),
-                    row.get('asset_liability_ratio', 0),
-                    row.get('undistributed_profit', 0),
-                    row.get('main_force_net', 0),
-                    row.get('super_large_net', 0),
-                    row.get('large_net', 0),
-                    row.get('medium_net', 0),
-                    row.get('small_net', 0),
-                    row.get('main_force_ratio', 0),
-                    row.get('super_large_ratio', 0),
-                    row.get('large_ratio', 0),
-                    row.get('medium_ratio', 0),
-                    row.get('small_ratio', 0),
-                    row.get('pe_ttm', 0),
-                    row.get('industry', ''),
-                    row.get('region', ''),
-                    row.get('concepts', ''),
-                    row.get('bps', 0),
-                    row.get('listing_date', ''),
-                    row.get('avg_price', 0),
-                    updated_at
-                ))
+                insert_data.append(
+                    (
+                        trade_date,
+                        code,
+                        row.get("stock_name", ""),
+                        row.get("price", 0),
+                        row.get("change_pct", 0),
+                        row.get("change_amount", 0),
+                        row.get("volume", 0),
+                        row.get("turnover", 0),
+                        row.get("amplitude", 0),
+                        row.get("turnover_rate", 0),
+                        row.get("pe_dynamic", 0),
+                        row.get("volume_ratio", 0),
+                        row.get("high", 0),
+                        row.get("low", 0),
+                        row.get("open", 0),
+                        row.get("prev_close", 0),
+                        row.get("total_market_cap", 0),
+                        row.get("circ_market_cap", 0),
+                        row.get("pb_ratio", 0),
+                        row.get("total_shares", 0),
+                        row.get("circ_shares", 0),
+                        row.get("revenue_growth", 0),
+                        row.get("profit_growth", 0),
+                        row.get("asset_liability_ratio", 0),
+                        row.get("undistributed_profit", 0),
+                        row.get("main_force_net", 0),
+                        row.get("super_large_net", 0),
+                        row.get("large_net", 0),
+                        row.get("medium_net", 0),
+                        row.get("small_net", 0),
+                        row.get("main_force_ratio", 0),
+                        row.get("super_large_ratio", 0),
+                        row.get("large_ratio", 0),
+                        row.get("medium_ratio", 0),
+                        row.get("small_ratio", 0),
+                        row.get("pe_ttm", 0),
+                        row.get("industry", ""),
+                        row.get("region", ""),
+                        row.get("concepts", ""),
+                        row.get("bps", 0),
+                        row.get("listing_date", ""),
+                        row.get("avg_price", 0),
+                        updated_at,
+                    )
+                )
 
-            cursor.executemany(f"""
+            cursor.executemany(
+                f"""
                 INSERT OR REPLACE INTO {self.TABLE_NAME} (
                     trade_date, stock_code, stock_name,
                     price, change_pct, change_amount,
@@ -264,7 +261,9 @@ class StockBasicCollector(ProxyBaseCollector):
                     pe_ttm, industry, region, concepts, bps, listing_date, avg_price,
                     updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, insert_data)
+            """,
+                insert_data,
+            )
 
             conn.commit()
 
@@ -273,38 +272,46 @@ class StockBasicCollector(ProxyBaseCollector):
                 f"SELECT COUNT(DISTINCT stock_code) FROM {self.TABLE_NAME} WHERE trade_date = ?",
                 (trade_date,),
             ).fetchone()[0]
-            api_total = self.cache_data.get('total', 0)
+            api_total = self.cache_data.get("total", 0)
             if api_total and actual < api_total * 0.99:
-                self.logger.warning(f"⚠️ 覆盖率不足: 已保存 {actual} 只, API total {api_total} 只 ({actual/api_total*100:.1f}%)")
+                self.logger.warning(
+                    f"⚠️ 覆盖率不足: 已保存 {actual} 只, API total {api_total} 只 ({actual / api_total * 100:.1f}%)"
+                )
             else:
-                self.logger.info(f"✅ 保存到数据库成功: {actual} 只 (API total: {api_total})")
+                self.logger.info(
+                    f"✅ 保存到数据库成功: {actual} 只 (API total: {api_total})"
+                )
 
         except Exception as e:
-            if 'conn' in locals() and conn:
+            if "conn" in locals() and conn:
                 conn.rollback()
             self.logger.error(f"❌ 保存到数据库失败：{e}")
             raise
 
         finally:
-            if 'conn' in locals() and conn:
+            if "conn" in locals() and conn:
                 conn.close()
 
     def _compute_moving_averages(self):
         """计算当日所有个股的 MA5/MA10/MA20/MA5_angle + avg_vol_5d/avg_vol_20d 并更新入库"""
         self.logger.info("计算均线 + 量能均值...")
-        from system.config.settings import DATABASE_PATH
         import sqlite3 as _sql
+
+        from system.config.settings import DATABASE_PATH
 
         conn = _sql.connect(DATABASE_PATH)
         try:
             cur = conn.cursor()
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT stock_code, trade_date, price, volume
                 FROM stock_basic
                 WHERE trade_date <= ?
                 ORDER BY stock_code, trade_date DESC
-            """, (self.trade_date,))
+            """,
+                (self.trade_date,),
+            )
 
             # 按 stock_code 分组，每组按日期降序排列
             prices_by_code = defaultdict(list)
@@ -330,17 +337,35 @@ class StockBasicCollector(ProxyBaseCollector):
 
                 # MA5 斜率: 今日 MA5 / 昨日 MA5 - 1
                 prev_prices = prices[1:6]
-                prev_ma5 = round(sum(prev_prices) / min(5, len(prev_prices)), 2) if prev_prices else 0
+                prev_ma5 = (
+                    round(sum(prev_prices) / min(5, len(prev_prices)), 2)
+                    if prev_prices
+                    else 0
+                )
                 ma5_angle = round((ma5 / prev_ma5 - 1) * 100, 2) if prev_ma5 > 0 else 0
 
-                updates.append((ma5, ma10, ma20, ma5_angle, avg_vol_5d, avg_vol_20d, self.trade_date, code))
+                updates.append(
+                    (
+                        ma5,
+                        ma10,
+                        ma20,
+                        ma5_angle,
+                        avg_vol_5d,
+                        avg_vol_20d,
+                        self.trade_date,
+                        code,
+                    )
+                )
 
             if updates:
-                cur.executemany("""
+                cur.executemany(
+                    """
                     UPDATE stock_basic SET ma5 = ?, ma10 = ?, ma20 = ?, ma5_angle = ?,
                         avg_vol_5d = ?, avg_vol_20d = ?
                     WHERE trade_date = ? AND stock_code = ?
-                """, updates)
+                """,
+                    updates,
+                )
                 conn.commit()
                 self.logger.info(f"✅ 均线+量能计算完成: {len(updates)} 只个股")
             else:
@@ -352,38 +377,50 @@ class StockBasicCollector(ProxyBaseCollector):
     def _compute_indicators(self):
         """计算 MA60/MA120/BBI/MACD/RSI/KDJ，写入 stock_indicators"""
         self.logger.info("计算技术指标 (MA60/120/BBI/MACD/RSI/KDJ/BOLL)...")
-        from system.config.settings import DATABASE_PATH
-        from analysis.screening.indicators import calc_macd, calc_rsi, calc_kdj, calc_bollinger
         import sqlite3 as _sql
+
+        from analysis.screening.indicators import (
+            calc_bollinger,
+            calc_kdj,
+            calc_macd,
+            calc_rsi,
+        )
+        from system.config.settings import DATABASE_PATH
 
         conn = _sql.connect(DATABASE_PATH)
         try:
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT stock_code, trade_date, price, open, high, low
                 FROM stock_basic
                 WHERE trade_date <= ?
                 ORDER BY stock_code, trade_date ASC
-            """, (self.trade_date,))
+            """,
+                (self.trade_date,),
+            )
 
             # 按 stock_code 分组，日期升序
             from collections import defaultdict as _dd
+
             data_by_code = _dd(list)
             for row in cur.fetchall():
                 code = row[0]
-                data_by_code[code].append({
-                    'date': row[1],
-                    'close': row[2] or 0,
-                    'open': row[3] or 0,
-                    'high': row[4] or 0,
-                    'low': row[5] or 0,
-                })
+                data_by_code[code].append(
+                    {
+                        "date": row[1],
+                        "close": row[2] or 0,
+                        "open": row[3] or 0,
+                        "high": row[4] or 0,
+                        "low": row[5] or 0,
+                    }
+                )
 
             inserts = []
             for code, rows in data_by_code.items():
-                closes = [r['close'] for r in rows]
-                highs = [r['high'] for r in rows]
-                lows = [r['low'] for r in rows]
+                closes = [r["close"] for r in rows]
+                highs = [r["high"] for r in rows]
+                lows = [r["low"] for r in rows]
                 n = len(closes)
 
                 if n < 3 or closes[-1] == 0:
@@ -394,8 +431,8 @@ class StockBasicCollector(ProxyBaseCollector):
                 ma120 = round(sum(closes[-120:]) / min(120, n), 2) if n >= 120 else None
 
                 # ---- 日线 BBI ----
-                ma3  = sum(closes[-3:])  / min(3, n)
-                ma6  = sum(closes[-6:])  / min(6, n)
+                ma3 = sum(closes[-3:]) / min(3, n)
+                ma6 = sum(closes[-6:]) / min(6, n)
                 ma12 = sum(closes[-12:]) / min(12, n)
                 ma24 = sum(closes[-24:]) / min(24, n)
                 bbi_daily = round((ma3 + ma6 + ma12 + ma24) / 4, 2)
@@ -411,19 +448,34 @@ class StockBasicCollector(ProxyBaseCollector):
                 kdj = calc_kdj(highs, lows, closes)
                 bb = calc_bollinger(closes)
 
-                inserts.append((
-                    code, self.trade_date,
-                    ma60, ma120,
-                    bbi_daily, bbi_weekly,
-                    macd['dif'], macd['dea'], macd['bar'],
-                    rsi6, rsi12, rsi24,
-                    kdj['k'], kdj['d'], kdj['j'],
-                    bb['upper'], bb['mid'], bb['lower'],
-                    bb['width'], bb['pct_b'],
-                ))
+                inserts.append(
+                    (
+                        code,
+                        self.trade_date,
+                        ma60,
+                        ma120,
+                        bbi_daily,
+                        bbi_weekly,
+                        macd["dif"],
+                        macd["dea"],
+                        macd["bar"],
+                        rsi6,
+                        rsi12,
+                        rsi24,
+                        kdj["k"],
+                        kdj["d"],
+                        kdj["j"],
+                        bb["upper"],
+                        bb["mid"],
+                        bb["lower"],
+                        bb["width"],
+                        bb["pct_b"],
+                    )
+                )
 
             if inserts:
-                cur.executemany("""
+                cur.executemany(
+                    """
                     INSERT OR REPLACE INTO stock_indicators
                     (stock_code, trade_date,
                      ma60, ma120, bbi_daily, bbi_weekly,
@@ -433,7 +485,9 @@ class StockBasicCollector(ProxyBaseCollector):
                      bb_upper, bb_mid, bb_lower,
                      bb_width, bb_pct_b)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, inserts)
+                """,
+                    inserts,
+                )
                 conn.commit()
                 self.logger.info(f"✅ 技术指标计算完成: {len(inserts)} 只个股")
             else:
@@ -451,31 +505,31 @@ class StockBasicCollector(ProxyBaseCollector):
         # 按 ISO 周分组
         weeks: dict[tuple, dict] = {}
         for r in daily_rows:
-            if r['close'] == 0:
+            if r["close"] == 0:
                 continue
-            iso = datetime.strptime(r['date'], '%Y-%m-%d').isocalendar()
+            iso = datetime.strptime(r["date"], "%Y-%m-%d").isocalendar()
             key = (iso[0], iso[1])
             if key not in weeks:
                 weeks[key] = {
-                    'open': r['open'] or r['close'],
-                    'close': r['close'],
-                    'high': r['high'] or r['close'],
-                    'low': r['low'] or r['close'],
+                    "open": r["open"] or r["close"],
+                    "close": r["close"],
+                    "high": r["high"] or r["close"],
+                    "low": r["low"] or r["close"],
                 }
             else:
                 w = weeks[key]
-                w['close'] = r['close']
-                w['high'] = max(w['high'], r['high'] or r['close'])
-                w['low'] = min(w['low'], r['low'] or r['close'])
+                w["close"] = r["close"]
+                w["high"] = max(w["high"], r["high"] or r["close"])
+                w["low"] = min(w["low"], r["low"] or r["close"])
 
-        weekly_closes = [w['close'] for w in weeks.values()]
+        weekly_closes = [w["close"] for w in weeks.values()]
 
         n = len(weekly_closes)
         if n < 4:
             return None
 
-        ma3w  = sum(weekly_closes[-3:])  / min(3, n)
-        ma6w  = sum(weekly_closes[-6:])  / min(6, n)
+        ma3w = sum(weekly_closes[-3:]) / min(3, n)
+        ma6w = sum(weekly_closes[-6:]) / min(6, n)
         ma12w = sum(weekly_closes[-12:]) / min(12, n)
         ma24w = sum(weekly_closes[-24:]) / min(24, n)
 
@@ -483,43 +537,38 @@ class StockBasicCollector(ProxyBaseCollector):
 
     def collect_all(self):
         """采集全市场个股行情(使用基类的 fetch_all)"""
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
         self.logger.info("🍎 股票量化系统 - 个股行情采集器")
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
 
         # 使用基类的 fetch_all 方法采集原始数据
         raw_data = self.fetch_all()
 
         # 解析原始数据
-        parsed_data = self._parse_data({'data': {'diff': raw_data}}) if raw_data else []
+        parsed_data = self._parse_data({"data": {"diff": raw_data}}) if raw_data else []
 
         # 返回数据,由复盘服务统一保存
         return {
-            'data': parsed_data,
-            'failed_pages': self.cache_data.get('failed_pages', []),
+            "data": parsed_data,
+            "failed_pages": self.cache_data.get("failed_pages", []),
         }
 
     def fetch_and_save(self) -> Dict:
         """【新方法】采集并保存(一次执行)"""
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
         self.logger.info(f"🍎 {self.__class__.__name__} 开始采集")
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
 
         try:
             # 使用基类的 fetch_all 方法采集原始数据
             raw_data = self.fetch_all()
 
             # 解析原始数据
-            data = self._parse_data({'data': {'diff': raw_data}}) if raw_data else []
+            data = self._parse_data({"data": {"diff": raw_data}}) if raw_data else []
 
             if not data or len(data) == 0:
                 self.logger.error("❌ 采集失败:数据为空")
-                return {
-                    'success': False,
-                    'count': 0,
-                    'total': 0,
-                    'data': []
-                }
+                return {"success": False, "count": 0, "total": 0, "data": []}
 
             # 保存数据
             self._save_to_db(data)
@@ -531,42 +580,34 @@ class StockBasicCollector(ProxyBaseCollector):
             self._compute_indicators()
 
             # 获取应采集总数
-            total = self.cache_data.get('total', len(data))
+            total = self.cache_data.get("total", len(data))
 
-            result = {
-                'success': True,
-                'count': len(data),
-                'total': total,
-                'data': data
-            }
+            result = {"success": True, "count": len(data), "total": total, "data": data}
 
-            self.logger.info(f"✅ {self.__class__.__name__} 采集完成:{len(data)}条(应采集{total}条)")
-            self.logger.info("="*60)
+            self.logger.info(
+                f"✅ {self.__class__.__name__} 采集完成:{len(data)}条(应采集{total}条)"
+            )
+            self.logger.info("=" * 60)
             return result
 
         except Exception as e:
             self.logger.error(f"❌ {self.__class__.__name__} 采集异常:{e}")
-            self.logger.info("="*60)
-            return {
-                'success': False,
-                'count': 0,
-                'total': 0,
-                'data': []
-            }
+            self.logger.info("=" * 60)
+            return {"success": False, "count": 0, "total": 0, "data": []}
 
 
 # ==================== 测试入口 ====================
 
-if __name__ == '__main__':
-    print('='*60)
-    print('个股行情数据采集器 - 测试运行')
-    print('='*60)
+if __name__ == "__main__":
+    print("=" * 60)
+    print("个股行情数据采集器 - 测试运行")
+    print("=" * 60)
 
     try:
         collector = StockBasicCollector()
         result = collector.fetch_and_save()
 
-        if result.get('success'):
+        if result.get("success"):
             print(f"\n✅ 采集成功:{result['count']}条数据")
         else:
             print("\n❌ 采集失败")
@@ -574,6 +615,7 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"\n❌ 执行异常:{e}")
         import traceback
+
         traceback.print_exc()
 
-    print('='*60)
+    print("=" * 60)

@@ -1,29 +1,36 @@
-# -*- coding: utf-8 -*-
 """模拟盘自动执行器 — 模拟成交+滑点+佣金+仓位追踪"""
 
 from datetime import datetime
-from system.config.settings import (
-    DEFAULT_SLIPPAGE,
-    DEFAULT_COMMISSION_RATE,
-    STAMP_TAX_RATE,
-    MIN_COMMISSION,
-)
-from data.repo import TradeRepository
+
 from analysis.signals import OrderSignal
+from data.repo import TradeRepository
+from system.config.settings import (
+    DEFAULT_COMMISSION_RATE,
+    DEFAULT_SLIPPAGE,
+    MIN_COMMISSION,
+    STAMP_TAX_RATE,
+)
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("paper_executor")
 
 
 class PaperExecutor:
-    def __init__(self, portfolio=None, slippage=None, commission_rate=None):
-        self.repo = TradeRepository()
+    def __init__(self, portfolio=None, slippage=None, commission_rate=None, db_path: str = None):
+        self.repo = TradeRepository(db_path=db_path)
         self.portfolio = portfolio
         self.slippage = slippage if slippage is not None else DEFAULT_SLIPPAGE
-        self.commission_rate = commission_rate if commission_rate is not None else DEFAULT_COMMISSION_RATE
+        self.commission_rate = (
+            commission_rate if commission_rate is not None else DEFAULT_COMMISSION_RATE
+        )
 
-    def execute_buy(self, signal: OrderSignal, current_price: float,
-                    volume: int = None, account: str = "paper") -> int | None:
+    def execute_buy(
+        self,
+        signal: OrderSignal,
+        current_price: float,
+        volume: int = None,
+        account: str = "paper",
+    ) -> int | None:
         """模拟买入：计算成交价、股数、佣金，执行持仓更新并记录"""
         fill_price = current_price * (1 + self.slippage)
         fill_price = round(fill_price, 2)
@@ -89,28 +96,37 @@ class PaperExecutor:
             )
 
         # 记录订单
-        order_id = self.repo.insert_order({
-            "signal_id": signal_id,
-            "trade_date": datetime.now().strftime("%Y-%m-%d"),
-            "order_time": datetime.now().isoformat(),
-            "stock_code": signal.stock_code,
-            "order_type": "buy",
-            "order_price": fill_price,
-            "order_volume": volume,
-            "order_status": "filled",
-            "filled_volume": volume,
-            "filled_price": fill_price,
-            "filled_amount": amount,
-            "commission": round(commission, 2),
-            "strategy_name": signal.strategy_name,
-            "updated_at": datetime.now().isoformat(),
-        })
-        logger.info(f"[Paper] 买入 {signal.stock_code} {volume}股 @{fill_price} 佣金{commission:.2f}")
+        order_id = self.repo.insert_order(
+            {
+                "signal_id": signal_id,
+                "trade_date": datetime.now().strftime("%Y-%m-%d"),
+                "order_time": datetime.now().isoformat(),
+                "stock_code": signal.stock_code,
+                "order_type": "buy",
+                "order_price": fill_price,
+                "order_volume": volume,
+                "order_status": "filled",
+                "filled_volume": volume,
+                "filled_price": fill_price,
+                "filled_amount": amount,
+                "commission": round(commission, 2),
+                "strategy_name": signal.strategy_name,
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
+        logger.info(
+            f"[Paper] 买入 {signal.stock_code} {volume}股 @{fill_price} 佣金{commission:.2f}"
+        )
         return order_id
 
-    def execute_sell(self, stock_code: str, current_price: float,
-                     volume: int = None, reason: str = "",
-                     account: str = "paper") -> int | None:
+    def execute_sell(
+        self,
+        stock_code: str,
+        current_price: float,
+        volume: int = None,
+        reason: str = "",
+        account: str = "paper",
+    ) -> int | None:
         """模拟卖出：计算成交价、佣金，执行持仓更新并记录"""
         fill_price = current_price * (1 - self.slippage)
         fill_price = round(fill_price, 2)
@@ -120,6 +136,9 @@ class PaperExecutor:
             pos = self.portfolio.positions.get(stock_code)
             if pos is None:
                 logger.warning(f"[Paper] 无持仓可卖 {stock_code}")
+                return None
+            if pos.entry_date == datetime.now().strftime("%Y-%m-%d"):
+                logger.warning(f"[Paper] T+1 保护，拒绝卖出当日买入的 {stock_code}")
                 return None
 
         if volume is None:
@@ -147,23 +166,27 @@ class PaperExecutor:
             )
 
         # 记录订单（没有 signal_id 时传 0）
-        order_id = self.repo.insert_order({
-            "signal_id": 0,
-            "trade_date": datetime.now().strftime("%Y-%m-%d"),
-            "order_time": datetime.now().isoformat(),
-            "stock_code": stock_code,
-            "order_type": "sell",
-            "order_price": fill_price,
-            "order_volume": volume,
-            "order_status": "filled",
-            "filled_volume": volume,
-            "filled_price": fill_price,
-            "filled_amount": amount,
-            "commission": round(commission, 2),
-            "strategy_name": "",
-            "updated_at": datetime.now().isoformat(),
-        })
-        logger.info(f"[Paper] 卖出 {stock_code} {volume}股 @{fill_price} 佣金{commission:.2f}")
+        order_id = self.repo.insert_order(
+            {
+                "signal_id": 0,
+                "trade_date": datetime.now().strftime("%Y-%m-%d"),
+                "order_time": datetime.now().isoformat(),
+                "stock_code": stock_code,
+                "order_type": "sell",
+                "order_price": fill_price,
+                "order_volume": volume,
+                "order_status": "filled",
+                "filled_volume": volume,
+                "filled_price": fill_price,
+                "filled_amount": amount,
+                "commission": round(commission, 2),
+                "strategy_name": "",
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
+        logger.info(
+            f"[Paper] 卖出 {stock_code} {volume}股 @{fill_price} 佣金{commission:.2f}"
+        )
         return order_id
 
     # ---- 辅助方法 ----

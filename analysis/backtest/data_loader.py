@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """历史数据加载器 — 从 stock_basic 表加载日线数据"""
 
 import sqlite3
@@ -12,8 +11,7 @@ class DataLoader:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DATABASE_PATH
 
-    def load_daily(self, stock_codes: list[str], start_date: str,
-                   end_date: str):
+    def load_daily(self, stock_codes: list[str], start_date: str, end_date: str):
         """加载日线数据
 
         Returns: pd.DataFrame with columns:
@@ -38,8 +36,7 @@ class DataLoader:
         conn.close()
         return df
 
-    def load_prices(self, stock_codes: list[str], start_date: str,
-                    end_date: str):
+    def load_prices(self, stock_codes: list[str], start_date: str, end_date: str):
         """加载价格数据，返回 pivot table: index=date, columns=stock_code, values=close"""
         df = self.load_daily(stock_codes, start_date, end_date)
         if df.empty:

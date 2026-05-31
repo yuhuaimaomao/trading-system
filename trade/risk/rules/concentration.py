@@ -3,10 +3,14 @@
 from trade.portfolio.portfolio import Portfolio
 
 
-def check_concentration(stock_code: str, target_pct: float,
-                        sector_code: str, portfolio: Portfolio,
-                        max_single: float = 0.20,
-                        max_sector: float = 0.30) -> tuple[bool, str]:
+def check_concentration(
+    stock_code: str,
+    target_pct: float,
+    sector_code: str,
+    portfolio: Portfolio,
+    max_single: float = 0.20,
+    max_sector: float = 0.50,
+) -> tuple[bool, str]:
     """检查单票和板块集中度"""
     if stock_code in portfolio.positions:
         return True, ""
@@ -27,8 +31,9 @@ def check_concentration(stock_code: str, target_pct: float,
     return True, ""
 
 
-def get_sector_overexposure(portfolio: Portfolio,
-                            max_sector: float = 0.30) -> list[str]:
+def get_sector_overexposure(
+    portfolio: Portfolio, max_sector: float = 0.50
+) -> list[str]:
     """返回超限的板块列表"""
     exposure = portfolio.get_sector_exposure()
     return [sector for sector, pct in exposure.items() if pct > max_sector]

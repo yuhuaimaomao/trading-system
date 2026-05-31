@@ -1,6 +1,7 @@
 """交易系统专用表结构"""
 
 import sqlite3
+
 from system.config.settings import DATABASE_PATH
 
 
@@ -148,10 +149,17 @@ def ensure_tables():
     conn.commit()
 
     # 添加 account 字段（幂等迁移）
-    for table in ["trade_signals", "trade_orders", "trade_portfolio_snapshots",
-                  "trade_factor_values", "trade_strategy_metrics"]:
+    for table in [
+        "trade_signals",
+        "trade_orders",
+        "trade_portfolio_snapshots",
+        "trade_factor_values",
+        "trade_strategy_metrics",
+    ]:
         try:
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN account TEXT DEFAULT 'real'")
+            cursor.execute(
+                f"ALTER TABLE {table} ADD COLUMN account TEXT DEFAULT 'real'"
+            )
         except sqlite3.OperationalError:
             pass
 
@@ -191,6 +199,92 @@ def ensure_tables():
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_basic_date_code
         ON stock_basic(trade_date, stock_code);
+    """)
+
+    # 选股自我进化 — 漏斗 + AI 日志 + 决策 + 教训 + 改进
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS strategy_funnel (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            push_date TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT,
+            rank_position INTEGER,
+            raw_snapshot TEXT NOT NULL,
+            factors_passed TEXT,
+            factors_detail TEXT,
+            scenarios TEXT,
+            trend_mode TEXT,
+            score REAL,
+            open_price REAL,
+            close_price REAL,
+            day_change_pct REAL,
+            bought INTEGER DEFAULT 0,
+            buy_price REAL,
+            day_pnl_pct REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sf_push ON strategy_funnel(push_date);
+        CREATE INDEX IF NOT EXISTS idx_sf_code ON strategy_funnel(stock_code);
+
+        CREATE TABLE IF NOT EXISTS strategy_ai_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            push_date TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT,
+            rank_in_prompt INTEGER,
+            verdict TEXT,
+            confidence TEXT,
+            what_i_see TEXT,
+            what_concerns_me TEXT,
+            decisive_factor TEXT,
+            skip_reason TEXT,
+            would_reconsider_if TEXT,
+            buy_zone_min REAL,
+            buy_zone_max REAL,
+            stop_loss REAL,
+            take_profit REAL,
+            pricing_logic TEXT,
+            signal_id INTEGER,
+            day_change_pct REAL,
+            day_pnl_pct REAL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sad_push ON strategy_ai_decisions(push_date, verdict);
+        CREATE INDEX IF NOT EXISTS idx_sad_code ON strategy_ai_decisions(stock_code);
+
+        CREATE TABLE IF NOT EXISTS strategy_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lesson_type TEXT NOT NULL,
+            lesson_key TEXT NOT NULL,
+            lesson_content TEXT NOT NULL,
+            trigger_conditions TEXT,
+            occurrence_count INTEGER DEFAULT 1,
+            first_date TEXT NOT NULL,
+            last_date TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(lesson_type, lesson_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS strategy_improvements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            push_date TEXT NOT NULL,
+            improvement_type TEXT NOT NULL,
+            target_module TEXT,
+            target_param TEXT,
+            suggested_change TEXT NOT NULL,
+            code_diff TEXT,
+            rationale TEXT NOT NULL,
+            evidence_ids TEXT,
+            status TEXT DEFAULT 'pending',
+            applied_date TEXT,
+            effectiveness_check TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     conn.commit()

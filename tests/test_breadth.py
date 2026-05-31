@@ -1,4 +1,3 @@
-import pytest
 from analysis.screening.breadth import MarketBreadth, classify_market_state
 
 
@@ -24,7 +23,11 @@ class TestClassifyMarketState:
     def test_oversold_end_3day_fall_and_limit_down_retreat(self):
         assert (
             classify_market_state(
-                1200, 4000, 20, 100, -0.5,
+                1200,
+                4000,
+                20,
+                100,
+                -0.5,
                 consecutive_down_days=4,
                 limit_down_peak=300,
             )
@@ -36,30 +39,44 @@ class TestClassifyMarketState:
 
 
 class TestMarketBreadth:
-    def test_compute_returns_expected_keys(self):
-        mb = MarketBreadth()
+    def test_compute_returns_expected_keys(self, test_db_path):
+        mb = MarketBreadth(db_path=test_db_path)
         result = mb.compute("2026-05-25")
         for key in (
-            "up_count", "down_count", "flat_count",
-            "limit_up_count", "limit_down_count",
-            "index_change_pct", "market_state",
+            "up_count",
+            "down_count",
+            "flat_count",
+            "limit_up_count",
+            "limit_down_count",
+            "index_change_pct",
+            "market_state",
         ):
             assert key in result
-        assert result["up_count"] + result["down_count"] + result["flat_count"] > 5000
+        assert result["up_count"] + result["down_count"] + result["flat_count"] > 0
         assert result["market_state"] in (
-            "普涨", "分化", "普跌", "恐慌", "连跌修复", "超跌末端",
+            "普涨",
+            "分化",
+            "普跌",
+            "恐慌",
+            "连跌修复",
+            "超跌末端",
         )
 
-    def test_save_and_read(self):
-        mb = MarketBreadth()
+    def test_save_and_read(self, test_db_path):
+        mb = MarketBreadth(db_path=test_db_path)
         mb.save("2026-05-25")
         data = mb.get("2026-05-25")
         assert data is not None
         assert data["up_count"] is not None
         assert data["market_state"] in (
-            "普涨", "分化", "普跌", "恐慌", "连跌修复", "超跌末端",
+            "普涨",
+            "分化",
+            "普跌",
+            "恐慌",
+            "连跌修复",
+            "超跌末端",
         )
 
-    def test_get_nonexistent_returns_none(self):
-        mb = MarketBreadth()
+    def test_get_nonexistent_returns_none(self, test_db_path):
+        mb = MarketBreadth(db_path=test_db_path)
         assert mb.get("1999-01-01") is None

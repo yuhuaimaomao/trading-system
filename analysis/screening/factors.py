@@ -6,10 +6,10 @@
 
 from typing import Optional
 
-
 # ============================================================
 # 硬关卡
 # ============================================================
+
 
 def check_hard_gates(row: dict) -> bool:
     """6 道硬关卡（板块黑名单由 TrendScreener 基于 sector_stocks 统一过滤）"""
@@ -27,11 +27,13 @@ def check_hard_gates(row: dict) -> bool:
         return False
     if code.startswith("688"):
         return False
-    if abs(change_pct) >= 9.5:
+    if change_pct <= -9.5:
         return False
+    if change_pct >= 9.5:
+        row["is_limit_up"] = True  # 涨停标记，不过滤
     if mcap < 50_0000_0000:  # 50 亿
         return False
-    if vol_ratio <= 0.5:
+    if vol_ratio <= 0.3:
         return False
     if not (price > ma20 and ma10 > ma20):
         return False
@@ -41,6 +43,7 @@ def check_hard_gates(row: dict) -> bool:
 # ============================================================
 # 量价类 (3)
 # ============================================================
+
 
 def check_volume_breakout(row: dict, history: list[dict]) -> Optional[str]:
     if (row.get("volume_ratio") or 0) >= 1.5:
@@ -66,6 +69,7 @@ def check_amplitude_contract(row: dict, history: list[dict]) -> Optional[str]:
 # 资金类 (2)
 # ============================================================
 
+
 def check_main_force_buy(row: dict, history: list[dict]) -> Optional[str]:
     mf_net = row.get("main_force_net") or 0
     mf_ratio = row.get("main_force_ratio") or 0
@@ -85,6 +89,7 @@ def check_chip_concentrate(row: dict, history: list[dict]) -> Optional[str]:
 # ============================================================
 # 多日类 (6)
 # ============================================================
+
 
 def check_consecutive_yang(row: dict, history: list[dict]) -> Optional[str]:
     if len(history) < 3:
@@ -163,41 +168,11 @@ def check_trend_strength(row: dict, history: list[dict]) -> Optional[str]:
         if mean_ret == 0:
             return None
         var = sum((c - mean_ret) ** 2 for c in ch20) / len(ch20)
-        std = var ** 0.5
+        std = var**0.5
         if std > 0:
-            sharpe = (mean_ret / std) * (252 ** 0.5)
+            sharpe = (mean_ret / std) * (252**0.5)
             if sharpe > 1.0:
                 return "趋势强劲"
-    return None
-
-
-# ============================================================
-# RPS 相对强弱 (4)
-# ============================================================
-
-def check_rps_20_strong(row: dict, history: list[dict]) -> Optional[str]:
-    if (row.get("rps_20") or 0) >= 0.80:
-        return "RPS20强"
-    return None
-
-
-def check_rps_60_strong(row: dict, history: list[dict]) -> Optional[str]:
-    if (row.get("rps_60") or 0) >= 0.80:
-        return "RPS60强"
-    return None
-
-
-def check_rps_120_strong(row: dict, history: list[dict]) -> Optional[str]:
-    if (row.get("rps_120") or 0) >= 0.80:
-        return "RPS120强"
-    return None
-
-
-def check_rps_resonance(row: dict, history: list[dict]) -> Optional[str]:
-    rps20 = row.get("rps_20") or 0
-    rps60 = row.get("rps_60") or 0
-    if rps20 >= 0.70 and rps60 >= 0.70:
-        return "RPS多周期共振"
     return None
 
 
@@ -205,12 +180,14 @@ def check_rps_resonance(row: dict, history: list[dict]) -> Optional[str]:
 # 板块类 (4)
 # ============================================================
 
+
 def check_sector_hot(
-    row: dict, history: list[dict],
+    row: dict,
+    history: list[dict],
     sector_hot: Optional[dict] = None,
     stock_sectors: Optional[dict] = None,
 ) -> Optional[str]:
-    """任一所属概念板块近 3 日至少 1 次上榜 top5"""
+    """任一所属概念板块近 5 日至少 1 次上榜 top5"""
     if not sector_hot or not stock_sectors:
         return None
     code = row.get("stock_code", "")
@@ -222,7 +199,8 @@ def check_sector_hot(
 
 
 def check_leader_in_sector(
-    row: dict, history: list[dict],
+    row: dict,
+    history: list[dict],
     sector_stocks_pct: Optional[dict] = None,
     stock_sectors: Optional[dict] = None,
 ) -> Optional[str]:
@@ -232,12 +210,11 @@ def check_leader_in_sector(
     code = row.get("stock_code", "")
     sectors = stock_sectors.get(code, [])
     for s in sectors:
-        stocks_in_sector = [
-            c for c, scs in stock_sectors.items() if s in scs
-        ]
+        stocks_in_sector = [c for c, scs in stock_sectors.items() if s in scs]
         ranks = sorted(
             [(c, sector_stocks_pct.get(c, -999)) for c in stocks_in_sector],
-            key=lambda x: x[1], reverse=True,
+            key=lambda x: x[1],
+            reverse=True,
         )
         top_codes = [r[0] for r in ranks[:3] if r[1] > -900]
         if code in top_codes:
@@ -246,7 +223,8 @@ def check_leader_in_sector(
 
 
 def check_stronger_than_sector(
-    row: dict, history: list[dict],
+    row: dict,
+    history: list[dict],
     sector_changes: Optional[dict] = None,
     stock_sectors: Optional[dict] = None,
 ) -> Optional[str]:
@@ -264,7 +242,8 @@ def check_stronger_than_sector(
 
 
 def check_sector_fund_resonance(
-    row: dict, history: list[dict],
+    row: dict,
+    history: list[dict],
     sector_funds: Optional[dict] = None,
     stock_sectors: Optional[dict] = None,
 ) -> Optional[str]:
@@ -283,7 +262,8 @@ def check_sector_fund_resonance(
 
 
 def check_weekly_bbi(
-    row: dict, history: list[dict],
+    row: dict,
+    history: list[dict],
     weekly_bbi_map: Optional[dict] = None,
 ) -> Optional[str]:
     """价格在周线 BBI 上方 → 中期趋势多头确认"""

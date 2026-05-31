@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Function Calling 引擎
 
@@ -6,12 +5,12 @@ Function Calling 引擎
 """
 
 import json
-from typing import Dict, Any, List, Optional
-from system.utils.stock_tools import StockTools, TOOLS_DEFINITION
+from typing import Any, Dict, List
 
 from system.utils.logger import get_system_logger
+from system.utils.stock_tools import TOOLS_DEFINITION, StockTools
 
-logger = get_system_logger('function_calling')
+logger = get_system_logger("function_calling")
 
 
 class FunctionCallingEngine:
@@ -42,11 +41,15 @@ class FunctionCallingEngine:
             "get_yesterday_review": self.stock_tools.get_yesterday_review,
             "get_yesterday_picks_performance": self.stock_tools.get_yesterday_picks_performance,
             "get_historical_calibration": self.stock_tools.get_historical_calibration,
+            "get_learning_lessons": self.stock_tools.get_learning_lessons,
+            "get_prediction_accuracy": self.stock_tools.get_prediction_accuracy,
             "search_stock": self.stock_tools.search_stock,
             "search_sector": self.stock_tools.search_sector,
         }
 
-        logger.info(f"✅ Function Calling 引擎初始化完成（{len(self.tool_functions)}个工具）")
+        logger.info(
+            f"✅ Function Calling 引擎初始化完成（{len(self.tool_functions)}个工具）"
+        )
 
     def execute_tool(self, tool_name: str, arguments: Dict) -> Any:
         """
@@ -93,10 +96,10 @@ class FunctionCallingEngine:
         for tool_call in tool_calls:
             # 兼容 dict 和对象两种格式
             if isinstance(tool_call, dict):
-                tool_call_id = tool_call.get('id', '')
-                function_data = tool_call.get('function', {})
-                tool_name = function_data.get('name', '')
-                arguments_str = function_data.get('arguments', '{}')
+                tool_call_id = tool_call.get("id", "")
+                function_data = tool_call.get("function", {})
+                tool_name = function_data.get("name", "")
+                arguments_str = function_data.get("arguments", "{}")
             else:
                 # 对象格式
                 tool_call_id = tool_call.id
@@ -118,7 +121,7 @@ class FunctionCallingEngine:
             tool_message = {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
-                "content": json.dumps(result, ensure_ascii=False)
+                "content": json.dumps(result, ensure_ascii=False),
             }
 
             tool_messages.append(tool_message)

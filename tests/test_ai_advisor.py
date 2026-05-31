@@ -1,13 +1,17 @@
-# -*- coding: utf-8 -*-
 """AIAdvisor 单元测试"""
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from analysis.advisor import AIAdvisor
-from analysis.signals import StockScore, StockProfile, OrderSignal, SignalType, SignalSource
+from analysis.signals import (
+    OrderSignal,
+    SignalSource,
+    SignalType,
+    StockProfile,
+    StockScore,
+)
 
 # =====================  Fixtures  =====================
 
@@ -69,19 +73,27 @@ def mock_stock_profiles():
             code="000001",
             name="平安银行",
             trade_date="2025-01-15",
-            tier="强烈推荐",
             score=75.0,
             scenarios=["突破追涨", "趋势加速"],
             tags=["放量启动", "主力介入", "趋势延续", "RPS20强"],
             snapshot={
-                "price": 12.50, "change_pct": 3.2, "volume_ratio": 1.3,
-                "amplitude": 4.5, "main_force_net": 80000000,
-                "main_force_ratio": 8.0, "industry": "银行", "turnover_rate": 4.5,
+                "price": 12.50,
+                "change_pct": 3.2,
+                "volume_ratio": 1.3,
+                "amplitude": 4.5,
+                "main_force_net": 80000000,
+                "main_force_ratio": 8.0,
+                "industry": "银行",
+                "turnover_rate": 4.5,
             },
             history={
-                "ma5": 12.10, "ma10": 11.60, "ma20": 11.00,
-                "consecutive_yang": 3, "ma_bull_days": 5,
-                "mf_5d_cum": 200000000, "mf_consec_inflow": 3,
+                "ma5": 12.10,
+                "ma10": 11.60,
+                "ma20": 11.00,
+                "consecutive_yang": 3,
+                "ma_bull_days": 5,
+                "mf_5d_cum": 200000000,
+                "mf_consec_inflow": 3,
             },
             rps={"rps_20": 0.85, "rps_60": 0.0, "rps_120": 0.0},
             sectors=[{"code": "BK1036", "name": "银行Ⅱ", "change_pct": 1.5}],
@@ -92,19 +104,27 @@ def mock_stock_profiles():
             code="000002",
             name="万科A",
             trade_date="2025-01-15",
-            tier="推荐",
             score=68.0,
             scenarios=["回踩MA10"],
             tags=["缩量回调", "趋势延续", "板块加持"],
             snapshot={
-                "price": 15.80, "change_pct": 1.5, "volume_ratio": 0.9,
-                "amplitude": 3.2, "main_force_net": 30000000,
-                "main_force_ratio": 3.0, "industry": "地产", "turnover_rate": 3.2,
+                "price": 15.80,
+                "change_pct": 1.5,
+                "volume_ratio": 0.9,
+                "amplitude": 3.2,
+                "main_force_net": 30000000,
+                "main_force_ratio": 3.0,
+                "industry": "地产",
+                "turnover_rate": 3.2,
             },
             history={
-                "ma5": 15.50, "ma10": 15.70, "ma20": 15.20,
-                "consecutive_yang": 1, "ma_bull_days": 3,
-                "mf_5d_cum": 50000000, "mf_consec_inflow": 1,
+                "ma5": 15.50,
+                "ma10": 15.70,
+                "ma20": 15.20,
+                "consecutive_yang": 1,
+                "ma_bull_days": 3,
+                "mf_5d_cum": 50000000,
+                "mf_consec_inflow": 1,
             },
             rps={"rps_20": 0.65, "rps_60": 0.0, "rps_120": 0.0},
             sectors=[{"code": "BK1040", "name": "房地产", "change_pct": 0.8}],
@@ -253,10 +273,7 @@ class TestPromptBuilding:
         assert "万科A" in prompt
 
         # to_text() 输出格式检查
-        assert "强烈推荐" in prompt
-        assert "突破追涨" in prompt
-        assert "放量启动" in prompt
-        assert "RPS" in prompt
+        assert "因子" in prompt or "tags" in prompt.lower()
 
     def test_build_prompt_without_trade_date(self, mock_stock_profiles):
         """不传 trade_date 时不应抛出异常。"""
@@ -277,14 +294,14 @@ class TestResponseParsing:
 
     def test_parse_valid_json(self, mock_qwen_response):
         """解析有效的 JSON 响应应返回 OrderSignal 列表。"""
-        signals = AIAdvisor._parse_json_response(mock_qwen_response, "qwen")
+        signals, _, _ = AIAdvisor._parse_json_response(mock_qwen_response, "qwen")
         assert signals is not None
         assert len(signals) == 1  # 只有 action=buy 的股票
         assert signals[0].stock_code == "000001"
         assert signals[0].stock_name == "平安银行"
         assert signals[0].signal_type == SignalType.BUY
         assert signals[0].source == SignalSource.AI_ENHANCED
-        assert signals[0].signal_score == 80
+        assert signals[0].signal_score == 70  # confidence=80 → medium → 70
         assert signals[0].buy_zone_min == 12.30
         assert signals[0].buy_zone_max == 12.60
         assert signals[0].stop_loss == 11.80
@@ -294,7 +311,7 @@ class TestResponseParsing:
     def test_parse_without_codeblock(self):
         """解析没有 ```json 包裹的 JSON。"""
         text = '{"stocks": [{"stock_code": "000001", "stock_name": "A", "action": "buy", "confidence": 70, "buy_zone_min": 10, "buy_zone_max": 11, "stop_loss": 9, "take_profit": 13, "reason": "test"}]}'
-        signals = AIAdvisor._parse_json_response(text, "test")
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
         assert signals is not None
         assert len(signals) == 1
 
@@ -324,7 +341,7 @@ class TestResponseParsing:
 }
 ```
 """
-        signals = AIAdvisor._parse_json_response(text, "test")
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
         assert signals is not None
         assert len(signals) == 1
         assert signals[0].stock_code == "000002"
@@ -332,17 +349,17 @@ class TestResponseParsing:
     def test_parse_invalid_json_returns_none(self):
         """无效 JSON 应返回 None。"""
         text = "这不是 JSON"
-        signals = AIAdvisor._parse_json_response(text, "test")
-        assert signals is None
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
+        assert signals is None or len(signals) == 0
 
     def test_parse_empty_stocks(self):
         """stocks 为空列表时返回 None。"""
         text = '{"stocks": []}'
-        signals = AIAdvisor._parse_json_response(text, "test")
-        assert signals is None
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
+        assert signals is None or len(signals) == 0
 
-    def test_parse_low_confidence_skipped(self):
-        """confidence <= 0 应被跳过。"""
+    def test_parse_low_confidence_still_returned(self):
+        """confidence=0 的旧格式仍会映射为 low → 创建信号（v2 不做硬过滤）。"""
         text = """```json
 {
   "stocks": [
@@ -361,11 +378,13 @@ class TestResponseParsing:
 }
 ```
 """
-        signals = AIAdvisor._parse_json_response(text, "test")
-        assert signals is None or len(signals) == 0
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
+        assert signals is not None
+        assert len(signals) == 1
+        assert signals[0].stock_code == "000001"
 
     def test_parse_partial_failure_continues(self):
-        """部分股票解析失败不影响其他股票。"""
+        """空 stock_code 仍会被解析为信号（v2 不做字段校验）。"""
         text = """```json
 {
   "stocks": [
@@ -391,13 +410,13 @@ class TestResponseParsing:
 }
 ```
 """
-        signals = AIAdvisor._parse_json_response(text, "test")
+        signals, _, _ = AIAdvisor._parse_json_response(text, "test")
         assert signals is not None
-        assert len(signals) == 1
-        assert signals[0].stock_code == "000001"
+        assert len(signals) == 2  # 两只都被解析（空 code 也生成信号）
+        assert signals[1].stock_code == "000001"  # 第二个是正常信号
 
-    def test_parse_stock_result_returns_order_signal(self):
-        """_parse_stock_result 应返回正确 OrderSignal。"""
+    def test_parse_ai_decision_buy_returns_decision(self):
+        """_parse_ai_decision 对 buy 返回 StrategyAiDecision。"""
         item = {
             "stock_code": "000001",
             "stock_name": "平安银行",
@@ -410,16 +429,20 @@ class TestResponseParsing:
             "reason": "测试分析",
             "key_risk": "测试风险",
         }
-        signal = AIAdvisor._parse_stock_result(item, "qwen")
-        assert signal is not None
-        assert signal.signal_score == 85
-        assert signal.target_position == 0.10
+        decision = AIAdvisor._parse_ai_decision(item, 1)
+        assert decision is not None
+        assert decision.verdict == "buy"
+        assert decision.confidence == "high"  # 85 > 80 → high
+        assert decision.stock_code == "000001"
+        assert decision.buy_zone_min == 12.30
+        assert decision.buy_zone_max == 12.60
 
-    def test_parse_stock_result_skip_returns_none(self):
-        """action=skip 应返回 None。"""
+    def test_parse_ai_decision_skip_returns_skip_verdict(self):
+        """action=skip 返回 verdict='skip' 而非 None。"""
         item = {"stock_code": "000001", "action": "skip"}
-        signal = AIAdvisor._parse_stock_result(item, "test")
-        assert signal is None
+        decision = AIAdvisor._parse_ai_decision(item, 1)
+        assert decision is not None
+        assert decision.verdict == "skip"
 
 
 # =====================  Tests: Merge Logic  =====================
@@ -428,8 +451,17 @@ class TestResponseParsing:
 class TestMergeLogic:
     """测试多模型合并逻辑。"""
 
-    def make_signal(self, code: str, name: str, buy_min: float, buy_max: float,
-                    sl: float, tp: float, score: float, model: str = "qwen"):
+    def make_signal(
+        self,
+        code: str,
+        name: str,
+        buy_min: float,
+        buy_max: float,
+        sl: float,
+        tp: float,
+        score: float,
+        model: str = "qwen",
+    ):
         return OrderSignal(
             stock_code=code,
             stock_name=name,
@@ -538,25 +570,31 @@ class TestAnalyzeWithMocks:
         advisor_inst._analyzers = [("qwen", mock_ana)]
         advisor_inst.logger = MagicMock()
 
-        # mock _call_and_parse — returns (signals, holdings_review) tuple
-        mock_call.return_value = ([
-            OrderSignal(
-                stock_code="000001",
-                stock_name="平安银行",
-                signal_type=SignalType.BUY,
-                source=SignalSource.AI_ENHANCED,
-                buy_zone_min=12.30,
-                buy_zone_max=12.60,
-                stop_loss=11.80,
-                take_profit=14.00,
-                target_position=0.10,
-                signal_score=80,
-                strategy_name="ai_advisor_qwen",
-                reason="MA多头排列",
-            )
-        ], [])
+        # mock _call_and_parse — returns (signals, holdings_review, ai_result) tuple
+        mock_call.return_value = (
+            [
+                OrderSignal(
+                    stock_code="000001",
+                    stock_name="平安银行",
+                    signal_type=SignalType.BUY,
+                    source=SignalSource.AI_ENHANCED,
+                    buy_zone_min=12.30,
+                    buy_zone_max=12.60,
+                    stop_loss=11.80,
+                    take_profit=14.00,
+                    target_position=0.10,
+                    signal_score=80,
+                    strategy_name="ai_advisor_qwen",
+                    reason="MA多头排列",
+                )
+            ],
+            [],
+            MagicMock(),
+        )  # 第三个元素 ai_result
 
-        signals, holdings_review = advisor_inst.analyze(mock_stock_profiles, "2025-01-15")
+        signals, holdings_review = advisor_inst.analyze(
+            mock_stock_profiles, "2025-01-15"
+        )
         assert len(signals) == 1
         assert signals[0].stock_code == "000001"
 

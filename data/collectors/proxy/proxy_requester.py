@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 代理 + 伪装请求基类
 
@@ -8,26 +7,26 @@
 所有需要走东方财富 API 的采集器都可继承此类。
 """
 
-import logging
 import random
 import time
 from datetime import datetime
-from typing import Optional, Dict, Tuple
+from typing import Dict, Optional
 
 from curl_cffi import requests as curl_requests
 
+from data.collectors.proxy.proxy_manager import ProxyManager
 from system.config.proxy_config import REQUEST_TIMEOUT
 from system.utils.logger import get_collector_logger
-from data.collectors.proxy.proxy_manager import ProxyManager
 
 try:
     from data.collectors.proxy.ip_stats import record_ip_usage
+
     IP_STATS_ENABLED = True
 except ImportError:
     record_ip_usage = None
     IP_STATS_ENABLED = False
 
-logger = get_collector_logger('proxy_requester')
+logger = get_collector_logger("proxy_requester")
 
 # ==================== UA 伪装池（18 个 Profile）====================
 # 每个 profile 四元组: UA + Client Hints + impersonate 绑定一致
@@ -188,18 +187,22 @@ class ProxyRequester:
         try:
             ip, port = self._extract_ip_port(proxy)
             record_ip_usage(
-                ip=ip, port=port,
+                ip=ip,
+                port=port,
                 trade_date=self.trade_date,
                 collector_name=self.collector_name,
-                page=page, status=status, error=error,
+                page=page,
+                status=status,
+                error=error,
             )
         except Exception:
             pass
 
     # ── 请求头构建 ──
 
-    def _build_headers_from_profile(self, profile: dict, referer: str = "",
-                                     api_call: bool = True) -> Dict:
+    def _build_headers_from_profile(
+        self, profile: dict, referer: str = "", api_call: bool = True
+    ) -> Dict:
         """用指定 profile 构建 headers（不随机选 profile）
 
         Args:
@@ -245,12 +248,18 @@ class ProxyRequester:
 
         return headers
 
-
     # ── 请求执行 ──
 
-    def _request(self, url: str, params: dict, headers: dict,
-                 proxy: dict, impersonate: str, timeout: int = None,
-                 session=None) -> Optional[dict]:
+    def _request(
+        self,
+        url: str,
+        params: dict,
+        headers: dict,
+        proxy: dict,
+        impersonate: str,
+        timeout: int = None,
+        session=None,
+    ) -> Optional[dict]:
         """单次 HTTP GET，返回解析后的 JSON 或 None
 
         Args:
@@ -267,8 +276,12 @@ class ProxyRequester:
         timeout = timeout or REQUEST_TIMEOUT
         try:
             resp = s.get(
-                url, params=params, headers=headers,
-                proxies=proxy, impersonate=impersonate, timeout=timeout,
+                url,
+                params=params,
+                headers=headers,
+                proxies=proxy,
+                impersonate=impersonate,
+                timeout=timeout,
             )
             if resp.status_code != 200:
                 self.logger.warning(f"HTTP {resp.status_code}: {resp.text[:200]}")
@@ -280,6 +293,7 @@ class ProxyRequester:
                 right = text.rfind(")")
                 if left > 0 and right > left:
                     import json as _json
+
                     return _json.loads(text[left:right])
             return resp.json()
         except Exception as e:
@@ -289,9 +303,14 @@ class ProxyRequester:
             if own_session:
                 s.close()
 
-    def _request_with_retry(self, url: str, params: dict,
-                            referer: str = "", desc: str = "",
-                            timeout: int = None) -> Optional[dict]:
+    def _request_with_retry(
+        self,
+        url: str,
+        params: dict,
+        referer: str = "",
+        desc: str = "",
+        timeout: int = None,
+    ) -> Optional[dict]:
         """请求 + 自动换代理重试（最多 MAX_PROXY_FAILS 次）
 
         Returns:
@@ -317,22 +336,41 @@ class ProxyRequester:
             # JSONP 参数：模拟 jQuery AJAX（cb + _），降低被反爬识别概率
             _api_params = dict(params)  # 不修改调用方的 dict
             if self.USE_JSONP:
-                _api_params["cb"] = f"jQuery{random.randint(1000000000000, 9999999999999)}_{int(time.time()*1000)}"
+                _api_params["cb"] = (
+                    f"jQuery{random.randint(1000000000000, 9999999999999)}_{int(time.time() * 1000)}"
+                )
                 _api_params["_"] = str(int(time.time() * 1000))
 
-            self.logger.debug(f"{desc} 第{attempt}次尝试 impersonate={impersonate} proxy={current_proxy['http']}")
+            self.logger.debug(
+                f"{desc} 第{attempt}次尝试 impersonate={impersonate} proxy={current_proxy['http']}"
+            )
 
             # ── Cookie 预热（访问东财主页获取 st_si/st_asi 等 Cookie）──
             try:
-                warmup_headers = self._build_headers_from_profile(profile, api_call=False)
-                s.get("https://quote.eastmoney.com/", headers=warmup_headers,
-                      proxies=current_proxy, impersonate=impersonate, timeout=8)
+                warmup_headers = self._build_headers_from_profile(
+                    profile, api_call=False
+                )
+                s.get(
+                    "https://quote.eastmoney.com/",
+                    headers=warmup_headers,
+                    proxies=current_proxy,
+                    impersonate=impersonate,
+                    timeout=8,
+                )
                 self.logger.debug(f"Cookie 预热成功: {list(s.cookies.keys())}")
             except Exception:
                 self.logger.debug("Cookie 预热失败，跳过（不影响主流程）")
 
             # ── 主请求 ──
-            result = self._request(url, _api_params, headers, current_proxy, impersonate, timeout, session=s)
+            result = self._request(
+                url,
+                _api_params,
+                headers,
+                current_proxy,
+                impersonate,
+                timeout,
+                session=s,
+            )
             s.close()
 
             if result is not None:
@@ -347,7 +385,9 @@ class ProxyRequester:
                 return result
 
             self._record_ip(current_proxy, page, "failed", "connection_error")
-            self.logger.warning(f"{desc} 代理失败 ({attempt}/{self.MAX_PROXY_FAILS})，切换 IP")
+            self.logger.warning(
+                f"{desc} 代理失败 ({attempt}/{self.MAX_PROXY_FAILS})，切换 IP"
+            )
 
             if attempt < self.MAX_PROXY_FAILS:
                 time.sleep(0.5)

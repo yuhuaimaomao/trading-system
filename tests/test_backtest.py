@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回测框架单元测试"""
 
 import os
@@ -9,10 +8,13 @@ from datetime import datetime, timedelta
 import pytest
 
 from analysis.backtest import (
-    BacktestEngine, BacktestConfig, OrderSignal, Trade,
-    DataLoader, calculate_metrics,
+    BacktestConfig,
+    BacktestEngine,
+    DataLoader,
+    OrderSignal,
+    Trade,
+    calculate_metrics,
 )
-
 
 # =====================  Fixtures  =====================
 
@@ -46,8 +48,18 @@ def mock_db():
         price = base + i * 0.5
         conn.execute(
             "INSERT INTO stock_basic VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (d, "000001", "测试A", price, price - 0.3, price + 1.0,
-             price - 1.0, 1_000_000, 2.0, 0.5),
+            (
+                d,
+                "000001",
+                "测试A",
+                price,
+                price - 0.3,
+                price + 1.0,
+                price - 1.0,
+                1_000_000,
+                2.0,
+                0.5,
+            ),
         )
 
     # 000002: 震荡下跌，用于测试止损
@@ -57,8 +69,18 @@ def mock_db():
         price = base2 - i * 0.3
         conn.execute(
             "INSERT INTO stock_basic VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (d, "000002", "测试B", price, price - 0.2, price + 0.5,
-             price - 0.8, 2_000_000, 3.0, -0.3),
+            (
+                d,
+                "000002",
+                "测试B",
+                price,
+                price - 0.2,
+                price + 0.5,
+                price - 0.8,
+                2_000_000,
+                3.0,
+                -0.3,
+            ),
         )
 
     # 000003: 先跌后涨，用于测试止盈
@@ -71,8 +93,18 @@ def mock_db():
             price = base3 - 5 + (i - 5) * 2.0  # 后涨
         conn.execute(
             "INSERT INTO stock_basic VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (d, "000003", "测试C", price, price - 0.1, price + 1.5,
-             price - 1.0, 1_500_000, 1.5, 1.0),
+            (
+                d,
+                "000003",
+                "测试C",
+                price,
+                price - 0.1,
+                price + 1.5,
+                price - 1.0,
+                1_500_000,
+                1.5,
+                1.0,
+            ),
         )
 
     conn.commit()
@@ -93,20 +125,34 @@ def sample_daily_data():
         d = (datetime(2025, 1, 2) + timedelta(days=i)).strftime("%Y-%m-%d")
         # 000001 稳步上涨
         ca = base_a + i * 0.5
-        rows.append({
-            "trade_date": d, "stock_code": "000001",
-            "open": ca - 0.3, "high": ca + 1.0, "low": ca - 1.0,
-            "close": ca, "volume": 1_000_000, "turnover_rate": 2.0,
-            "change_pct": 0.5,
-        })
+        rows.append(
+            {
+                "trade_date": d,
+                "stock_code": "000001",
+                "open": ca - 0.3,
+                "high": ca + 1.0,
+                "low": ca - 1.0,
+                "close": ca,
+                "volume": 1_000_000,
+                "turnover_rate": 2.0,
+                "change_pct": 0.5,
+            }
+        )
         # 000002 缓慢下跌
         cb = base_b - i * 0.3
-        rows.append({
-            "trade_date": d, "stock_code": "000002",
-            "open": cb - 0.2, "high": cb + 0.5, "low": cb - 0.8,
-            "close": cb, "volume": 2_000_000, "turnover_rate": 3.0,
-            "change_pct": -0.3,
-        })
+        rows.append(
+            {
+                "trade_date": d,
+                "stock_code": "000002",
+                "open": cb - 0.2,
+                "high": cb + 0.5,
+                "low": cb - 0.8,
+                "close": cb,
+                "volume": 2_000_000,
+                "turnover_rate": 3.0,
+                "change_pct": -0.3,
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -259,16 +305,24 @@ class TestBacktestEngine:
     def test_take_profit_trigger(self):
         """止盈触发测试 — 使用模拟的快速上涨行情"""
         import pandas as pd
+
         rows = []
         for i in range(10):
             d = (datetime(2025, 1, 2) + timedelta(days=i)).strftime("%Y-%m-%d")
             price = 100.0 + i * 3.0  # 每天涨3块
-            rows.append({
-                "trade_date": d, "stock_code": "000001",
-                "open": price - 0.5, "high": price + 2.0, "low": price - 2.0,
-                "close": price, "volume": 1_000_000, "turnover_rate": 2.0,
-                "change_pct": 3.0,
-            })
+            rows.append(
+                {
+                    "trade_date": d,
+                    "stock_code": "000001",
+                    "open": price - 0.5,
+                    "high": price + 2.0,
+                    "low": price - 2.0,
+                    "close": price,
+                    "volume": 1_000_000,
+                    "turnover_rate": 2.0,
+                    "change_pct": 3.0,
+                }
+            )
         data = pd.DataFrame(rows)
 
         engine = BacktestEngine()
@@ -298,13 +352,30 @@ class TestMetrics:
     def test_single_trade_win(self):
         """单笔盈利交易"""
         trades = [
-            Trade(stock_code="000001", entry_date="2025-01-02",
-                  exit_date="2025-01-10", entry_price=100.0,
-                  exit_price=110.0, shares=100, pnl=950.0, pnl_pct=9.5),
+            Trade(
+                stock_code="000001",
+                entry_date="2025-01-02",
+                exit_date="2025-01-10",
+                entry_price=100.0,
+                exit_price=110.0,
+                shares=100,
+                pnl=950.0,
+                pnl_pct=9.5,
+            ),
         ]
         equity = [
-            {"date": "2025-01-02", "cash": 100_000, "market_value": 0, "total": 100_000},
-            {"date": "2025-01-10", "cash": 100_950, "market_value": 0, "total": 100_950},
+            {
+                "date": "2025-01-02",
+                "cash": 100_000,
+                "market_value": 0,
+                "total": 100_000,
+            },
+            {
+                "date": "2025-01-10",
+                "cash": 100_950,
+                "market_value": 0,
+                "total": 100_950,
+            },
         ]
         result = calculate_metrics(trades, equity, initial_cash=100_000)
         assert result["total_trades"] == 1
@@ -314,15 +385,34 @@ class TestMetrics:
     def test_all_losses(self):
         """全部亏损"""
         trades = [
-            Trade(stock_code="000001", entry_date="2025-01-02",
-                  exit_date="2025-01-05", entry_price=100.0,
-                  exit_price=90.0, shares=100, pnl=-1050.0, pnl_pct=-10.5),
-            Trade(stock_code="000002", entry_date="2025-01-03",
-                  exit_date="2025-01-06", entry_price=50.0,
-                  exit_price=45.0, shares=200, pnl=-1050.0, pnl_pct=-10.5),
+            Trade(
+                stock_code="000001",
+                entry_date="2025-01-02",
+                exit_date="2025-01-05",
+                entry_price=100.0,
+                exit_price=90.0,
+                shares=100,
+                pnl=-1050.0,
+                pnl_pct=-10.5,
+            ),
+            Trade(
+                stock_code="000002",
+                entry_date="2025-01-03",
+                exit_date="2025-01-06",
+                entry_price=50.0,
+                exit_price=45.0,
+                shares=200,
+                pnl=-1050.0,
+                pnl_pct=-10.5,
+            ),
         ]
         equity = [
-            {"date": "2025-01-02", "cash": 100_000, "market_value": 0, "total": 100_000},
+            {
+                "date": "2025-01-02",
+                "cash": 100_000,
+                "market_value": 0,
+                "total": 100_000,
+            },
             {"date": "2025-01-06", "cash": 97_900, "market_value": 0, "total": 97_900},
         ]
         result = calculate_metrics(trades, equity, initial_cash=100_000)
@@ -335,16 +425,40 @@ class TestMetrics:
     def test_all_wins(self):
         """全部盈利"""
         trades = [
-            Trade(stock_code="000001", entry_date="2025-01-02",
-                  exit_date="2025-01-05", entry_price=100.0,
-                  exit_price=110.0, shares=100, pnl=950.0, pnl_pct=9.5),
-            Trade(stock_code="000002", entry_date="2025-01-03",
-                  exit_date="2025-01-06", entry_price=50.0,
-                  exit_price=55.0, shares=200, pnl=950.0, pnl_pct=9.5),
+            Trade(
+                stock_code="000001",
+                entry_date="2025-01-02",
+                exit_date="2025-01-05",
+                entry_price=100.0,
+                exit_price=110.0,
+                shares=100,
+                pnl=950.0,
+                pnl_pct=9.5,
+            ),
+            Trade(
+                stock_code="000002",
+                entry_date="2025-01-03",
+                exit_date="2025-01-06",
+                entry_price=50.0,
+                exit_price=55.0,
+                shares=200,
+                pnl=950.0,
+                pnl_pct=9.5,
+            ),
         ]
         equity = [
-            {"date": "2025-01-02", "cash": 100_000, "market_value": 0, "total": 100_000},
-            {"date": "2025-01-06", "cash": 101_900, "market_value": 0, "total": 101_900},
+            {
+                "date": "2025-01-02",
+                "cash": 100_000,
+                "market_value": 0,
+                "total": 100_000,
+            },
+            {
+                "date": "2025-01-06",
+                "cash": 101_900,
+                "market_value": 0,
+                "total": 101_900,
+            },
         ]
         result = calculate_metrics(trades, equity, initial_cash=100_000)
         assert result["total_trades"] == 2
@@ -355,15 +469,34 @@ class TestMetrics:
     def test_mixed_results(self):
         """盈亏各半"""
         trades = [
-            Trade(stock_code="000001", entry_date="2025-01-02",
-                  exit_date="2025-01-05", entry_price=100.0,
-                  exit_price=110.0, shares=100, pnl=950.0, pnl_pct=9.5),
-            Trade(stock_code="000002", entry_date="2025-01-03",
-                  exit_date="2025-01-06", entry_price=50.0,
-                  exit_price=45.0, shares=200, pnl=-1050.0, pnl_pct=-10.5),
+            Trade(
+                stock_code="000001",
+                entry_date="2025-01-02",
+                exit_date="2025-01-05",
+                entry_price=100.0,
+                exit_price=110.0,
+                shares=100,
+                pnl=950.0,
+                pnl_pct=9.5,
+            ),
+            Trade(
+                stock_code="000002",
+                entry_date="2025-01-03",
+                exit_date="2025-01-06",
+                entry_price=50.0,
+                exit_price=45.0,
+                shares=200,
+                pnl=-1050.0,
+                pnl_pct=-10.5,
+            ),
         ]
         equity = [
-            {"date": "2025-01-02", "cash": 100_000, "market_value": 0, "total": 100_000},
+            {
+                "date": "2025-01-02",
+                "cash": 100_000,
+                "market_value": 0,
+                "total": 100_000,
+            },
             {"date": "2025-01-06", "cash": 99_900, "market_value": 0, "total": 99_900},
         ]
         result = calculate_metrics(trades, equity, initial_cash=100_000)
@@ -381,12 +514,14 @@ class TestMetrics:
         cash = 100_000
         for i in range(10):
             cash += 200  # 每天赚 200
-            equity.append({
-                "date": f"2025-01-{i+2:02d}",
-                "cash": cash,
-                "market_value": 0,
-                "total": cash,
-            })
+            equity.append(
+                {
+                    "date": f"2025-01-{i + 2:02d}",
+                    "cash": cash,
+                    "market_value": 0,
+                    "total": cash,
+                }
+            )
         result = calculate_metrics(trades, equity, initial_cash=100_000)
         assert result["total_return"] > 0
         assert result["max_drawdown"] == 0.0  # 每天都涨
@@ -397,9 +532,12 @@ class TestMetrics:
         equity = [
             {"date": "2025-01-01", "total": 100_000},
             {"date": "2025-01-02", "total": 110_000},  # peak
-            {"date": "2025-01-03", "total": 90_000},   # drawdown = (110-90)/110 = 18.18%
+            {"date": "2025-01-03", "total": 90_000},  # drawdown = (110-90)/110 = 18.18%
             {"date": "2025-01-04", "total": 105_000},
-            {"date": "2025-01-05", "total": 85_000},   # max drawdown = (110-85)/110 = 22.73%
+            {
+                "date": "2025-01-05",
+                "total": 85_000,
+            },  # max drawdown = (110-85)/110 = 22.73%
             {"date": "2025-01-06", "total": 120_000},  # new peak
         ]
         result = calculate_metrics([], equity, initial_cash=100_000)

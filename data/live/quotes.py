@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """QMT 行情接口封装"""
 
 import logging
@@ -61,14 +60,32 @@ class QuoteClient:
         return data.get("last_price") or data.get("lastPrice") or data.get("price")
 
     def get_minute_kline(self, code: str, count: int = 240) -> list[dict]:
-        result = self._client.minute_kline(code, count=count)
-        if not result.get("success", True):
-            return []
-        return result.get("data", result) or []
+        return self._get_kline(code, "1m", count)
 
-    def get_history(self, code: str, period: str = "1d",
-                    start: str = None, end: str = None, count: int = None) -> list[dict]:
-        result = self._client.history(code, period=period, start=start, end=end, count=count)
+    def get_kline(self, code: str, period: str, count: int = 50) -> list[dict]:
+        return self._get_kline(code, period, count)
+
+    def _get_kline(self, code: str, period: str, count: int) -> list[dict]:
+        code_clean = strip_suffix(code)
+        for suffix in _SUFFIXES:
+            full_code = f"{code_clean}{suffix}"
+            result = self._client.history(full_code, period=period, count=count)
+            if result.get("success", True):
+                data = result.get("data", result)
+                return data if isinstance(data, list) else []
+        return []
+
+    def get_history(
+        self,
+        code: str,
+        period: str = "1d",
+        start: str = None,
+        end: str = None,
+        count: int = None,
+    ) -> list[dict]:
+        result = self._client.history(
+            code, period=period, start=start, end=end, count=count
+        )
         if not result.get("success", True):
             return []
         return result.get("data", result) or []
@@ -87,3 +104,28 @@ class QuoteClient:
             if short not in normalized or item.get("lastPrice"):
                 normalized[short] = item
         return normalized
+
+    def get_quote_detail(self, code: str) -> dict | None:
+        """获取个股完整实时行情（含五档盘口）。"""
+        code_clean = strip_suffix(code)
+        result = self._client.quote(code_clean)
+        if not result.get("success", True):
+            return None
+        return result.get("data", result)
+
+    def get_instrument(self, code: str) -> dict | None:
+        """获取合约基本信息（总股本、流通股本、涨跌停价等）。"""
+        code_clean = strip_suffix(code)
+        result = self._client.instrument(code_clean)
+        if not result.get("success", True):
+            return None
+        return result.get("data", result)
+
+    def get_ticks(self, code: str) -> list[dict]:
+        """获取个股近期逐笔成交明细。"""
+        code_clean = strip_suffix(code)
+        result = self._client.tick(code_clean)
+        if not result.get("success", True):
+            return []
+        data = result.get("data", result)
+        return data if isinstance(data, list) else []

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 电报 AI 结构化 Prompt
 

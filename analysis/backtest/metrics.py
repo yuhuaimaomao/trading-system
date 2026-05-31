@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
 """绩效指标计算 — 支持 numpy 加速，兼容纯 Python 列表"""
 
 import math
 from datetime import datetime
 
 
-def calculate_metrics(trades, equity_curve,
-                      initial_cash: float = 100_000,
-                      risk_free_rate: float = 0.02,
-                      trading_days_per_year: int = 252) -> dict:
+def calculate_metrics(
+    trades,
+    equity_curve,
+    initial_cash: float = 100_000,
+    risk_free_rate: float = 0.02,
+    trading_days_per_year: int = 252,
+) -> dict:
     """计算标准绩效指标
 
     Args:
@@ -30,11 +32,16 @@ def calculate_metrics(trades, equity_curve,
 
     totals = [e["total"] for e in equity_curve]
     final_total = totals[-1]
-    total_return = (final_total - initial_cash) / initial_cash if initial_cash > 0 else 0.0
+    total_return = (
+        (final_total - initial_cash) / initial_cash if initial_cash > 0 else 0.0
+    )
 
     n_days = len(equity_curve)
-    annual_return = ((1 + total_return) ** (trading_days_per_year / n_days) - 1
-                     if n_days > 0 else 0.0)
+    annual_return = (
+        (1 + total_return) ** (trading_days_per_year / n_days) - 1
+        if n_days > 0
+        else 0.0
+    )
 
     # 日收益率
     daily_returns = [
@@ -53,13 +60,15 @@ def calculate_metrics(trades, equity_curve,
     total_trades = len(trades)
     if total_trades == 0:
         result = _empty_result()
-        result.update({
-            "total_return": round(total_return, 4),
-            "annual_return": round(annual_return, 4),
-            "sharpe_ratio": round(sharpe, 4),
-            "max_drawdown": round(max_dd, 4),
-            "total_trades": 0,
-        })
+        result.update(
+            {
+                "total_return": round(total_return, 4),
+                "annual_return": round(annual_return, 4),
+                "sharpe_ratio": round(sharpe, 4),
+                "max_drawdown": round(max_dd, 4),
+                "total_trades": 0,
+            }
+        )
         return result
 
     wins = [t for t in trades if t.pnl is not None and t.pnl > 0]
@@ -68,8 +77,10 @@ def calculate_metrics(trades, equity_curve,
 
     sum_wins = sum(t.pnl for t in wins)
     sum_losses = abs(sum(t.pnl for t in losses))
-    profit_factor = sum_wins / sum_losses if sum_losses > 0 else (
-        float("inf") if sum_wins > 0 else 0.0
+    profit_factor = (
+        sum_wins / sum_losses
+        if sum_losses > 0
+        else (float("inf") if sum_wins > 0 else 0.0)
     )
 
     avg_win = sum_wins / len(wins) if wins else 0.0
@@ -92,8 +103,9 @@ def calculate_metrics(trades, equity_curve,
     }
 
 
-def _calc_sharpe(daily_returns: list[float], risk_free_rate: float,
-                 trading_days_per_year: int) -> float:
+def _calc_sharpe(
+    daily_returns: list[float], risk_free_rate: float, trading_days_per_year: int
+) -> float:
     """计算夏普比率"""
     n = len(daily_returns)
     if n < 2:
