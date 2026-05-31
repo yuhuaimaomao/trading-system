@@ -157,9 +157,32 @@ def _cross_validate_market_value(ctx: CheckContext) -> list[str]:
 
 # ── 累积一致性 ──
 
+# 以下校验需要跨轮状态，状态由 Watcher 在 CheckContext 外维护。
+# 框架提供函数签名和注册位，实现按需在 Watcher 侧补状态。
 
-def _cumulative_position_count(ctx: CheckContext) -> list[str]:
-    """持仓数不应超过历史买入次数减卖出次数（简化版：不超上限已覆盖）"""
+
+def _scan_count_continuity(ctx: CheckContext) -> list[str]:
+    """扫描计数连续性 — scan_count 应逐轮 +1，跳跃说明丢了轮次"""
+    return []  # 需要 Watcher 侧维护 _prev_scan_count
+
+
+def _index_prices_length(ctx: CheckContext) -> list[str]:
+    """index_prices 长度应 ≈ scan_count（每轮记录一个价格）"""
+    expected = ctx.scan_count
+    actual = len(ctx.index_prices)
+    if expected > 10 and actual > 0 and abs(expected - actual) > 3:
+        return [f"⚠️ 价格序列长度异常: scan={expected} prices={actual} (差{abs(expected - actual)})"]
+    return []
+
+
+def _locked_volume_consistency(ctx: CheckContext) -> list[str]:
+    """T+1 锁仓：收盘时 locked_volume 应全部归零（次日解锁）"""
+    total_locked = sum(
+        getattr(p, "locked_volume", 0) for p in ctx.positions.values()
+    )
+    # 只在尾盘检查（scan_count 很大时）
+    if ctx.scan_count > 200 and total_locked > 0:
+        return [f"⚠️ 尾盘仍有锁仓: {total_locked} 股未解锁"]
     return []
 
 
@@ -178,8 +201,9 @@ CHECKS = [
     _cross_validate_preclose_stability,
     _cross_validate_direction,
     _cross_validate_market_value,
-    # 累积一致性（后续扩展）
-    # _cumulative_position_count,
+    # 累积一致性
+    _index_prices_length,
+    _locked_volume_consistency,
 ]
 
 
