@@ -55,9 +55,11 @@ class CheckContext:
     risk_level: str = "safe"
     regime_pattern: str = "normal"
     sector_trends: dict = field(default_factory=dict)
-    index_technicals: dict = field(default_factory=dict)  # {rsi6, rsi12, macd_dif, macd_dea, kdj_k, kdj_d, kdj_j}
+    index_technicals: dict = field(default_factory=dict)
     market_env: str = "swing"
     market_env_score: int = 0
+    scenario_probs: dict = field(default_factory=dict)  # {scenario_name: probability}
+    scenario_scan_count: int = 0  # 情景引擎已运行轮数
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -525,6 +527,64 @@ def _trade_date_stable(ctx: CheckContext) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════
+# 10. 贝叶斯概率累积漂移检测
+# ═══════════════════════════════════════════════════════════════
+
+
+def _scenario_probs_sum_to_one(ctx: CheckContext) -> list[str]:
+    """归一化后的情景概率之和必须 ≈ 1.0。
+
+    贝叶斯引擎每轮执行 prev * 0.92 衰减 + prev * clamp(adj) 更新 + 归一化，
+    200 轮累积浮点误差可能导致总和高精度偏离 1.0。
+    """
+    if not ctx.scenario_probs or ctx.scenario_scan_count < 10:
+        return []
+    total = sum(ctx.scenario_probs.values())
+    drift = abs(total - 1.0)
+    if drift > 1e-10:
+        return [
+            f"🔴 情景概率总和高精度漂移: sum={total:.12f} 偏差={drift:.2e} "
+            f"(已{ctx.scenario_scan_count}轮累积)"
+        ]
+    return []
+
+
+def _scenario_probs_in_range(ctx: CheckContext) -> list[str]:
+    """所有概率应在 [0, 1] 内"""
+    if not ctx.scenario_probs:
+        return []
+    alerts = []
+    for name, prob in ctx.scenario_probs.items():
+        if prob < 0 or prob > 1.0:
+            alerts.append(f"🔴 情景概率越界: {name}={prob:.6f}")
+    return alerts
+
+
+def _scenario_not_collapsed(ctx: CheckContext) -> list[str]:
+    """不应所有概率坍缩到单情景（> 99%），说明衰减/更新逻辑出错"""
+    if not ctx.scenario_probs or ctx.scenario_scan_count < 30:
+        return []
+    max_prob = max(ctx.scenario_probs.values())
+    if max_prob > 0.99:
+        name = max(ctx.scenario_probs, key=ctx.scenario_probs.get)
+        return [
+            f"⚠️ 情景概率坍缩: {name}={max_prob:.4f} "
+            f"（其余 7 个情景合计 {1 - max_prob:.4f}）"
+        ]
+    return []
+
+
+def _scenario_not_all_zero(ctx: CheckContext) -> list[str]:
+    """至少应有 2 个情景概率 > 0.01（不应全部坍缩为 0）"""
+    if not ctx.scenario_probs or ctx.scenario_scan_count < 20:
+        return []
+    alive = sum(1 for p in ctx.scenario_probs.values() if p > 0.01)
+    if alive < 2:
+        return [f"⚠️ 情景概率退化: 仅 {alive} 个情景存活（应为 ≥2）"]
+    return []
+
+
+# ═══════════════════════════════════════════════════════════════
 # 注册表
 # ═══════════════════════════════════════════════════════════════
 
@@ -573,6 +633,11 @@ CHECKS = [
     _locked_volume_consistency,
     _sector_data_accumulating,
     _trade_date_stable,
+    # 10. 贝叶斯概率累积
+    _scenario_probs_sum_to_one,
+    _scenario_probs_in_range,
+    _scenario_not_collapsed,
+    _scenario_not_all_zero,
 ]
 
 
