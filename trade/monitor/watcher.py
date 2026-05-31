@@ -516,20 +516,33 @@ class Watcher(
             else:
                 self._index_stale_count = 0
 
+        collector_ok = bool(
+            getattr(self, "_collector_client", None)
+            and getattr(self._collector_client, "connected", False)
+        )
         ctx = CheckContext(
             cash=pa.cash,
             total_value=pa.total_value,
+            daily_pnl=pa.daily_pnl,
             positions=pa.positions,
             max_positions=settings.MAX_POSITIONS,
             prices=prices,
-            index_prices=self._index_prices,
+            index_prices=list(self._index_prices),
+            index_high=self._index_high,
+            index_low=self._index_low,
             index_pre_close=index_quote.get("pre_close", 0),
             qmt_change_pct=index_quote.get("change_pct"),
             sector_stats=sector_stats,
-            pos_meta=self._pos_meta,
+            pos_meta=dict(self._pos_meta),
+            bought_watch=getattr(self, "_bought_watch", {}) or {},
+            sl_reminder_count=len(getattr(self, "_sl_reminders", {}) or {}),
+            alerted_sl_tp_count=len(self._alerted_sl_tp),
+            triggered_ids_count=len(self._triggered_ids),
             scan_count=self._scan_count,
             baseline_pre_close=baseline.get("pre_close", 0),
             baseline_qmt_pct=baseline.get("qmt_change_pct", 0),
+            trade_date=self._trade_date,
+            collector_connected=collector_ok,
         )
 
         alerts = run_checks(ctx)
