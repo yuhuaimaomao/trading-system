@@ -7,6 +7,8 @@ import logging
 import sqlite3
 from datetime import datetime
 
+from system.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,6 +20,28 @@ class PositionRiskMixin:
         regime = getattr(self, "_regime", None)
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
         pattern = getattr(regime, "pattern", "normal") if regime else "normal"
+
+        # ── 日内熔断：日亏损 > 3%，所有浮亏仓位立即平仓 ──
+        pa = self.paper_account
+        if pa.daily_pnl < 0 and pa.total_value > 0:
+            loss_ratio = abs(pa.daily_pnl) / pa.total_value
+            if loss_ratio > settings.MAX_DAILY_LOSS:
+                logger.warning(
+                    f"日内熔断触发: 日亏损 {loss_ratio:.1%} > {settings.MAX_DAILY_LOSS:.0%}"
+                )
+                closed = []
+                for code, pos in list(pa.positions.items()):
+                    if pos.pnl_pct is not None and pos.pnl_pct < 0:
+                        price = prices.get(code) or pos.current_price
+                        result = pa.sell(code, price, f"日内熔断 (日亏损 {loss_ratio:.1%})")
+                        if result.success:
+                            closed.append(f"{code} {pos.stock_name}")
+                            # 清理盯盘元数据
+                            self._pos_meta.pop(code, None)
+                self._alert(
+                    f"🚨 日内熔断: 日亏损 {loss_ratio:.1%}，已平仓: {', '.join(closed) if closed else '无'}"
+                )
+                return  # 熔断后本轮不再逐只检查
 
         # 基础调整因子（每只票从基础值开始，不在循环中累积）
         if risk_level == "extreme":
