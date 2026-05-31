@@ -1434,20 +1434,21 @@ class BuyDecisionMixin:
             if self.paper_account.total_value > 0
             else 0.10
         )
+        sector = (
+            self._industry_cache.get(code, "")
+            if hasattr(self, "_industry_cache")
+            else ""
+        )
         risk_result = self.risk_engine.can_open(
             code,
             target_pct,
+            sector_code=sector,
             portfolio=self.paper_account,
         )
         if not risk_result.allowed:
             return
 
         # 计算股数（盯盘决策，模拟盘只管执行）
-        sector = (
-            self._industry_cache.get(code, "")
-            if hasattr(self, "_industry_cache")
-            else ""
-        )
         capital = min(
             max_amount, self.paper_account.total_value * settings.DEFAULT_POSITION_PCT
         )
