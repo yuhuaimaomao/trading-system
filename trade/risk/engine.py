@@ -7,6 +7,7 @@ from trade.portfolio.portfolio import Portfolio
 from trade.risk.rules.blacklist import is_blacklisted
 from trade.risk.rules.concentration import check_concentration
 from trade.risk.rules.market_env import get_market_environment, get_max_position
+from trade.risk.rules.max_drawdown import check_daily_loss_limit
 from trade.risk.rules.stop_loss import check_stop_loss, check_time_stop
 from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop
 
@@ -104,18 +105,17 @@ class RiskEngine:
         close_signals = []
 
         # 优先级 4：日内熔断
-        if portfolio.daily_pnl < 0 and portfolio.total_value > 0:
-            daily_loss_ratio = abs(portfolio.daily_pnl) / portfolio.total_value
-            if daily_loss_ratio > self.daily_loss_limit:
-                for code, pos in list(portfolio.positions.items()):
-                    if pos.pnl_pct < 0:
-                        close_signals.append(
-                            {
-                                "stock_code": code,
-                                "reason": f"日内熔断 (日亏损 {daily_loss_ratio:.1%})",
-                                "priority": 4,
-                            }
-                        )
+        if check_daily_loss_limit(portfolio.daily_pnl, portfolio.total_value, self.daily_loss_limit):
+            loss_ratio = abs(portfolio.daily_pnl) / portfolio.total_value
+            for code, pos in list(portfolio.positions.items()):
+                if pos.pnl_pct < 0:
+                    close_signals.append(
+                        {
+                            "stock_code": code,
+                            "reason": f"日内熔断 (日亏损 {loss_ratio:.1%})",
+                            "priority": 4,
+                        }
+                    )
 
         # 优先级 5-8：逐只检查
         for code, pos in list(portfolio.positions.items()):
