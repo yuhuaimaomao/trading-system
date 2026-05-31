@@ -32,17 +32,21 @@ class PositionRiskMixin:
                     f"日内熔断触发: 日亏损 {loss_ratio:.1%} > {settings.MAX_DAILY_LOSS:.0%}"
                 )
                 closed = []
+                blocked_t1 = []
                 for code, pos in list(pa.positions.items()):
                     if pos.pnl_pct is not None and pos.pnl_pct < 0:
+                        if pos.entry_date == self._trade_date:
+                            blocked_t1.append(f"{code} {pos.stock_name}")
+                            continue
                         price = prices.get(code) or pos.current_price
                         result = pa.sell(code, price, f"日内熔断 (日亏损 {loss_ratio:.1%})")
                         if result.success:
                             closed.append(f"{code} {pos.stock_name}")
-                            # 清理盯盘元数据
                             self._pos_meta.pop(code, None)
-                self._alert(
-                    f"🚨 日内熔断: 日亏损 {loss_ratio:.1%}，已平仓: {', '.join(closed) if closed else '无'}"
-                )
+                msg = f"🚨 日内熔断: 日亏损 {loss_ratio:.1%}，已平仓: {', '.join(closed) if closed else '无'}"
+                if blocked_t1:
+                    msg += f"\n🔒 T+1 锁定无法卖出: {', '.join(blocked_t1)}"
+                self._alert(msg)
                 return  # 熔断后本轮不再逐只检查
 
         # 基础调整因子（每只票从基础值开始，不在循环中累积）

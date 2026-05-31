@@ -113,6 +113,19 @@ class TestDailyLossCircuitBreaker:
         assert "日内熔断" in w._alerts[0]
         assert len(pa._sold) == 2  # 两个浮亏仓位
 
+    def test_t1_protection_blocks_circuit_breaker_sell(self):
+        pa = _make_pa(cash=200000, daily_loss=9000)
+        # 今日买入 — 熔断也不能卖
+        _add_position(pa, "000001", "票A", 1000, 10.0, entry_date="2026-06-01")
+        pa.update_prices({"000001": 9.0})
+
+        w = _TestWatcher(pa)
+        w._check_positions({"000001": 9.0})
+
+        assert len(w._alerts) == 1
+        assert "T+1" in w._alerts[0]
+        assert len(pa._sold) == 0  # 没卖出
+
     def test_no_trigger_when_loss_below_3pct(self):
         pa = _make_pa(cash=200000, daily_loss=2000)  # 1%
         _add_position(pa, "000001", "票A", 1000, 10.0)
