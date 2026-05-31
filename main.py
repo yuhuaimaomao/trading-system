@@ -74,7 +74,7 @@ def cmd_monitor():
         PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
     )
     _log_dir.mkdir(parents=True, exist_ok=True)
-    _monitor_fh = open(
+    _monitor_fh = open(  # noqa: SIM115
         str(_log_dir / "monitor_output.log"), "a", encoding="utf-8", buffering=1
     )
     _sys.stdout = _monitor_fh
@@ -88,28 +88,33 @@ def cmd_monitor():
     set_current_task("monitor")
     logger = get_task_logger("monitor")
 
-    PID_FILE = str(PROJECT_ROOT / "storage" / "watcher.pid")
+    from contextlib import suppress
 
-    # 检查已有实例
-    if os.path.exists(PID_FILE):
+    pid_file = str(PROJECT_ROOT / "storage" / "watcher.pid")
+
+    # 使用排他创建模式避免 TOCTOU 竞态
+    try:
+        fd = os.open(pid_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+    except FileExistsError:
         try:
-            with open(PID_FILE) as f:
+            with open(pid_file) as f:
                 old_pid = int(f.read().strip())
             os.kill(old_pid, 0)
             logger.error(f"盯盘已在运行 (PID {old_pid})，拒绝重复启动")
-            print(f"盯盘已在运行 (PID {old_pid})，如确认已停请删除 {PID_FILE}")
-            sys.exit(1)
+            print(f"盯盘已在运行 (PID {old_pid})，如确认已停请删除 {pid_file}")
         except (OSError, ValueError):
-            os.remove(PID_FILE)
-
-    with open(PID_FILE, "w") as f:
-        f.write(str(os.getpid()))
+            os.remove(pid_file)
+            fd = os.open(pid_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write(str(os.getpid()))
+            return  # 跳过 sys.exit
+        sys.exit(1)
 
     def _cleanup():
-        try:
-            os.remove(PID_FILE)
-        except OSError:
-            pass
+        with suppress(OSError):
+            os.remove(pid_file)
 
     atexit.register(_cleanup)
 
@@ -270,7 +275,7 @@ def cmd_collect():
 
     success = 0
     failed = 0
-    for name, module_path, class_name, category in collectors:
+    for name, module_path, class_name, _category in collectors:
         try:
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
@@ -304,6 +309,8 @@ def cmd_portfolio():
 
 def cmd_strategy():
     """盘前管线：趋势筛选 → AI 分析 → 信号入库"""
+    import re
+
     from analysis.strategy import StrategyPipeline
     from system.utils.logger import get_task_logger, set_current_task
     from system.utils.telegram import MessageSender
@@ -314,6 +321,9 @@ def cmd_strategy():
     trade_date = (
         sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
     )
+    if trade_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", trade_date):
+        logger.error(f"日期格式无效: {trade_date}，需为 YYYY-MM-DD")
+        sys.exit(1)
 
     telegram = None
     try:

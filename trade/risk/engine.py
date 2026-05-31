@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from trade.portfolio.portfolio import Portfolio
-from trade.risk.rules.blacklist import is_blacklisted
+from trade.risk.rules.blacklist import is_blacklisted, is_risk_suspect
 from trade.risk.rules.concentration import check_concentration
 from trade.risk.rules.market_env import get_market_environment, get_max_position
 from trade.risk.rules.max_drawdown import check_daily_loss_limit
@@ -29,6 +29,7 @@ class RiskEngine:
         self.daily_loss_limit = self.config.get("daily_loss_limit", 0.03)
         self.market_env = "swing"
         self._regime = None  # MarketRegime | None
+        self._halted = False  # 日内熔断标志，阻止当日新建仓
 
     def update_market_env(
         self,
@@ -60,11 +61,18 @@ class RiskEngine:
         target_pct: float,
         sector_code: str = "",
         portfolio: Optional[Portfolio] = None,
+        stock_name: str = "",
     ) -> RiskResult:
         """开仓前检查（优先级 1-3）"""
-        # 优先级 1：黑名单
+        # 优先级 0：日内熔断
+        if self._halted:
+            return RiskResult(False, "日内熔断已触发，暂停新建仓", "reject")
+
+        # 优先级 1：黑名单 + ST/风险标的
         if is_blacklisted(stock_code):
             return RiskResult(False, "黑名单标的", "reject")
+        if stock_name and is_risk_suspect(stock_name):
+            return RiskResult(False, f"风险标的: {stock_name}", "reject")
 
         # 优先级 2：市场环境（优先用 MarketRegime 的 position_mult）
         if self._regime is not None:
@@ -105,7 +113,10 @@ class RiskEngine:
         close_signals = []
 
         # 优先级 4：日内熔断
-        if check_daily_loss_limit(portfolio.daily_pnl, portfolio.total_value, self.daily_loss_limit):
+        if check_daily_loss_limit(
+            portfolio.daily_pnl, portfolio.total_value, self.daily_loss_limit
+        ):
+            self._halted = True
             loss_ratio = abs(portfolio.daily_pnl) / portfolio.total_value
             for code, pos in list(portfolio.positions.items()):
                 if pos.pnl_pct < 0:

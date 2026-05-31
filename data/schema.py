@@ -1,6 +1,7 @@
 """交易系统专用表结构"""
 
 import sqlite3
+from contextlib import suppress
 
 from system.config.settings import DATABASE_PATH
 
@@ -30,7 +31,7 @@ def ensure_tables():
             reason TEXT,
             status TEXT DEFAULT 'pending',
             executed_at TEXT,
-            UNIQUE(trade_date, stock_code)
+            UNIQUE(trade_date, stock_code, account)
         );
 
         CREATE TABLE IF NOT EXISTS trade_orders (
@@ -112,12 +113,10 @@ def ensure_tables():
     conn.commit()
 
     # locked_volume 列 — T+1 锁仓持久化（幂等迁移）
-    try:
+    with suppress(sqlite3.OperationalError):
         cursor.execute(
             "ALTER TABLE trade_portfolio_positions ADD COLUMN locked_volume INTEGER DEFAULT 0"
         )
-    except sqlite3.OperationalError:
-        pass
 
     # 添加 account 字段（幂等迁移）
     for table in [
@@ -125,12 +124,10 @@ def ensure_tables():
         "trade_orders",
         "trade_portfolio_snapshots",
     ]:
-        try:
+        with suppress(sqlite3.OperationalError):
             cursor.execute(
                 f"ALTER TABLE {table} ADD COLUMN account TEXT DEFAULT 'real'"
             )
-        except sqlite3.OperationalError:
-            pass
 
     # cls_telegraph AI 结构化字段（幂等迁移）
     for col, col_type in [
@@ -143,10 +140,8 @@ def ensure_tables():
         ("ai_direction", "TEXT"),
         ("ai_status", "TEXT DEFAULT 'pending'"),
     ]:
-        try:
+        with suppress(sqlite3.OperationalError):
             cursor.execute(f"ALTER TABLE cls_telegraph ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass
 
     # market_breadth 表（涨跌家数 + 大盘状态）
     cursor.execute("""

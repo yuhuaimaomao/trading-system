@@ -3,7 +3,7 @@
 # 执行时间：交易日 08:00-20:00，每 20 分钟一次
 # cron: */20 8-20 * * 1-5
 
-set -e
+set -euo pipefail
 
 # cron 环境文件描述符限制
 ulimit -n 4096

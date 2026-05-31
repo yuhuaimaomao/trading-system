@@ -1,5 +1,5 @@
 """
-日志工具 v3.1
+日志工具 v3.2
 
 Logger 层级 + 传播机制：
   task.review                            → tasks/review.log (INFO)
@@ -18,29 +18,30 @@ Logger 层级 + 传播机制：
 
 import logging
 import os
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from system.config.settings import LOGS_DIR
 
-_current_task: Optional[str] = None
+_current_task: ContextVar[Optional[str]] = ContextVar("current_task", default=None)
 
 
 def set_current_task(task_name: str):
     """设置当前任务上下文，子模块 logger 自动获得 task.{task}.collector/core.{name} 层级名"""
-    global _current_task
-    _current_task = task_name
+    _current_task.set(task_name)
 
 
 def get_current_task() -> Optional[str]:
-    return _current_task
+    return _current_task.get()
 
 
 def _build_name(name: str, category: str) -> str:
     """有任务上下文时返回 task.{task}.{category}.{name}，否则返回原名"""
-    if _current_task:
-        return f"task.{_current_task}.{category}.{name}"
+    task = _current_task.get()
+    if task:
+        return f"task.{task}.{category}.{name}"
     return name
 
 

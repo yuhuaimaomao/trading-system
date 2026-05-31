@@ -3,11 +3,8 @@
 import os
 
 import requests
-import urllib3
 
 from system.utils.logger import get_system_logger
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = get_system_logger("telegram_bot")
 
@@ -35,7 +32,7 @@ class MessageSender:
         if not self.bot_token:
             raise ValueError("TELEGRAM_REPORT_BOT_TOKEN 未配置，请在 .env 文件中设置")
 
-        logger.info(f"使用 Bot 模式（token: {self.bot_token[:8]}...）")
+        logger.info("Telegram Bot 已初始化")
 
     def send(self, message: str):
         try:
@@ -64,7 +61,6 @@ class MessageSender:
                     url,
                     json=payload,
                     timeout=30,
-                    verify=False,
                     proxies=TELEGRAM_PROXIES,
                 )
                 resp.raise_for_status()
@@ -128,7 +124,6 @@ class MessageReceiver:
                 url,
                 params=params,
                 timeout=timeout + 10,
-                verify=False,
                 proxies=TELEGRAM_PROXIES,
             )
             resp.raise_for_status()

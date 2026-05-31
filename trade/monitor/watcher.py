@@ -14,10 +14,17 @@ import time
 from collections import defaultdict
 from datetime import date, datetime
 from datetime import time as dt_time
+from functools import lru_cache
 
 from data.repo import TradeRepository
 from system.config import settings
+from trade.monitor.abnormal import AbnormalMonitorMixin
+from trade.monitor.buy_decision import BuyDecisionMixin
+from trade.monitor.close_summary import CloseSummaryMixin
+from trade.monitor.closing import ClosingDecisionMixin
 from trade.monitor.market_state import MarketRegime, MarketStateMixin
+from trade.monitor.position_risk import PositionRiskMixin
+from trade.monitor.sector_context import SectorContextMixin
 from trade.paper.account import PaperAccount
 from trade.risk.engine import RiskEngine
 
@@ -43,14 +50,6 @@ INDEX_HALT_PCT = -0.02  # 上证跌幅 > 2%
 INDEX_DANGER_PCT = -0.01  # 上证跌破 MA20 且跌幅 > 1%
 
 
-from trade.monitor.abnormal import AbnormalMonitorMixin
-from trade.monitor.buy_decision import BuyDecisionMixin
-from trade.monitor.close_summary import CloseSummaryMixin
-from trade.monitor.closing import ClosingDecisionMixin
-from trade.monitor.position_risk import PositionRiskMixin
-from trade.monitor.sector_context import SectorContextMixin
-
-
 class Watcher(
     MarketStateMixin,
     BuyDecisionMixin,
@@ -62,9 +61,7 @@ class Watcher(
 ):
     """盘中盯盘进程 — cron 拉起后自管理生命周期"""
 
-    def __init__(
-        self, telegram_bot=None, qmt_quote=None, db_path=None
-    ):
+    def __init__(self, telegram_bot=None, qmt_quote=None, db_path=None):
         self.telegram = telegram_bot
         self._private_telegram = None
         self._init_private_telegram()
@@ -187,6 +184,7 @@ class Watcher(
             pass
 
     @staticmethod
+    @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
     def _resolve_name(code: str) -> str:
         try:
             import sqlite3
@@ -354,9 +352,12 @@ class Watcher(
             drawdown_halt = False
 
         try:
-            if self._scan_count % 3 == 0 and self._market_snapshot:
-                if not self._collector_client or not self._collector_client.connected:
-                    self._update_sector_trends()
+            if (
+                self._scan_count % 3 == 0
+                and self._market_snapshot
+                and (not self._collector_client or not self._collector_client.connected)
+            ):
+                self._update_sector_trends()
         except Exception as e:
             logger.warning(f"板块趋势更新异常: {e}", exc_info=True)
 
@@ -529,8 +530,17 @@ class Watcher(
 
         # 技术指标快照
         index_tech = {}
-        for k in ("rsi6", "rsi12", "rsi24", "macd_dif", "macd_dea", "macd_bar",
-                   "kdj_k", "kdj_d", "kdj_j"):
+        for k in (
+            "rsi6",
+            "rsi12",
+            "rsi24",
+            "macd_dif",
+            "macd_dea",
+            "macd_bar",
+            "kdj_k",
+            "kdj_d",
+            "kdj_j",
+        ):
             v = getattr(self, f"_idx_{k}", None)
             if v is not None:
                 index_tech[k] = v
@@ -647,7 +657,7 @@ class Watcher(
     def _init_bought_watch(self):
         """初始化 _bought_watch（从 _pos_meta + paper_account 持仓重建）。"""
         for code, pos in self.paper_account.positions.items():
-            meta = self._pos_meta.get(code, {})
+            _meta = self._pos_meta.get(code, {})
             self._bought_watch[code] = {
                 "entry_price": pos.avg_cost,
                 "last_alert_scan": 0,
@@ -864,19 +874,26 @@ class Watcher(
         """从 market_snapshots 恢复最新一批全市场快照（盘中重启用）。"""
         try:
             conn = sqlite3.connect(self.db_path)
+            # 先查最新时间戳，再只取该批次数据
+            latest = conn.execute(
+                """SELECT MAX(ts) FROM market_snapshots WHERE trade_date=?""",
+                (self._trade_date,),
+            ).fetchone()
+            if not latest or not latest[0]:
+                conn.close()
+                return
+            latest_ts = latest[0]
             rows = conn.execute(
                 """SELECT ts, code, change_pct, price, amount FROM market_snapshots
-                   WHERE trade_date=? ORDER BY ts DESC LIMIT 8000""",
-                (self._trade_date,),
+                   WHERE trade_date=? AND ts=?""",
+                (self._trade_date, latest_ts),
             ).fetchall()
             conn.close()
             if not rows:
                 return
 
-            latest_ts = rows[0][0]
-            batch = [r for r in rows if r[0] == latest_ts]
             self._market_snapshot = {}
-            for ts_val, code, chg, price, amount in batch:
+            for _ts, code, chg, price, amount in rows:
                 self._market_snapshot[code] = {
                     "changePct": chg,
                     "price": price or 0,

@@ -9,12 +9,36 @@
 import logging
 import re
 from datetime import datetime
+from functools import lru_cache
 from typing import Optional
 
 from analysis.signals import OrderSignal
 from data.repo import TradeRepository
+from system.config import settings
 
 logger = logging.getLogger(__name__)
+
+# 操作词 + 账户标记（可能被误识别为股票名称的关键词）
+_NON_NAME_KEYWORDS = {
+    "没成交",
+    "未成交",
+    "没买到",
+    "未买到",
+    "没买",
+    "买了",
+    "成交",
+    "买到",
+    "买入",
+    "已买",
+    "模拟盘",
+    "模拟",
+    "实盘",
+    "实际",
+    "paper",
+    "Paper",
+    "real",
+    "Real",
+}
 
 
 class ManualExecutor:
@@ -29,6 +53,7 @@ class ManualExecutor:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
     def _resolve_name(name: str) -> Optional[str]:
         """股票名称 → 代码，从 stock_basic 查最新日期。"""
         import sqlite3
@@ -78,8 +103,12 @@ class ManualExecutor:
         if code_match:
             result["stock_code"] = code_match.group(1)
         else:
-            # 尝试匹配股票名称（2-4个中文字符）
-            name_match = re.search(r"([一-鿿]{2,4})", text)
+            # 先去掉操作词和账户标记再匹配名称，避免"没成交"/"模拟盘"等被误识别
+            text_for_name = text
+            for kw in _NON_NAME_KEYWORDS:
+                text_for_name = text_for_name.replace(kw, "")
+            # 匹配 2-3 字中文名称（排除纯数字和标点）
+            name_match = re.search(r"([一-鿿]{2,3})", text_for_name)
             if name_match:
                 result["stock_name"] = name_match.group(1)
 
@@ -88,10 +117,7 @@ class ManualExecutor:
         elif any(kw in text for kw in ["实盘", "实际", "real", "Real"]):
             result["account"] = "real"
 
-        if any(
-            kw in text
-            for kw in ["没成交", "未成交", "没买到", "未买到", "没买", "没买到"]
-        ):
+        if any(kw in text for kw in ["没成交", "未成交", "没买到", "未买到", "没买"]):
             result["status"] = "rejected"
             return result
 
@@ -200,12 +226,6 @@ class ManualExecutor:
         logger.info(
             f"记录 {account} 成交: {code} {volume}股 @{price} order_id={order_id}"
         )
-
-        # 检查是否 paper+real 都有了
-        orders = self.repo.get_orders_by_date(trade_date)
-        code_orders = [o for o in orders if o["stock_code"] == code]
-        paper_done = any(o["account"] == "paper" for o in code_orders)
-        real_done = any(o["account"] == "real" for o in code_orders)
 
         if signal_id:
             self.repo.update_signal_status(signal_id, "bought")

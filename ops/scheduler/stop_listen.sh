@@ -2,7 +2,7 @@
 # 股票量化系统 - Telegram 消息监听停止脚本
 # 执行时间：每个交易日 18:00
 
-set -e
+set -euo pipefail
 
 export PATH="/opt/homebrew/bin:$PATH"
 

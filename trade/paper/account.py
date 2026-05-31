@@ -7,6 +7,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 
 from data.repo import TradeRepository
 from system.config import settings
@@ -179,7 +180,12 @@ class PaperAccount:
                 reason=f"T+1 保护，当日买入不可卖出 {code}（持仓 {pos.volume} 股，可用 0）",
             )
 
-        amount = price * pos.volume
+        # 在 close_position 之前保存所有需要的属性（close_position 会 del self.positions[code]）
+        stock_name = pos.stock_name
+        volume = pos.volume
+        avg_cost = pos.avg_cost
+
+        amount = price * volume
         commission = (
             max(amount * COMMISSION_RATE, MIN_COMMISSION) + amount * STAMP_TAX_RATE
         )
@@ -187,24 +193,25 @@ class PaperAccount:
         self._portfolio.close_position(code, price, reason, commission=commission)
         self._record_order(
             code,
-            pos.stock_name,
+            stock_name,
             "sell",
-            pos.volume,
+            volume,
             price,
             reason,
             commission=commission,
         )
 
-        pnl = (price - pos.avg_cost) * pos.volume - commission
-        pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
+        pnl = (price - avg_cost) * volume - commission
+        # pnl_pct 统一为百分数（0-100），供 SellResult 和 Telegram 通知使用
+        pnl_pct = (price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
 
         if self.telegram:
             self._notify_sell(
                 code,
-                pos.stock_name,
+                stock_name,
                 price,
-                pos.volume,
-                pos.avg_cost,
+                volume,
+                avg_cost,
                 pnl,
                 pnl_pct,
                 commission,
@@ -212,7 +219,7 @@ class PaperAccount:
             )
 
         self._persist_state()
-        logger.info(f"模拟盘卖出: {code} {pos.stock_name} 盈亏{pnl:+.0f}")
+        logger.info(f"模拟盘卖出: {code} {stock_name} 盈亏{pnl:+.0f}")
         return SellResult(
             success=True,
             pnl=pnl,
@@ -369,6 +376,7 @@ class PaperAccount:
                     "pnl": pos.pnl,
                     "pnl_pct": pos.pnl_pct,
                     "entry_date": pos.entry_date,
+                    "locked_volume": getattr(pos, "locked_volume", 0),
                 }
             )
         self.repo.insert_positions(trade_date, "paper", pos_rows)
@@ -407,6 +415,7 @@ class PaperAccount:
             logger.warning(f"模拟盘订单记录失败: {e}")
 
     @staticmethod
+    @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
     def _resolve_name(code: str) -> str:
         try:
             conn = sqlite3.connect(settings.DATABASE_PATH)

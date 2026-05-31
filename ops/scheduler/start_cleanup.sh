@@ -2,7 +2,7 @@
 # 股票量化系统 - 周清理启动脚本
 # 执行时间：每周五 18:00
 
-set -e
+set -euo pipefail
 
 # 确保 openclaw 命令可用（修复 cron 环境问题）
 export PATH="/opt/homebrew/bin:$PATH"

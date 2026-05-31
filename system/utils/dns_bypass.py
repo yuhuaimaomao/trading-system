@@ -16,8 +16,14 @@ macOS 上代理工具的 TUN 模式会劫持系统 DNS，将域名解析到
 import re
 import socket
 import subprocess
+import time
+
+from system.config.settings import DNS_CACHE_TTL
 
 _orig_getaddrinfo = socket.getaddrinfo
+
+# 合法域名字符
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _FAKE_IP_RANGES = [
     # Shadowrocket / Surge / Clash TUN 模式常用的虚拟 IP 段
@@ -26,7 +32,7 @@ _FAKE_IP_RANGES = [
     (198, 19),
 ]
 
-_dns_cache: dict[str, str] = {}
+_dns_cache: dict[str, tuple[str, float]] = {}
 _installed = False
 
 
@@ -47,8 +53,16 @@ def _is_fake_ip(ip: str) -> bool:
 
 def _resolve_real_ip(hostname: str) -> str | None:
     """通过直连 DNS 获取真实 IP（绕过系统 DNS 劫持）"""
-    if hostname in _dns_cache:
-        return _dns_cache[hostname]
+    # 域名格式校验
+    if not _HOSTNAME_RE.match(hostname):
+        return None
+    now = time.time()
+    cached = _dns_cache.get(hostname)
+    if cached:
+        ip, ts = cached
+        if now - ts < DNS_CACHE_TTL:
+            return ip
+        del _dns_cache[hostname]
     for dns_server in ("@8.8.8.8", "@114.114.114.114"):
         try:
             result = subprocess.run(
@@ -60,7 +74,7 @@ def _resolve_real_ip(hostname: str) -> str | None:
             for line in result.stdout.strip().split("\n"):
                 line = line.strip()
                 if re.match(r"^\d+\.\d+\.\d+\.\d+$", line):
-                    _dns_cache[hostname] = line
+                    _dns_cache[hostname] = (line, now)
                     return line
         except Exception:
             continue
