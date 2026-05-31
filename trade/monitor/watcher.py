@@ -236,15 +236,13 @@ class Watcher(
             # 盘前正常启动：直接连 collector，不读 DB
             self._connect_collector()
 
-        while self._before_market():
-            wait_sec = min(
-                (
-                    datetime.combine(date.today(), MORNING_START) - datetime.now()
-                ).total_seconds(),
-                30,
-            )
-            if wait_sec > 0:
-                time.sleep(wait_sec)
+        if self._before_market():
+            wait = (
+                datetime.combine(date.today(), MORNING_START) - datetime.now()
+            ).total_seconds()
+            if wait > 0:
+                logger.info(f"距开盘 {wait:.0f} 秒，等待中")
+                time.sleep(wait)
 
         # 如果盘前还没连上，交易时段再试一次
         if not in_trading:
@@ -296,8 +294,12 @@ class Watcher(
 
     @staticmethod
     def _lunch_break():
-        while Watcher._in_lunch_break():
-            time.sleep(30)
+        now = datetime.now()
+        afternoon = now.replace(hour=13, minute=0, second=0, microsecond=0)
+        wait = (afternoon - now).total_seconds()
+        if wait > 0:
+            logger.info(f"午休，{wait:.0f}秒后恢复")
+            time.sleep(wait)
 
     # ======================== 主扫描 ========================
 
