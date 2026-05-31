@@ -341,6 +341,12 @@ class Watcher(
         except Exception as e:
             logger.warning(f"更新持仓价格异常: {e}", exc_info=True)
 
+        # 首轮记录基准锚点（用于后续交叉校验）
+        try:
+            self._record_baseline(prices)
+        except Exception as e:
+            logger.warning(f"基准记录异常: {e}", exc_info=True)
+
         try:
             drawdown_halt = self.paper_account.drawdown >= settings.MAX_ACCOUNT_DRAWDOWN
             if drawdown_halt:
@@ -468,67 +474,119 @@ class Watcher(
         except Exception as e:
             logger.warning(f"健康检查异常: {e}", exc_info=True)
 
+    # ======================== 开机基准 ========================
+
+    def _record_baseline(self, prices: dict[str, float]):
+        """首轮记录基准值，后续每轮交叉校验用。"""
+        if getattr(self, "_baseline", None) is not None:
+            return
+        iq = getattr(self, "_last_index_quote", None) or {}
+        pre_close = iq.get("pre_close", 0)
+        if pre_close <= 0:
+            return  # 还没收到 collector 数据，等下一轮
+        self._baseline = {
+            "pre_close": pre_close,
+            "qmt_change_pct": iq.get("change_pct", 0),
+            "round": self._scan_count,
+        }
+        logger.info(
+            f"基准锚点: preClose={self._baseline['pre_close']:.2f} "
+            f"QMT涨跌幅={self._baseline['qmt_change_pct']:.4f}"
+        )
+
     # ======================== 健康检查 ========================
 
     def _health_check(self, prices: dict[str, float]):
-        """运行时数据一致性校验 — 发现异常推 Telegram，不阻塞主循环。"""
+        """运行时数据一致性校验 — 双路交叉验证 + 基准锚点漂移检测。"""
         alerts = []
         pa = self.paper_account
+        baseline = getattr(self, "_baseline", None)
+        index_quote = getattr(self, "_last_index_quote", None) or {}
 
-        # 1. 账户恒等式：total_value == cash + market_value
+        # ── 基础检查 ──
         mv = sum(p.market_value for p in pa.positions.values())
         expected = pa.cash + mv
         drift = abs(pa.total_value - expected)
-        if drift > 10:  # 超过 10 块钱偏差算异常
-            alerts.append(
-                f"⚠️ 账户不一致: total={pa.total_value:.0f} cash+mv={expected:.0f} 偏差={drift:.0f}"
-            )
+        if drift > 10:
+            alerts.append(f"⚠️ 账户不一致: total={pa.total_value:.0f} cash+mv={expected:.0f} 偏差={drift:.0f}")
 
-        # 2. 持仓数不超上限
         if len(pa.positions) > settings.MAX_POSITIONS:
-            alerts.append(
-                f"⚠️ 持仓超限: {len(pa.positions)}/{settings.MAX_POSITIONS}"
-            )
+            alerts.append(f"⚠️ 持仓超限: {len(pa.positions)}/{settings.MAX_POSITIONS}")
 
-        # 3. 价格剧烈波动（单轮 > 15%，排除除权除息/数据异常）
         for code, price in prices.items():
             pos = pa.positions.get(code)
             if pos and pos.current_price > 0:
                 chg = abs(price - pos.current_price) / pos.current_price
                 if chg > 0.15:
-                    alerts.append(
-                        f"⚠️ 价格跳变: {code} {pos.current_price:.2f}→{price:.2f} ({chg:.1%})"
-                    )
+                    alerts.append(f"⚠️ 价格跳变: {code} {pos.current_price:.2f}→{price:.2f} ({chg:.1%})")
 
-        # 4. 指数价格停更检测（最近 5 轮没变化）
         if len(self._index_prices) >= 5:
             recent = self._index_prices[-5:]
             if max(recent) - min(recent) < 0.01:
                 self._index_stale_count = getattr(self, "_index_stale_count", 0) + 1
-                if self._index_stale_count >= 3:  # 连续 3 次（15 轮）没变
-                    alerts.append(
-                        f"⚠️ 指数停更: 近 15 轮上证波动 < 0.01，QMT 连接可能中断"
-                    )
+                if self._index_stale_count >= 3:
+                    alerts.append("⚠️ 指数停更: 近 15 轮上证波动 < 0.01")
             else:
                 self._index_stale_count = 0
 
-        # 5. _pos_meta 与 positions 一致性
         meta_codes = set(self._pos_meta.keys())
         pos_codes = set(pa.positions.keys())
-        orphan_meta = meta_codes - pos_codes  # 有 meta 但没持仓
+        orphan_meta = meta_codes - pos_codes
         if orphan_meta:
-            alerts.append(f"⚠️ 元数据孤儿: {', '.join(orphan_meta)}（有止损止盈但没有持仓）")
+            alerts.append(f"⚠️ 元数据孤儿: {', '.join(orphan_meta)}")
 
-        # 6. 模拟盘卖出检查 — 今日买入不应被卖出
-        for code in list(self._alerted_sl_tp):
-            pos = pa.positions.get(code)
-            if not pos:
-                # 已卖出的检查是否 T+1 违规
-                # 这里只记录，具体拦截在 PaperAccount.sell()
-                pass
+        # ── 冗余校验：双路计算交叉验证 ──
+
+        # A. 指数涨跌幅：QMT 返回值 vs 我们自己算
+        if baseline and self._index_prices and baseline["pre_close"] > 0:
+            our_pct = (self._index_prices[-1] - baseline["pre_close"]) / baseline["pre_close"]
+            qmt_pct = index_quote.get("change_pct")
+            if qmt_pct is not None and abs(our_pct - qmt_pct) > 0.005:  # 差 > 0.05%
+                alerts.append(
+                    f"🔴 涨跌幅分歧: 自算={our_pct:.4f} QMT={qmt_pct:.4f} "
+                    f"(差{abs(our_pct - qmt_pct):.4f}) → 基准价可能用错了"
+                )
+
+        # B. 昨收价不变性：全天不能变
+        current_pre_close = index_quote.get("pre_close", 0)
+        if baseline and current_pre_close > 0:
+            if abs(current_pre_close - baseline["pre_close"]) > 0.01:
+                alerts.append(
+                    f"🔴 昨收价漂移: {baseline['pre_close']:.2f}→{current_pre_close:.2f} "
+                    "→ 后续涨跌幅计算全部偏离"
+                )
+
+        # C. 板块均值：从全市场快照算 vs 从板块快照表读
+        if hasattr(self, "_sector_stats") and self._sector_stats and self._index_prices:
+            market_avg_from_sectors = sum(
+                s.get("change_pct", 0) for s in self._sector_stats.values()
+            ) / max(len(self._sector_stats), 1)
+            # 全市场均值应该和上证涨跌幅大致同向（不要求精确相等，但符号不应相反）
+            index_dir = 1 if self._index_prices[-1] > self._index_prices[0] else -1
+            sector_dir = 1 if market_avg_from_sectors > 0 else -1
+            if index_dir != sector_dir and abs(market_avg_from_sectors) > 0.005:
+                alerts.append(
+                    f"⚠️ 方向背离: 上证={'↑' if index_dir > 0 else '↓'} "
+                    f"板块均值={'↑' if sector_dir > 0 else '↓'} "
+                    f"({market_avg_from_sectors:+.4f})"
+                )
+
+        # D. 持仓市值总和 vs 逐只加总
+        if pa.positions:
+            total_mv_from_pos = sum(p.market_value for p in pa.positions.values())
+            total_mv_from_prices = sum(
+                prices.get(code, p.current_price) * p.volume
+                for code, p in pa.positions.items()
+            )
+            mv_drift = abs(total_mv_from_pos - total_mv_from_prices)
+            if mv_drift > total_mv_from_pos * 0.01:  # 差 > 1%
+                alerts.append(
+                    f"⚠️ 市值分歧: 持仓记录={total_mv_from_pos:.0f} "
+                    f"价格×股数={total_mv_from_prices:.0f} (差{mv_drift:.0f})"
+                )
 
         if alerts:
-            msg = "🩺 健康检查告警\n" + "\n".join(f"  {a}" for a in alerts)
+            msg = "🩺 健康检查\n" + "\n".join(f"  {a}" for a in alerts)
             logger.warning(msg)
             self._alert(msg)
 
