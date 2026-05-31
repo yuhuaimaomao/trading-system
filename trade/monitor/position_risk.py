@@ -35,7 +35,7 @@ class PositionRiskMixin:
                 blocked_t1 = []
                 for code, pos in list(pa.positions.items()):
                     if pos.pnl_pct is not None and pos.pnl_pct < 0:
-                        if pos.entry_date == self._trade_date:
+                        if pos.available_volume <= 0:
                             blocked_t1.append(f"{code} {pos.stock_name}")
                             continue
                         price = prices.get(code) or pos.current_price

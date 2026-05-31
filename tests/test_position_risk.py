@@ -50,8 +50,10 @@ def _make_pa(cash=200000, daily_loss=0):
     return _MockPA(p)
 
 
-def _add_position(pa, code, name, volume, avg_cost, entry_date="2026-05-30"):
-    """直接写入 Portfolio，同时扣现金模拟真实买入"""
+def _add_position(pa, code, name, volume, avg_cost, entry_date="2026-05-30", locked=0):
+    """直接写入 Portfolio，同时扣现金模拟真实买入。
+    默认 locked=0（非当日买入，可卖出）。测试 T+1 时传 locked=volume。
+    """
     from trade.portfolio.portfolio import Position
     cost = avg_cost * volume
     pa._portfolio.cash -= cost
@@ -59,6 +61,7 @@ def _add_position(pa, code, name, volume, avg_cost, entry_date="2026-05-30"):
         stock_code=code, stock_name=name, volume=volume,
         avg_cost=avg_cost, current_price=avg_cost,
         market_value=cost, entry_date=entry_date,
+        locked_volume=locked,
     )
 
 
@@ -115,8 +118,8 @@ class TestDailyLossCircuitBreaker:
 
     def test_t1_protection_blocks_circuit_breaker_sell(self):
         pa = _make_pa(cash=200000, daily_loss=9000)
-        # 今日买入 — 熔断也不能卖
-        _add_position(pa, "000001", "票A", 1000, 10.0, entry_date="2026-06-01")
+        # locked=volume → 当日买入，可用为 0
+        _add_position(pa, "000001", "票A", 1000, 10.0, locked=1000)
         pa.update_prices({"000001": 9.0})
 
         w = _TestWatcher(pa)

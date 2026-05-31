@@ -17,7 +17,13 @@ class Position:
     market_value: float = 0.0
     pnl: float = 0.0
     pnl_pct: float = 0.0
-    entry_date: str = ""
+    entry_date: str = ""  # 买入日期
+    locked_volume: int = 0  # T+1 锁定的股数（当日买入部分）
+
+    @property
+    def available_volume(self) -> int:
+        """今日可卖出的股数 = 总持仓 - T+1 锁定"""
+        return max(0, self.volume - self.locked_volume)
 
     def update_price(self, price: float):
         self.current_price = price
@@ -185,6 +191,7 @@ class Portfolio:
             )
             old.market_value = old.volume * price
             old.current_price = price
+            old.locked_volume += volume  # 当日加仓部分 T+1 锁定
             # entry_date 保持最早的
         else:
             actual_avg_cost = (
@@ -198,6 +205,7 @@ class Portfolio:
                 current_price=price,
                 market_value=price * volume,
                 entry_date=entry_date,
+                locked_volume=volume,  # 当日买入，全部 T+1 锁定
             )
             self.positions[stock_code] = pos
 

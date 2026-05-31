@@ -173,9 +173,10 @@ class PaperAccount:
         if not pos:
             return SellResult(success=False, reason=f"无持仓 {code}")
 
-        if pos.entry_date == self._trade_date:
+        if pos.available_volume <= 0:
             return SellResult(
-                success=False, reason=f"T+1 保护，当日买入不可卖出 {code}"
+                success=False,
+                reason=f"T+1 保护，当日买入不可卖出 {code}（持仓 {pos.volume} 股，可用 0）",
             )
 
         amount = price * pos.volume
