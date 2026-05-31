@@ -7,8 +7,8 @@ import sys
 MAX_LINES = 400
 
 
-def main(filenames: list[str]) -> int:
-    # 获取本次 commit 中新增的文件（不是修改的文件）
+def get_new_files() -> set[str]:
+    """提取本次暂存区中真正新增（A 状态）的文件"""
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-status", "--diff-filter=A"],
         capture_output=True,
@@ -17,19 +17,31 @@ def main(filenames: list[str]) -> int:
     new_files = set()
     for line in result.stdout.split("\n"):
         if line.startswith("A\t"):
-            new_files.add(line[2:])
+            new_files.add(line[2:].strip())
+    return new_files
+
+
+def main(filenames: list[str]) -> int:
+    new_files = get_new_files()
+
+    # 核心自适应修复：未传参数时，自动审计当前 commit 中的所有新文件
+    if not filenames:
+        filenames = list(new_files)
 
     errors = []
     for f in filenames:
         if f not in new_files:
-            continue  # 不是新文件，跳过
-        if "test" in f or "config" in f or "prompt" in f:
+            continue  # 历史存量修改，跳过
+
+        f_lower = f.lower()
+        if "test" in f_lower or "config" in f_lower or "prompt" in f_lower:
             continue  # 测试/配置/prompt 文件不限制大小
+
         try:
-            with open(f) as fh:
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
                 lines = len(fh.readlines())
             if lines > MAX_LINES:
-                errors.append(f"{f}: {lines} 行 (新文件上限 {MAX_LINES})")
+                errors.append(f"{f}: {lines} 行 (新文件上限 {MAX_LINES} 行)")
         except Exception:
             pass
 
@@ -44,5 +56,4 @@ def main(filenames: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    filenames = sys.argv[1:] if len(sys.argv) > 1 else []
-    sys.exit(main(filenames))
+    sys.exit(main(sys.argv[1:] if len(sys.argv) > 1 else []))
