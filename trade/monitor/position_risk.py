@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime
 
 from system.config import settings
+from trade.risk.rules.stop_loss import should_stop_loss
+from trade.risk.rules.take_profit import should_take_profit, should_trailing_stop
 
 logger = logging.getLogger(__name__)
 
@@ -95,84 +97,50 @@ class PositionRiskMixin:
             # T+1 前不触发止损止盈
             if not is_today_buy:
                 # ── 止损：大盘/板块弱时收紧触发线 ──
-                if sl > 0 and pos.avg_cost > 0:
-                    loss_width = pos.avg_cost - sl
-                    effective_sl = pos.avg_cost - loss_width * sl_tighten
-                    if price <= max(effective_sl, sl * 0.85):
-                        # effective_sl 不低于原止损的 85%，避免过于敏感
-                        key = f"{code}:sl"
-                        extra = ""
-                        if sl_tighten < 1.0:
-                            extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
-                        self._handle_stop_signal(
-                            key,
-                            code,
-                            pos.stock_name,
-                            "止损",
-                            price,
-                            effective_sl,
-                            pos.avg_cost,
-                            trend,
-                            limit_down,
-                            extra=extra,
-                        )
-                        continue
+                triggered, effective_sl = should_stop_loss(
+                    price, pos.avg_cost, sl, sl_tighten
+                )
+                if triggered:
+                    key = f"{code}:sl"
+                    extra = ""
+                    if sl_tighten < 1.0:
+                        extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
+                    self._handle_stop_signal(
+                        key, code, pos.stock_name, "止损",
+                        price, effective_sl, pos.avg_cost, trend, limit_down,
+                        extra=extra,
+                    )
+                    continue
 
                 # ── 止盈：大盘危险时提前锁定利润 ──
-                if tp > 0 and pos.avg_cost > 0:
-                    profit_width = tp - pos.avg_cost
-                    effective_tp = pos.avg_cost + profit_width * tp_lower
-                    if price >= effective_tp and tp_lower < 1.0:
-                        key = f"{code}:tp"
-                        self._handle_stop_signal(
-                            key,
-                            code,
-                            pos.stock_name,
-                            "止盈(收紧)",
-                            price,
-                            effective_tp,
-                            pos.avg_cost,
-                            trend,
-                            limit_down,
-                            extra=f"大盘{risk_level}→止盈下调至{effective_tp:.2f}",
-                        )
-                        continue
-
-                # 原版止盈（未调整时走这里）
-                if tp > 0 and price >= tp:
+                triggered, effective_tp = should_take_profit(
+                    price, pos.avg_cost, tp, tp_lower
+                )
+                if triggered:
                     key = f"{code}:tp"
+                    stype = "止盈(收紧)" if tp_lower < 1.0 else "止盈"
+                    extra = ""
+                    if tp_lower < 1.0:
+                        extra = f"大盘{risk_level}→止盈下调至{effective_tp:.2f}"
                     self._handle_stop_signal(
-                        key,
-                        code,
-                        pos.stock_name,
-                        "止盈",
-                        price,
-                        tp,
-                        pos.avg_cost,
-                        trend,
-                        limit_down,
+                        key, code, pos.stock_name, stype,
+                        price, effective_tp, pos.avg_cost, trend, limit_down,
+                        extra=extra,
                     )
                     continue
 
                 # ── 移动止盈：大盘危险时缩小回撤容忍 ──
-                if trailing_stop > 0 and highest_price > 0:
-                    effective_trail = trailing_stop * trail_tighten
-                    trail_price = highest_price * (1 - effective_trail)
-                    if price <= trail_price:
-                        key = f"{code}:trail"
-                        self._handle_stop_signal(
-                            key,
-                            code,
-                            pos.stock_name,
-                            "移动止盈",
-                            price,
-                            trail_price,
-                            highest_price,
-                            trend,
-                            limit_down,
-                            extra=f"最高{highest_price:.2f}",
-                        )
-                        continue
+                triggered, trail_price = should_trailing_stop(
+                    price, highest_price, trailing_stop, trail_tighten
+                )
+                if triggered:
+                    key = f"{code}:trail"
+                    self._handle_stop_signal(
+                        key, code, pos.stock_name, "移动止盈",
+                        price, trail_price, highest_price, trend, limit_down,
+                        extra=f"最高{highest_price:.2f}",
+                    )
+                    continue
 
                 # ── 利润回撤止盈：大盘危险时保留更多利润 ──
                 retrace_key, retrace_signal = self._check_retracement_stop(

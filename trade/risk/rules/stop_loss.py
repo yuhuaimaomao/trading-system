@@ -21,6 +21,23 @@ def check_ma_stop(pos: Position, ma_value: float) -> str:
     return ""
 
 
+def should_stop_loss(price: float, avg_cost: float, stop_loss: float,
+                     tighten: float = 1.0) -> tuple:
+    """止损检查（纯函数，不依赖 Position）。
+    返回 (触发: bool, 有效止损价: float)。
+    tighten < 1 表示收紧止损（大盘/板块弱时）。
+    """
+    if stop_loss <= 0 or avg_cost <= 0 or price <= 0:
+        return False, stop_loss
+    loss_width = avg_cost - stop_loss
+    effective_sl = avg_cost - loss_width * tighten
+    floor = stop_loss * 0.85  # 不低于原止损 85%，避免过度敏感
+    trigger_price = max(effective_sl, floor)
+    if price <= trigger_price:
+        return True, round(trigger_price, 2)
+    return False, round(effective_sl, 2)
+
+
 def check_time_stop(
     pos: Position, hold_days: int, max_days: int = 5, min_loss: float = -0.03
 ) -> str:

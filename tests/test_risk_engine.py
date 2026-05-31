@@ -136,3 +136,77 @@ class TestRiskEngine:
         assert len(signals) > 0
         assert signals[0]["stock_code"] == "000001"
         assert signals[0]["priority"] == 5  # 止损优先级
+
+
+# ═══════════════════════════════════════════════════════════════
+# 纯函数测试（should_stop_loss / should_take_profit / should_trailing_stop）
+# ═══════════════════════════════════════════════════════════════
+
+class TestPureStopLoss:
+    def test_triggers(self):
+        from trade.risk.rules.stop_loss import should_stop_loss
+        triggered, sl = should_stop_loss(9.5, 10.0, 9.8)
+        assert triggered
+        assert sl == pytest.approx(9.8)
+
+    def test_no_trigger(self):
+        from trade.risk.rules.stop_loss import should_stop_loss
+        triggered, _ = should_stop_loss(9.9, 10.0, 9.5)
+        assert not triggered
+
+    def test_tighten_triggers_earlier(self):
+        from trade.risk.rules.stop_loss import should_stop_loss
+        # tighten=0.7: effective=10-(10-9.5)*0.7=9.65, floor=9.5*0.85=8.075
+        # price 9.6 <= 9.65 → trigger
+        triggered, sl = should_stop_loss(9.6, 10.0, 9.5, tighten=0.70)
+        assert triggered
+        assert sl == pytest.approx(9.65, abs=0.01)
+
+    def test_floor_protection(self):
+        from trade.risk.rules.stop_loss import should_stop_loss
+        # tighten=5.0 (极端): effective=10-(10-9.8)*5.0=9.0, floor=8.33
+        # max(9.0, 8.33)=9.0, price 8.5 <= 9.0 → trigger
+        triggered, sl = should_stop_loss(8.5, 10.0, 9.8, tighten=5.0)
+        assert triggered
+        assert sl == pytest.approx(9.0, abs=0.01)
+
+
+class TestPureTakeProfit:
+    def test_triggers(self):
+        from trade.risk.rules.take_profit import should_take_profit
+        triggered, tp = should_take_profit(12.5, 10.0, 12.0)
+        assert triggered
+        assert tp == 12.0
+
+    def test_no_trigger(self):
+        from trade.risk.rules.take_profit import should_take_profit
+        triggered, _ = should_take_profit(11.0, 10.0, 12.0)
+        assert not triggered
+
+    def test_tp_lower_triggers_earlier(self):
+        from trade.risk.rules.take_profit import should_take_profit
+        # tp_lower=0.8: effective_tp=10+(15-10)*0.8=14.0, price 14.2 >=14 → trigger
+        triggered, tp = should_take_profit(14.2, 10.0, 15.0, tp_lower=0.80)
+        assert triggered
+        assert tp == pytest.approx(14.0)
+
+
+class TestPureTrailingStop:
+    def test_triggers(self):
+        from trade.risk.rules.take_profit import should_trailing_stop
+        triggered, trail = should_trailing_stop(9.0, 20.0, 0.05)
+        # 20*0.95=19, 9 <= 19 → trigger
+        assert triggered
+
+    def test_no_trigger(self):
+        from trade.risk.rules.take_profit import should_trailing_stop
+        triggered, _ = should_trailing_stop(19.5, 20.0, 0.05)
+        # 19.5 > 19 → no trigger
+        assert not triggered
+
+    def test_tighten_triggers_earlier(self):
+        from trade.risk.rules.take_profit import should_trailing_stop
+        # trail_tighten=0.7: effective_trail=0.05*0.7=0.035, trail=20*0.965=19.3
+        # 19.2 <= 19.3 → trigger
+        triggered, _ = should_trailing_stop(19.2, 20.0, 0.05, trail_tighten=0.70)
+        assert triggered
