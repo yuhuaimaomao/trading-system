@@ -53,7 +53,7 @@ PROXY_ENABLED = os.environ.get("PROXY_ENABLED", "false").lower() == "true"
 # ===== 交易 =====
 ACCOUNT_MODE = os.environ.get("ACCOUNT_MODE", "manual")
 MAX_SINGLE_STOCK_PCT = 0.20
-MAX_SINGLE_SECTOR_PCT = 0.50
+MAX_SINGLE_SECTOR_PCT = 0.70
 CASH_RESERVE_PCT = 0.20
 ENV_POSITION_LIMIT = {"bull": 0.80, "swing": 0.50, "bear": 0.20}
 MAX_DAILY_LOSS = 0.03

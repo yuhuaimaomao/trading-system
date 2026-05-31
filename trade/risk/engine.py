@@ -25,7 +25,7 @@ class RiskEngine:
     def __init__(self, config: Optional[dict] = None):
         self.config = config or {}
         self.max_single_pct = self.config.get("max_single_pct", 0.20)
-        self.max_sector_pct = self.config.get("max_sector_pct", 0.50)
+        self.max_sector_pct = self.config.get("max_sector_pct", 0.70)
         self.daily_loss_limit = self.config.get("daily_loss_limit", 0.03)
         self.market_env = "swing"
         self._regime = None  # MarketRegime | None

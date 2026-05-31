@@ -9,7 +9,7 @@ def check_concentration(
     sector_code: str,
     portfolio: Portfolio,
     max_single: float = 0.20,
-    max_sector: float = 0.50,
+    max_sector: float = 0.70,
 ) -> tuple[bool, str]:
     """检查单票和板块集中度"""
     if stock_code in portfolio.positions:
