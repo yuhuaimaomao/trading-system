@@ -529,32 +529,67 @@ class Watcher(
             except Exception:
                 sector_trends[code] = ""
 
+        # 技术指标快照
+        index_tech = {}
+        for k in ("rsi6", "rsi12", "rsi24", "macd_dif", "macd_dea", "macd_bar",
+                   "kdj_k", "kdj_d", "kdj_j"):
+            v = getattr(self, f"_idx_{k}", None)
+            if v is not None:
+                index_tech[k] = v
+        market_env = getattr(self.risk_engine, "market_env", "swing")
+
+        # entry_date 映射
+        entry_dates = {}
+        for code, pos in pa.positions.items():
+            entry_dates[code] = getattr(pos, "entry_date", "")
+
+        # pending 信号数
+        try:
+            pending = self.repo.get_pending_signals(self._trade_date, account="paper")
+            pending_count = len(pending) if pending else 0
+        except Exception:
+            pending_count = 0
+
         ctx = CheckContext(
+            # 账户
             cash=pa.cash,
             total_value=pa.total_value,
             daily_pnl=pa.daily_pnl,
             positions=pa.positions,
             max_positions=settings.MAX_POSITIONS,
+            entry_dates=entry_dates,
+            # 行情
             prices=prices,
+            limit_cache=getattr(self, "_limit_cache", {}) or {},
             index_prices=list(self._index_prices),
             index_high=self._index_high,
             index_low=self._index_low,
             index_pre_close=index_quote.get("pre_close", 0),
             qmt_change_pct=index_quote.get("change_pct"),
+            # 板块
             sector_stats=sector_stats,
+            # 盯盘内部
             pos_meta=dict(self._pos_meta),
             bought_watch=getattr(self, "_bought_watch", {}) or {},
             sl_reminder_count=len(getattr(self, "_sl_reminders", {}) or {}),
             alerted_sl_tp_count=len(self._alerted_sl_tp),
             triggered_ids_count=len(self._triggered_ids),
+            pending_signal_count=pending_count,
             scan_count=self._scan_count,
+            prev_scan_count=getattr(self, "_prev_scan_count", 0),
+            # 基准
             baseline_pre_close=baseline.get("pre_close", 0),
             baseline_qmt_pct=baseline.get("qmt_change_pct", 0),
             trade_date=self._trade_date,
             collector_connected=collector_ok,
+            # 决策上下文
             risk_level=risk_level,
+            regime_pattern=getattr(regime, "pattern", "normal") if regime else "normal",
             sector_trends=sector_trends,
+            index_technicals=index_tech,
+            market_env=market_env,
         )
+        self._prev_scan_count = self._scan_count
 
         alerts = run_checks(ctx)
         if index_stale:

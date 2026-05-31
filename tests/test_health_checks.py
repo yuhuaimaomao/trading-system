@@ -100,6 +100,7 @@ class TestRunChecks:
             bought_watch={},
             scan_count=1,
             baseline_pre_close=3200,
+            trade_date="2026-06-01",
         )
         alerts = run_checks(ctx)
         assert len(alerts) == 0
