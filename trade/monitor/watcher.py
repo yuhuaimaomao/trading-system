@@ -598,7 +598,7 @@ class Watcher(
         if alerts:
             msg = "🩺 健康检查\n" + "\n".join(f"  {a}" for a in alerts)
             logger.warning(msg)
-            self._alert(msg)
+            self._alert_private(msg)
 
     def _restore_pos_meta(self):
         """从 trade_signals 恢复 _pos_meta（止损止盈板块等决策数据）。
