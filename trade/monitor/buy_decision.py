@@ -233,7 +233,7 @@ class BuyDecisionMixin:
                 calc_rsi,
             )
 
-            raw = self.qmt.get_minute_kline(code, count=120)
+            raw = self.qmt.get_minute_kline(code, count=240)
             if not raw or len(raw) < 26:
                 return result
 
