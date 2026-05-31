@@ -128,7 +128,6 @@ def cmd_monitor():
     watcher = Watcher(
         telegram_bot=telegram,
         qmt_quote=qmt_quote,
-        scan_interval=60,
     )
     try:
         watcher.run()

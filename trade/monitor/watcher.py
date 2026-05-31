@@ -63,13 +63,12 @@ class Watcher(
     """盘中盯盘进程 — cron 拉起后自管理生命周期"""
 
     def __init__(
-        self, telegram_bot=None, qmt_quote=None, scan_interval=60, db_path=None
+        self, telegram_bot=None, qmt_quote=None, db_path=None
     ):
         self.telegram = telegram_bot
         self._private_telegram = None
         self._init_private_telegram()
         self.qmt = qmt_quote
-        self.scan_interval = scan_interval
         self.db_path = db_path or settings.DATABASE_PATH
         self.repo = TradeRepository(db_path=self.db_path)
         self.paper_account = PaperAccount(
@@ -263,15 +262,12 @@ class Watcher(
                 self._lunch_break()
                 continue
 
-            if self._in_trading_hours():
-                self._scan_count += 1
-                logger.info(f"扫描 #{self._scan_count}")
-                try:
-                    self._scan()
-                except Exception as e:
-                    logger.error(f"扫描异常: {e}", exc_info=True)
-            else:
-                time.sleep(5)
+            self._scan_count += 1
+            logger.info(f"扫描 #{self._scan_count}")
+            try:
+                self._scan()
+            except Exception as e:
+                logger.error(f"扫描异常: {e}", exc_info=True)
 
         self._finalize_close()
         logger.info("盯盘进程退出")

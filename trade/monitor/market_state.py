@@ -1863,7 +1863,7 @@ class MarketStateMixin:
                 if last == 0 or abs((index_price - last) / last) >= 0.003:
                     self._index_last_fluctuation_price = index_price
                     direction = "急拉" if fluctuation > 0 else "急跌"
-                    mins = self.scan_interval * 3 // 60
+                    mins = 5 * 3 // 60
                     base_msg = f"⚡ 上证: {index_price:.2f}  近{mins}分钟{direction}: {fluctuation:+.2%}"
                     ai_analysis = self._analyze_index_fluctuation()
                     if ai_analysis:
@@ -1949,7 +1949,7 @@ class MarketStateMixin:
             self._volume_alerted_divergence = False
             return
 
-        minutes = max(1, (n - 1) * self.scan_interval // 60)
+        minutes = max(1, (n - 1) * 5 // 60)
 
         if price_change > 0 and vol_change < -0.15:
             if not self._volume_alerted_divergence:
