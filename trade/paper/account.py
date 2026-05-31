@@ -241,6 +241,7 @@ class PaperAccount:
                     "pnl": pos.pnl,
                     "pnl_pct": pos.pnl_pct,
                     "entry_date": pos.entry_date,
+                    "locked_volume": getattr(pos, "locked_volume", 0),
                 }
             )
         self.repo.insert_positions(trade_date, "paper", pos_rows)
@@ -304,6 +305,7 @@ class PaperAccount:
                     pnl=row.get("pnl", 0),
                     pnl_pct=row.get("pnl_pct", 0),
                     entry_date=row.get("entry_date", snap_date),
+                    locked_volume=row.get("locked_volume", 0),
                 )
                 logger.info(
                     f"恢复持仓: {code} {row.get('stock_name', '')} "

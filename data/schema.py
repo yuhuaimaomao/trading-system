@@ -111,6 +111,14 @@ def ensure_tables():
 
     conn.commit()
 
+    # locked_volume 列 — T+1 锁仓持久化（幂等迁移）
+    try:
+        cursor.execute(
+            "ALTER TABLE trade_portfolio_positions ADD COLUMN locked_volume INTEGER DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+
     # 添加 account 字段（幂等迁移）
     for table in [
         "trade_signals",
