@@ -46,6 +46,7 @@ from curl_cffi import requests as curl_requests
 
 from data.collectors.proxy.proxy_requester import (
     UA_PROFILES,
+    USER_AGENTS,
     ProxyRequester,
 )
 
