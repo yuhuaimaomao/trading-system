@@ -80,6 +80,20 @@ ABNORMAL_RAPID_RISE_PCT = 1.0  # 急速拉升: 当前涨幅 - 上轮涨幅 > 1%
 ABNORMAL_VOLUME_SURGE_RATIO = 3.0  # 量比暴增: 当前成交量 > 上轮成交量 × 3
 ABNORMAL_NEAR_LIMIT_PCT = 7.0  # 逼近涨停: 涨幅 > 7%
 
+# ===== 板块共振/逆势分析 =====
+RESONANCE_INDEX_DIRECTION_THRESHOLD = 0.001  # 指数方向判定: 变化率 > 0.1% 视为有方向
+RESONANCE_SECTOR_DIRECTION_THRESHOLD = 0.1  # 板块方向判定: 百分点差 > 0.1pp 视为有方向
+RESONANCE_VOLATILITY_TRIGGER = 0.003  # 独立推送触发: 大盘波动 ≥ 0.3%
+RESONANCE_PUSH_WINDOW_ENTRIES = 4  # 独立推送窗口: 板块趋势条目数 (~12分钟)
+RESONANCE_TOP5_WINDOW_ENTRIES = 17  # TOP5 标签窗口: 板块趋势条目数 (~50分钟)
+RESONANCE_TOP_N = 5  # 各分类取前N名
+RESONANCE_LEADER_COUNT = 3  # 领涨/领跌股数量
+RESONANCE_PUSH_COOLDOWN_ROUNDS = 15  # 独立推送冷却轮数
+RESONANCE_VOL_SURGE_RATIO = 1.5  # 放量标签: 量比 > 1.5
+RESONANCE_VOL_SHRINK_RATIO = 0.5  # 缩量标签: 量比 < 0.5
+RESONANCE_INDEX_WINDOW_MAX = 30  # 指数窗口最大点数
+RESONANCE_INDEX_MIN_POINTS = 12  # 指数最小数据点数
+
 # ===== 市场环境判定 =====
 MA_PERIOD = 20
 SWING_THRESHOLD = 0.03

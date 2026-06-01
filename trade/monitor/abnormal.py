@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 class AbnormalMonitorMixin:
     """异动检测 + 换仓评估 + 板块热度。"""
 
-    def _check_sector_heat(self, snapshot: dict[str, dict]):
+    def _check_sector_heat(
+        self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None
+    ):
         monitor = self._get_sector_monitor()
         if monitor is None:
             return
         try:
-            messages = monitor.check(snapshot)
+            messages = monitor.check(snapshot, resonance_labels)
             for msg in messages:
                 self._alert(msg)
         except Exception as e:
@@ -56,10 +58,27 @@ class AbnormalMonitorMixin:
                 current_snapshot = self._market_snapshot
             else:
                 current_snapshot = self._build_market_snapshot(prices)
-            messages = detector.detect_sector(current_snapshot, self._prev_snapshot)
+
+            now_ts = time.time()
+            prev_ts = getattr(self, "_prev_snapshot_ts", 0)
+            gap_sec = now_ts - prev_ts if prev_ts > 0 else 0
+
+            # 快照间隔超过 2 分钟 → 数据断层，跳过本轮避免虚假异动
+            if self._prev_snapshot and gap_sec <= 120:
+                # 快照未变化时跳过（collector 推送周期 > 检测周期）
+                if id(current_snapshot) != id(self._prev_snapshot):
+                    self._ensure_industry_cache()
+                    messages = detector.detect_sector(
+                        current_snapshot,
+                        self._prev_snapshot,
+                        industry_cache=self._industry_cache,
+                        resolve_name=self._resolve_name,
+                    )
+                    if messages:
+                        self._alert("\n".join(messages))
+
             self._prev_snapshot = current_snapshot
-            if messages:
-                self._alert("\n".join(messages))
+            self._prev_snapshot_ts = now_ts
         except Exception as e:
             logger.warning(f"异动检测异常: {e}")
 
@@ -169,7 +188,7 @@ class AbnormalMonitorMixin:
             f"主动换仓评估: {len(candidates)} 个候选, {len(self.paper_account.positions)} 个持仓"
         )
         try:
-            swapped = self._do_evaluate_swaps(
+            swapped = _do_evaluate_swaps(
                 candidates,
                 market_context=ctx,
                 price_info=price_info,
@@ -198,7 +217,13 @@ class AbnormalMonitorMixin:
 class AbnormalDetector:
     """盘中异动检测器 — 急速拉升 / 量比暴增 / 逼近涨停。"""
 
-    def detect_sector(self, current: dict, previous: dict) -> list[str]:
+    def detect_sector(
+        self,
+        current: dict,
+        previous: dict,
+        industry_cache: dict = None,
+        resolve_name=None,
+    ) -> list[str]:
         """对比两轮快照，返回异动告警消息列表。"""
         alerts = []
         if not current or not previous:
@@ -207,34 +232,62 @@ class AbnormalDetector:
         rapid_rise = getattr(settings, "ABNORMAL_RAPID_RISE_PCT", 1.0)
         vol_surge = getattr(settings, "ABNORMAL_VOLUME_SURGE_RATIO", 3.0)
         near_limit = getattr(settings, "ABNORMAL_NEAR_LIMIT_PCT", 7.0)
+        TOP_N = 10
 
-        rapid_list = []
-        vol_list = []
-        limit_list = []
+        rapid_hits = []  # (code, delta_pct, name, industry)
+        vol_hits = []
+        limit_hits = []
 
         for code, info in current.items():
             prev = previous.get(code, {})
             cur_chg = float(info.get("changePct", 0))
             prev_chg = float(prev.get("changePct", 0))
+            name = resolve_name(code) if resolve_name else code
+            industry = industry_cache.get(code, "") if industry_cache else ""
 
             if cur_chg - prev_chg > rapid_rise:
-                rapid_list.append(f"{code} {cur_chg - prev_chg:+.1f}%")
+                rapid_hits.append((code, cur_chg - prev_chg, name, industry))
 
             cur_vol = float(info.get("amount", 0))
             prev_vol = float(prev.get("amount", 0))
             if prev_vol > 0 and cur_vol > prev_vol * vol_surge:
-                vol_list.append(f"{code} {cur_vol / prev_vol:.0f}×")
+                vol_hits.append((code, cur_vol / prev_vol, name))
 
             if cur_chg >= near_limit and prev_chg < near_limit:
-                limit_list.append(f"{code} {cur_chg:+.1f}%")
+                limit_hits.append((code, cur_chg, name))
+
+        # 按幅度降序排列
+        rapid_hits.sort(key=lambda x: x[1], reverse=True)
+        vol_hits.sort(key=lambda x: x[1], reverse=True)
+        limit_hits.sort(key=lambda x: x[1], reverse=True)
 
         now = datetime.now().strftime("%H:%M")
-        if rapid_list:
-            alerts.append(f"🏭 急速拉升 {now}\n   " + " ".join(rapid_list))
-        if vol_list:
-            alerts.append(f"📊 量比暴增 {now}\n   " + " ".join(vol_list))
-        if limit_list:
-            alerts.append(f"🔥 逼近涨停 {now}\n   " + " ".join(limit_list))
+
+        # 板块异动：同行业 3+ 只同时拉升 → 板块级告警
+        if rapid_hits and industry_cache:
+            ind_groups: dict[str, list] = {}
+            for code, delta, name, ind in rapid_hits:
+                if ind:
+                    ind_groups.setdefault(ind, []).append((code, delta, name))
+            for ind, stocks in ind_groups.items():
+                if len(stocks) >= 3:
+                    top_s = sorted(stocks, key=lambda x: x[1], reverse=True)[:5]
+                    lines = " ".join(f"{n}({d:+.1f}%)" for c, d, n in top_s)
+                    alerts.append(f"🔥 板块异动 {ind} {now}\n   {lines}")
+
+        if rapid_hits:
+            top = rapid_hits[:TOP_N]
+            lines = " ".join(f"{n} {d:+.1f}%" for c, d, n, _ in top)
+            suffix = f" 等{len(rapid_hits)}只" if len(rapid_hits) > TOP_N else ""
+            alerts.append(f"🏭 急速拉升 {now}\n   {lines}{suffix}")
+        if vol_hits:
+            top = vol_hits[:TOP_N]
+            lines = " ".join(f"{n} {r:.0f}×" for c, r, n in top)
+            alerts.append(f"📊 量比暴增 {now}\n   {lines}")
+        if limit_hits:
+            top = limit_hits[:TOP_N]
+            lines = " ".join(f"{n} {d:+.1f}%" for c, d, n in top)
+            alerts.append(f"🚀 逼近涨停 {now}\n   {lines}")
 
         return alerts
 

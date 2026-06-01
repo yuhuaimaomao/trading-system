@@ -23,7 +23,7 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 - 千问优先，异常时 fallback DeepSeek
 
 **盯盘进程（Watcher）：**
-- 四层扫描：大盘状态 / 持仓风控+信号触发+复盘跟踪 / 板块热度 / 异动检测
+- 四层扫描：大盘状态 / 持仓风控+信号触发+复盘跟踪 / 板块热度+共振分析 / 异动检测
 - 集合竞价后推送一条汇总「📋 开盘决策」（持仓+买入区+待观察+集中度预警），替代之前两条分开的参考消息
 - 智能市场模式识别：16 种模式，四层决策模型（DETECT→ASSESS→DECIDE），输出 MarketRegime 对象（含 risk_level/entry_rule/stop_mult/position_mult/urgent_action）
 - 止损提醒循环：触发→5分钟→再提醒→用户回复"成交 CODE"/"再等 N CODE"
@@ -75,7 +75,6 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
 ### 待完成
 
 - 盘中实跑验证（cron 已部署，等真实行情数据到位后实测）
-- 板块热度/异动检测阈值调优（骨架已写好）
 - QMT 策略交易权限（等券商开通）
 - 收盘双线比对自动化（目前手动 `python main.py compare`）
 - 选股自我进化验证（代码已完成，等数据积累后实测审计闭环）
@@ -123,7 +122,8 @@ trading-system — QMT 量化交易系统。独立于复盘系统（`~/quant-sys
   │         ├─ [每3轮] _refresh_market_snapshot() + _update_sector_trends()
   │         ├─ [每3轮] _check_abnormal()    异动检测                   │
 	  │         ├─ [每15轮] _evaluate_swaps()    主动换仓评估（AI+板块）                   │
-  │         └─ [每50轮] _check_sector_heat() 板块热度                  │
+  │         ├─ [每轮]  _maybe_push_resonance() 共振/逆势分析（大盘≥0.3%触发）│
+  │         └─ [每50轮] _check_sector_heat() 板块热度（含共振标签）       │
   │         ↓                                                         │
   │  信号触发 → Telegram 通知 → 模拟盘自动执行 + 实盘等用户确认        │
   │         ↓                                                         │
@@ -168,6 +168,7 @@ trading-system/
 │   │   ├── watcher.py          #     主进程：时间管理+四层扫描（~870行）
 │   │   ├── review_picks.py     #     复盘推荐跟踪
 │   │   ├── sector_heat.py      #     板块热度监控
+│   │   ├── sector_resonance.py  #     板块共振/逆势分析
 │   │   └── abnormal.py         #     异动检测
 │   ├── execution/              #   执行层
 │   │   ├── manual.py           #     手动执行器+消息解析（Telegram回复）
@@ -754,6 +755,7 @@ calc_atr(highs, lows, closes, period=14)
 35. **动态买入区修正**（2026-05-30）— `_calc_dynamic_buy_zone()` 根据三层联动因子下移买入区。shift 来自 market_adjustment，板块加速走弱时最多下移 15%。修正幅度 <2% 静默使用，≥2% 告警通知。修正后区间在 `_check_buy_candidates` 中替代原区间判断。
 36. **收盘持仓报告**（2026-05-30）— `CloseSummaryMixin`（`trade/monitor/close_summary.py`）混入 Watcher，`_finalize_close()` 统一收盘处理：DB 快照保存 + `_expire_signals()` + Telegram 推送。模拟盘 → 群聊（`_alert`），含总资产/现金/盈亏/仓位/回撤 + 逐只持仓明细 + 今日成交。实盘 → 私聊（`_alert_private`），从 `trade_orders` 推算当前持仓（所有历史 filled 订单 net）+ 今日成交。`_derive_real_positions()` 用 GROUP BY 聚合 buy/sell 量差。实盘现价优先取自模拟盘持仓同代码价格，无则显示 `---`。
 37. **选股自我进化闭环**（2026-05-31）— 策略管线具备自我学习能力。核心改变：AI prompt 不给评分标准/阈值/权重，让 AI 用自己的理解做判断并解释推理（what_i_see/what_concerns_me/decisive_factor/skip_reason/would_reconsider_if/self_assessment）。三张数据表留底（strategy_funnel/strategy_ai_log/strategy_ai_decisions），审计引擎双轨制（RuleAuditor 纯统计五维 + AIAuditor 千问审查推理质量），四层可调改进（prompt/pipeline/factor/data）。审计不是审结论对错，是审推理质量。改进建议推送 Telegram → 用户审核 → 回复「应用 #N」标记采纳 → 下次审计验证效果。详见 `docs/2026-05-31-strategy-self-evolution-design.md` 和 `docs/2026-05-31-strategy-self-evolution-plan.md`。
+38. **板块共振/逆势分析**（2026-06-01）— 同一时间窗口内比较板块与大盘变化方向，判定四象限（共振上行/下行、逆势走强/走弱）。两个触发通道：①大盘≥0.3%波动时独立推送 🏭 消息（~12分钟窗口），去重≥15轮；②每50轮嵌入板块热度TOP5标签（~50分钟窗口）。行业+概念各取变化幅度前5名，领跌股只显示跌的，龙头只显示涨的。新增 `_concept_trend_history` 追踪概念趋势历史，`_sector_trend_start` 记录趋势翻转时间。详见 `docs/2026-06-01-sector-resonance-design.md`。
 
 ## 新增表
 
@@ -810,6 +812,7 @@ calc_atr(highs, lows, closes, period=14)
 - **`_handle_stop_signal` 的 timedelta 溢出**：已用 `datetime + timedelta(minutes=N)` 替代 `wake.replace(minute=wake.minute + N)`，避免分钟溢出
 - **Watcher `_get_realtime_prices` 的 `lastPrice` 检查**：`if price is None` 而非 `if not price`，因为 0.0 是合法价格
 - **Watcher 不 sleep**（2026-05-31）：`time.sleep(scan_interval)` 已删除，每轮扫描完立即开始下一轮。QMT 获取完数据就直接继续，午休期间正常 sleep。`scan_interval` 仅用于 market_state.py 的展示文字（"近N分钟"），不影响交易逻辑
+- **新版块/概念实例变量**（2026-06-01）：新增 `_concept_trend_history`/`_concept_trend_continuity`/`_concept_trend_last_dir`/`_concept_trend_start`（概念趋势追踪，与行业版平齐）、`_sector_trend_start`（行业趋势起点时间）、`_resonance_analyzer`/`_last_resonance_push_scan`/`_last_resonance_index_dir`（共振分析+去重状态）。概念缓存 `_concept_cache` 为 `{code: [concept_names]}`，反向索引在 `sector_resonance.py` 的 `_classify_group()` 中按需构建
 - **`_bought_watch` 覆盖 Bug（2026-05-31 修复）**：买入时直接 `=` 赋值会清零 max_profit。改为保留已有追踪数据
 - **`_check_positions` 价格缺失 Bug（2026-05-31 修复）**：`prices.get(code)` 为 None 时直接 continue 跳过整只持仓，改为 fallback 到 `pos.current_price`
 - **买入信号止损止盈缺失保护（2026-05-31）**：`_check_signals` 创建候选时若 sl<=0 或 tp<=0 拒绝买入

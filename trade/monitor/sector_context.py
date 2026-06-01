@@ -186,7 +186,9 @@ class SectorContextMixin:
         all_chgs = [c for changes in ind_changes.values() for c in changes]
         market_avg = sum(all_chgs) / len(all_chgs) if all_chgs else 0
 
-        # 行业趋势 + 连续性
+        now_str = datetime.now().strftime("%H:%M")
+
+        # 行业趋势 + 连续性 + 趋势起点时间
         for ind, changes in ind_changes.items():
             if len(changes) < 3:
                 continue
@@ -194,7 +196,7 @@ class SectorContextMixin:
             history = self._sector_trend_history[ind]
             history.append(avg)
 
-            # 连续性追踪
+            # 连续性追踪 + 趋势起点
             if len(history) >= 2:
                 cur_dir = (
                     "up"
@@ -208,6 +210,8 @@ class SectorContextMixin:
                     self._sector_trend_continuity[ind] += 1
                 else:
                     self._sector_trend_continuity[ind] = 1 if cur_dir != "flat" else 0
+                    if cur_dir != "flat":
+                        self._sector_trend_start[ind] = now_str
                 self._sector_trend_last_dir[ind] = cur_dir
 
         # 行业实时统计（含相对强度 + 量能）
@@ -257,6 +261,31 @@ class SectorContextMixin:
                 "vol_ratio": vol_ratio,
             }
         self._prev_con_amounts = dict(con_amounts)
+
+        # 概念趋势历史 + 趋势起点时间
+        for con, changes in con_changes.items():
+            if len(changes) < 3:
+                continue
+            avg = sum(changes) / len(changes)
+            history = self._concept_trend_history[con]
+            history.append(avg)
+
+            if len(history) >= 2:
+                cur_dir = (
+                    "up"
+                    if history[-1] > history[-2]
+                    else "down"
+                    if history[-1] < history[-2]
+                    else "flat"
+                )
+                prev_dir = self._concept_trend_last_dir.get(con, "")
+                if cur_dir == prev_dir and cur_dir != "flat":
+                    self._concept_trend_continuity[con] += 1
+                else:
+                    self._concept_trend_continuity[con] = 1 if cur_dir != "flat" else 0
+                    if cur_dir != "flat":
+                        self._concept_trend_start[con] = now_str
+                self._concept_trend_last_dir[con] = cur_dir
 
         # 落盘板块快照（原始市场快照已由 collector 写入）
         self._save_sector_snapshots(ind_changes, market_avg)
@@ -639,7 +668,7 @@ class SectorContextMixin:
 
         history = stats.get("trend_history", [])
         if len(history) < 2:
-            return f" 板块{industry} {stats['change_pct']:+.2f}%"
+            return f" {industry} {stats['change_pct']:+.2f}%"
 
         # 1. 趋势方向 + 强度
         first, last = history[0], history[-1]
@@ -716,7 +745,7 @@ class SectorContextMixin:
             vol_str = "缩量"
 
         # 拼接行业
-        parts = [f"板块{industry}", direction]
+        parts = [industry, direction]
         if accel:
             parts.append(accel)
         parts.append(f"{cumulative:+.1f}%")

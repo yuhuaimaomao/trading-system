@@ -22,10 +22,13 @@ class SectorHeatMonitor:
     # 主入口
     # ------------------------------------------------------------------
 
-    def check(self, snapshot: dict[str, dict]) -> list[str]:
+    def check(
+        self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None
+    ) -> list[str]:
         """用全市场快照计算板块热度。
 
         snapshot: {code: {price, changePct}} 来自 watcher 的 _market_snapshot
+        resonance_labels: {sector_name: "📈共振"|"📉共振"|"🔄逆势"|"⚠️逆势"}
         """
         if not snapshot:
             return []
@@ -100,6 +103,7 @@ class SectorHeatMonitor:
 
         if top5:
             medals = ["🥇", "🥈", "🥉"]
+            rl = resonance_labels or {}
             lines = ["📊 板块热度 TOP5"]
             for i, (ind, avg) in enumerate(top5, 1):
                 tags = []
@@ -107,7 +111,11 @@ class SectorHeatMonitor:
                     tags.append("持仓✓")
                 if ind in watch_sectors:
                     tags.append("观察")
-                tag = f"  {','.join(tags)}" if tags else ""
+                # 共振/逆势标签
+                res_label = rl.get(ind, "")
+                if res_label:
+                    tags.append(res_label)
+                tag = f"  {' '.join(tags)}" if tags else ""
                 # 计算相对上次快照的变化
                 history = self._sector_history.get(ind, [])
                 if len(history) >= 2:

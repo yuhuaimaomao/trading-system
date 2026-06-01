@@ -25,6 +25,10 @@ from trade.monitor.closing import ClosingDecisionMixin
 from trade.monitor.market_state import MarketRegime, MarketStateMixin
 from trade.monitor.position_risk import PositionRiskMixin
 from trade.monitor.sector_context import SectorContextMixin
+from trade.monitor.sector_resonance import (
+    INDEX_VOLATILITY_THRESHOLD,
+    SectorResonanceAnalyzer,
+)
 from trade.paper.account import PaperAccount
 from trade.risk.engine import RiskEngine
 
@@ -117,6 +121,16 @@ class Watcher(
         self._sector_trend_history: dict[str, list[float]] = defaultdict(list)
         self._sector_trend_continuity: dict[str, int] = defaultdict(int)  # 连续同向轮数
         self._sector_trend_last_dir: dict[str, str] = {}  # 上一轮方向
+        self._sector_trend_start: dict[str, str] = {}  # 趋势起点时间 HH:MM
+        # 概念趋势跟踪
+        self._concept_trend_history: dict[str, list[float]] = defaultdict(list)
+        self._concept_trend_continuity: dict[str, int] = defaultdict(int)
+        self._concept_trend_last_dir: dict[str, str] = {}
+        self._concept_trend_start: dict[str, str] = {}
+        # 共振/逆势分析
+        self._resonance_analyzer = SectorResonanceAnalyzer()
+        self._last_resonance_push_scan: int = -100  # 上次独立推送轮次
+        self._last_resonance_index_dir: str = ""  # 上次推送时大盘方向（去重用）
         self._industry_cache: dict[str, str] = {}  # code → industry
         self._concept_cache: dict[str, list[str]] = {}  # code → [concept_names]
         self._sector_stats: dict[
@@ -185,7 +199,7 @@ class Watcher(
 
     @staticmethod
     @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
-    def _resolve_name(code: str) -> str:
+    def _resolve_name(self, code: str) -> str:
         try:
             import sqlite3
 
@@ -213,6 +227,30 @@ class Watcher(
         self._init_bought_watch()
         self._cleanup_old_snapshots()
         self._load_sector_history()
+
+        # 盘中重启：立即从 QMT 拉最新价格更新持仓市值，避免快照与持仓数据不一致
+        if self._in_trading_hours() and self.qmt and self.paper_account.positions:
+            codes = list(self.paper_account.positions.keys())
+            try:
+                quotes = self.qmt.get_realtime(codes)
+                for code, pos in self.paper_account.positions.items():
+                    item = quotes.get(code)
+                    if item:
+                        new_price = (
+                            item.get("lastPrice")
+                            or item.get("last_price")
+                            or item.get("price")
+                        )
+                        if new_price:
+                            pos.update_price(float(new_price))
+                # 立即落盘，确保快照与当前价格一致
+                self.paper_account._persist_state()
+                logger.info(
+                    f"盘中重启：已刷新 {len(self.paper_account.positions)} 只持仓价格并落盘 "
+                    f"总资产 {self.paper_account.total_value:,.0f}"
+                )
+            except Exception as e:
+                logger.warning(f"盘中重启刷新价格失败: {e}")
         # 新交易日重置跨日状态
         self._signal_alert_state.clear()
         self._review_alert_state.clear()
@@ -229,6 +267,8 @@ class Watcher(
             self._connect_collector()
             self._restore_index_context()  # 从 index_snapshots 读
             self._restore_market_from_db()  # 从 market_snapshots 读
+            if self._market_snapshot:
+                self._update_sector_trends()  # 立即计算板块趋势
             self._recv_collector_data()  # 处理 socket buffer，去重
         else:
             # 盘前正常启动：直接连 collector，不读 DB
@@ -352,14 +392,18 @@ class Watcher(
             drawdown_halt = False
 
         try:
-            if (
-                self._scan_count % 3 == 0
-                and self._market_snapshot
-                and (not self._collector_client or not self._collector_client.connected)
-            ):
+            # 全市场快照只能从 collector 获取，Watcher 不直连 QMT 拉全市场数据
+            if self._scan_count % 3 == 0 and self._market_snapshot:
                 self._update_sector_trends()
+
+            # 全市场快照只能从 collector 获取，Watcher 不直连 QMT 拉全市场数据
         except Exception as e:
             logger.warning(f"板块趋势更新异常: {e}", exc_info=True)
+
+        try:
+            self._maybe_push_resonance()
+        except Exception as e:
+            logger.warning(f"共振分析异常: {e}", exc_info=True)
 
         try:
             self._regime = self._check_market_state(prices)
@@ -439,16 +483,54 @@ class Watcher(
             logger.warning(f"止损提醒异常: {e}", exc_info=True)
 
         try:
-            if self._scan_count == 1:
+            # 开盘决策：9:25~9:35 内第一轮有数据的扫描发送
+            minutes_since_open = (
+                datetime.now() - datetime.combine(date.today(), MORNING_START)
+            ).total_seconds() / 60
+            if (
+                not getattr(self, "_opening_decision_sent", False)
+                and prices
+                and 0 <= minutes_since_open <= 10
+            ):
                 self._send_opening_decision(prices, regime_ok)
+                self._opening_decision_sent = True
         except Exception as e:
             logger.warning(f"开盘决策推送异常: {e}", exc_info=True)
 
         try:
             if self._scan_count % 50 == 0 and self._market_snapshot:
-                self._check_sector_heat(self._market_snapshot)
+                # 运行共振分析（长窗口 ~50分钟），注入标签到TOP5
+                res_labels = {}
+                if len(self._index_prices) >= settings.RESONANCE_INDEX_MIN_POINTS:
+                    try:
+                        result = self._resonance_analyzer.analyze(
+                            index_prices=self._index_prices,
+                            sector_histories=dict(self._sector_trend_history),
+                            concept_histories=dict(self._concept_trend_history),
+                            sector_stats=self._sector_stats,
+                            concept_stats=self._concept_stats,
+                            market_snapshot=self._market_snapshot,
+                            industry_cache=self._industry_cache,
+                            concept_cache=self._concept_cache,
+                            trend_starts={
+                                **self._sector_trend_start,
+                                **self._concept_trend_start,
+                            },
+                            resolve_name=self._resolve_name,
+                            window_entries=settings.RESONANCE_TOP5_WINDOW_ENTRIES,
+                        )
+                        res_labels = self._resonance_analyzer.format_top5_labels(result)
+                    except Exception:
+                        pass
+                self._check_sector_heat(self._market_snapshot, res_labels)
         except Exception as e:
             logger.warning(f"板块热度检查异常: {e}", exc_info=True)
+
+        try:
+            if self._scan_count % 10 == 0:
+                self.paper_account._persist_state()
+        except Exception as e:
+            logger.warning(f"定期落盘异常: {e}", exc_info=True)
 
         try:
             if self._scan_count % 3 == 0:
@@ -802,6 +884,60 @@ class Watcher(
 
     # ======================== Collector 数据接收 ========================
 
+    # ======================== 共振/逆势分析 ========================
+
+    def _maybe_push_resonance(self):
+        """大盘波动≥0.3%时触发独立共振/逆势推送。去重：≥15轮 + 大盘方向未变不重复。"""
+        if len(self._index_prices) < settings.RESONANCE_INDEX_MIN_POINTS:
+            return
+
+        # 检查大盘近10分钟波动
+        n = min(settings.RESONANCE_PUSH_WINDOW_ENTRIES * 3, len(self._index_prices) - 1)
+        recent_change = (
+            self._index_prices[-1] - self._index_prices[-(n + 1)]
+        ) / self._index_prices[-(n + 1)]
+        if abs(recent_change) < INDEX_VOLATILITY_THRESHOLD:
+            return
+
+        # 去重：冷却轮数内不重复，大盘方向未变不重复
+        index_dir = "up" if recent_change > 0 else "down"
+        if (
+            self._scan_count - self._last_resonance_push_scan
+            < settings.RESONANCE_PUSH_COOLDOWN_ROUNDS
+            and index_dir == self._last_resonance_index_dir
+        ):
+            return
+
+        # 需要足量板块数据
+        sector_histories = dict(self._sector_trend_history)
+        concept_histories = dict(self._concept_trend_history)
+        if not sector_histories:
+            return
+
+        result = self._resonance_analyzer.analyze(
+            index_prices=self._index_prices,
+            sector_histories=sector_histories,
+            concept_histories=concept_histories,
+            sector_stats=self._sector_stats,
+            concept_stats=self._concept_stats,
+            market_snapshot=self._market_snapshot,
+            industry_cache=self._industry_cache,
+            concept_cache=self._concept_cache,
+            trend_starts={
+                **self._sector_trend_start,
+                **self._concept_trend_start,
+            },
+            resolve_name=self._resolve_name,
+            window_entries=settings.RESONANCE_PUSH_WINDOW_ENTRIES,
+        )
+
+        msg = self._resonance_analyzer.format_push_message(result)
+        if msg:
+            self._alert(msg)
+            self._last_resonance_push_scan = self._scan_count
+            self._last_resonance_index_dir = index_dir
+            self._last_resonance_result = result
+
     def _connect_collector(self):
         """连接 QMT Collector。可重复调用，内部有重试节流。"""
         try:
@@ -899,9 +1035,12 @@ class Watcher(
                     "price": price or 0,
                     "amount": amount or 0,
                 }
-            self._last_db_ts = max(
-                self._last_db_ts, float(latest_ts) if latest_ts else 0
-            )
+            # ts 可能是 epoch 浮点或 ISO 字符串，统一尝试转换
+            try:
+                _parsed = float(latest_ts) if latest_ts else 0
+            except (ValueError, TypeError):
+                _parsed = 0
+            self._last_db_ts = max(self._last_db_ts, _parsed)
             logger.info(
                 f"从DB恢复市场快照: {len(self._market_snapshot)}只 ts={latest_ts}"
             )
@@ -975,6 +1114,56 @@ class Watcher(
                 logger.warning(f"执行器初始化失败: {e}")
         return self._executor
 
+    # ======================== AI 辅助 ========================
+
+    def _ai_chase_opinion(
+        self,
+        code,
+        name,
+        price,
+        buy_min,
+        buy_max,
+        sl,
+        tp,
+        trend,
+        above_pct,
+        reject_reason: str = "",
+    ) -> str:
+        """追高/被拒场景调用 AI 给出判断建议。返回空字符串表示 AI 不可用。"""
+        try:
+            from analysis.review.analyzer import AIAnalyzer
+
+            if not hasattr(self, "_ai_analyzer"):
+                self._ai_analyzer = AIAnalyzer()
+        except Exception:
+            return ""
+
+        above_str = (
+            f"超出买入区上限{above_pct:+.1f}%"
+            if above_pct > 0
+            else f"低于买入区下限{abs(above_pct):.1f}%"
+        )
+        position = "追高" if above_pct > 0 else "已回落"
+        reject_info = (
+            f"系统已因「{reject_reason}」拒绝买入，请二判。" if reject_reason else ""
+        )
+
+        prompt = (
+            f"股票：{code} {name}，现价{price:.2f}，买入区间{buy_min:.2f}~{buy_max:.2f}，"
+            f"当前{above_str}。"
+            f"止损{sl:.2f}，止盈{tp:.2f}。"
+            f"板块趋势：{trend}。{reject_info}"
+            f"请根据当前状态判断：同意拒绝 / 可以买入 / 再等等。"
+            f"用一句话给出结论和关键理由（不超过50字）。"
+        )
+        try:
+            result = self._ai_analyzer._call_ai(prompt, max_tokens=100)
+            if result:
+                return result.strip()
+        except Exception:
+            pass
+        return ""
+
     # ======================== 推送 ========================
 
     def _alert(self, msg: str):
@@ -983,7 +1172,7 @@ class Watcher(
                 self.telegram.send(msg)
             except Exception as e:
                 logger.error(f"Telegram推送失败: {e}")
-        logger.debug(f"盯盘提醒: {msg}")
+        logger.info(f"📤 Telegram: {msg}")
 
     def _alert_private(self, msg: str):
         """推送消息到私聊（实盘交易信息）"""
@@ -992,5 +1181,6 @@ class Watcher(
                 self._private_telegram.send(msg)
             except Exception as e:
                 logger.error(f"私聊推送失败: {e}")
+            logger.info(f"📤 Telegram私聊: {msg}")
         else:
             self._alert(msg)  # fallback
