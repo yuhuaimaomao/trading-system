@@ -117,7 +117,6 @@ RESONANCE_INDEX_MIN_POINTS = 12  # 指数最小数据点数
 # ===== 盯盘自审计 =====
 AUDIT_ENABLED = os.environ.get("AUDIT_ENABLED", "true").lower() == "true"
 AUDIT_AUTO_APPLY_PARAM = os.environ.get("AUDIT_AUTO_APPLY_PARAM", "false").lower() == "true"
-AUDIT_AI_MODEL = os.environ.get("AUDIT_AI_MODEL", "qwen3.6-plus")
 AUDIT_RETENTION_DAYS = int(os.environ.get("AUDIT_RETENTION_DAYS", "90"))
 
 # ===== 市场环境判定 =====
