@@ -69,7 +69,7 @@ MIN_LISTED_DAYS = 60
 # ===== 模拟盘 / 实盘 =====
 PAPER_INITIAL_CAPITAL = float(os.environ.get("PAPER_INITIAL_CAPITAL", 200_000))
 REAL_INITIAL_CAPITAL = float(os.environ.get("REAL_INITIAL_CAPITAL", 200_000))
-DEFAULT_POSITION_PCT = float(os.environ.get("DEFAULT_POSITION_PCT", 0.10))
+DEFAULT_POSITION_PCT = float(os.environ.get("DEFAULT_POSITION_PCT", 0.16))
 MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", 5))
 SWAP_SCORE_GAP = float(os.environ.get("SWAP_SCORE_GAP", 15))
 MAX_ACCOUNT_DRAWDOWN = float(os.environ.get("MAX_ACCOUNT_DRAWDOWN", 0.15))
