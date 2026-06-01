@@ -694,11 +694,11 @@ def cmd_audit():
 
 def cmd_test():
     print("[test] 配置检查...")
-    from system.config.settings import DASHSCOPE_API_KEY, DATABASE_PATH, LOGS_DIR
+    from system.config.settings import AI_MODEL, DATABASE_PATH, LOGS_DIR
 
     print(f"  DB: {DATABASE_PATH}")
     print(f"  Logs: {LOGS_DIR}")
-    print(f"  千问 API: {'已配置' if DASHSCOPE_API_KEY else '未配置'}")
+    print(f"  AI 模型: {AI_MODEL or '未配置'}")
     print("  OK")
 
 

@@ -769,7 +769,7 @@ class StrategyPipeline:
         )
 
     # ------------------------------------------------------------------
-    # 步骤 3: AI 分析（千问优先，DeepSeek fallback）
+    # 步骤 3: AI 分析
     # ------------------------------------------------------------------
 
     def _analyze(
@@ -780,7 +780,7 @@ class StrategyPipeline:
         summaries: list[AccountSummary] = None,
         review_ctx: Optional[ReviewContext] = None,
     ) -> tuple[list[OrderSignal], list]:
-        advisor = AIAdvisor(model="deepseek", db_path=self.repo.db_path)
+        advisor = AIAdvisor(db_path=self.repo.db_path)
         if advisor._analyzers:
             try:
                 signals, holdings_review = advisor.analyze(
@@ -792,12 +792,12 @@ class StrategyPipeline:
                 )
                 if signals:
                     logger.info(
-                        f"DeepSeek 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查"
+                        f"AI 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查"
                     )
                     return signals, holdings_review
-                logger.warning("DeepSeek 分析返回空结果")
+                logger.warning("AI 分析返回空结果")
             except Exception as e:
-                logger.error(f"DeepSeek 分析异常: {e}")
+                logger.error(f"AI 分析异常: {e}")
 
         logger.error("AI 模型分析失败")
         return [], []

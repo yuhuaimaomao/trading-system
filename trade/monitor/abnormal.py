@@ -5,13 +5,10 @@ Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 
 import json
 import logging
-import os
 import re
 import sqlite3
 import time
 from datetime import datetime
-
-import requests
 
 from system.config import settings
 
@@ -372,8 +369,10 @@ def _ai_evaluate_swap(
     sector_context: str = "",
 ) -> dict | None:
     """AI 评估换仓，返回 {"sell": code, "buy": code} 或 None。"""
-    api_key = os.getenv("DEEPSEEK_API_KEY", "")
-    if not api_key:
+    try:
+        from analysis.review.analyzer import AIAnalyzer
+        ai = AIAnalyzer()
+    except Exception:
         return None
 
     pinfo = price_info or {}
@@ -445,27 +444,13 @@ def _ai_evaluate_swap(
 只回复JSON：{{"sell": "要卖的代码", "buy": "要买的代码"}} 或 {{"sell": null, "buy": null}}。"""
 
     try:
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "你是A股短线交易员。基于实时盘面判断换仓，只输出JSON。",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 150,
-            },
-            timeout=20,
+        content = ai._call_ai(
+            prompt,
+            system_prompt="你是A股短线交易员。基于实时盘面判断换仓，只输出JSON。",
+            max_tokens=150,
         )
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        if not content:
+            return None
         content = re.sub(r"```\w*\n?|```", "", content).strip()
         result = json.loads(content)
         sell_code = result.get("sell")

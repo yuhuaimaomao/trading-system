@@ -1,7 +1,7 @@
-"""AI 选股顾问 — 双模型并行分析
+"""AI 选股顾问 — 单模型分析
 
 职责：输入 TrendScreener.screen() 输出的 StockScore 列表，
-      调用 AI（DeepSeek + 千问）并行分析，
+      调用 AI 分析，
       输出 OrderSignal 列表（含买卖区间+止损止盈+评分+理由）。
 
 AI 不替代量化规则，而是叠加一层判断层。
@@ -38,8 +38,7 @@ logger = get_system_logger("ai_advisor")
 # 模型配置
 # ============================================================
 
-_MODEL_QWEN = "qwen-max"
-_MODEL_DEEPSEEK = "deepseek-v4-pro"
+_MODEL = settings.AI_MODEL
 
 
 # ============================================================
@@ -48,29 +47,23 @@ _MODEL_DEEPSEEK = "deepseek-v4-pro"
 
 
 class AIAdvisor:
-    """双模型并行分析，输入 StockScore 列表，输出 OrderSignal 列表。"""
+    """单模型分析，输入 StockScore 列表，输出 OrderSignal 列表。"""
 
     def __init__(self, model: Optional[str] = None, db_path: str = None):
         """
         Args:
-            model: None 使用双模型，'deepseek' 只用 DeepSeek，'qwen' 只用千问
+            model: 模型名，None 时使用 settings.AI_MODEL
             db_path: 测试时传入临时库路径，None 则用生产库
         """
         self._db_path = db_path
         self._analyzers: List[Tuple[str, AIAnalyzer]] = []  # (name, analyzer)
 
-        if model in (None, "qwen"):
-            qwen = self._create_analyzer(_MODEL_QWEN)
-            if qwen:
-                self._analyzers.append(("qwen", qwen))
-
-        if model in (None, "deepseek"):
-            ds = self._create_analyzer(_MODEL_DEEPSEEK)
-            if ds:
-                self._analyzers.append(("deepseek", ds))
-
-        if not self._analyzers:
-            logger.warning("没有可用 AI 分析器，请检查 API Key 配置")
+        model_name = model or _MODEL
+        analyzer = self._create_analyzer(model_name)
+        if analyzer:
+            self._analyzers.append((model_name, analyzer))
+        else:
+            logger.warning("没有可用 AI 分析器，请检查 AI API Key 配置")
 
     # ------------------------------------------------------------------
     # 内部：创建 AIAnalyzer 实例
@@ -80,21 +73,6 @@ class AIAdvisor:
     def _create_analyzer(model_name: str) -> Optional["AIAnalyzer"]:
         """创建 AIAnalyzer 实例并覆盖模型名。"""
         from analysis.review.analyzer import AIAnalyzer
-
-        # AIAnalyzer.__init__ 要求 DASHSCOPE_API_KEY。
-        # 对于 DeepSeek-only 场景，用 DEEPSEEK_API_KEY 的存在作为 fallback。
-        if model_name.startswith("deepseek"):
-            if not os.getenv("DEEPSEEK_API_KEY"):
-                logger.warning("DEEPSEEK_API_KEY 未配置，跳过 DeepSeek 分析器")
-                return None
-            # AIAnalyzer.__init__ 仍会检查 DASHSCOPE_API_KEY，
-            # 设置一个占位避免 init 失败（_call_ai 时用 DEEPSEEK_API_KEY）
-            if not os.getenv("DASHSCOPE_API_KEY"):
-                os.environ["DASHSCOPE_API_KEY"] = "placeholder"
-        else:
-            if not os.getenv("DASHSCOPE_API_KEY"):
-                logger.warning("DASHSCOPE_API_KEY 未配置，跳过千问分析器")
-                return None
 
         try:
             analyzer = AIAnalyzer()

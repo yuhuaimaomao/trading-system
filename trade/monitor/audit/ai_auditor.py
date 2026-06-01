@@ -12,7 +12,7 @@ from trade.monitor.audit.prompts import WATCHER_AUDIT_SYSTEM, WATCHER_AUDIT_USER
 class AIAuditor:
     def __init__(self, repo, model: str = None):
         self.repo = repo
-        from system.config.settings import AUDIT_AI_MODEL, DATABASE_PATH
+        from system.config.settings import DATABASE_PATH, AUDIT_AI_MODEL
         self.model = model or AUDIT_AI_MODEL
         self.db_path = str(DATABASE_PATH)
         self._ai = None

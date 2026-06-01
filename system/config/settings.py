@@ -31,10 +31,30 @@ STORAGE_PATH = Path(
 
 # ===== API Keys =====
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
-DASHSCOPE_MODEL = os.environ.get("DASHSCOPE_MODEL", "qwen-plus")
-DASHSCOPE_ANALYSIS_MODEL = os.environ.get("DASHSCOPE_ANALYSIS_MODEL", "qwen3.6-plus")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+# ===== AI 模型统一配置 =====
+# 全局默认模型，所有 AI 调用（复盘/早报/审计/电报/盯盘）都从此处取。
+# .env 中设置 AI_MODEL，例: AI_MODEL=qwen3.6-plus 或 AI_MODEL=deepseek-chat
+# 默认值由环境变量强控，不设默认模型名——未配置则启动报错。
+AI_MODEL = os.environ.get("AI_MODEL", "")
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
+
+# Provider 端点
+DASHSCOPE_ENDPOINT = os.environ.get(
+    "DASHSCOPE_ENDPOINT",
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+)
+DEEPSEEK_ENDPOINT = os.environ.get(
+    "DEEPSEEK_ENDPOINT",
+    "https://api.deepseek.com/v1/chat/completions",
+)
+
+# 向下兼容（旧环境变量仍生效）
+DASHSCOPE_MODEL = os.environ.get("DASHSCOPE_MODEL", AI_MODEL)
+DASHSCOPE_ANALYSIS_MODEL = os.environ.get("DASHSCOPE_ANALYSIS_MODEL", AI_MODEL)
+AUDIT_AI_MODEL = os.environ.get("AUDIT_AI_MODEL", AI_MODEL)
 
 # ===== Telegram =====
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")

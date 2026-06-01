@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from system.config.akshare_config import get_headers
+from system.config import settings
 from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_collector_logger
 
@@ -597,7 +598,7 @@ class TelegraphCollector:
             from system.utils.stock_tools import StockTools
 
             ai = AIAnalyzer()
-            ai.model = _os.getenv("TELEGRAPH_AI_MODEL", "qwen3.6-plus")
+            ai.model = settings.AI_MODEL
 
             tools = StockTools()
             tool_map = {

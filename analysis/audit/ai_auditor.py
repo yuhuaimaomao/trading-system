@@ -7,6 +7,7 @@ from typing import Optional
 
 from analysis.audit.prompts import STRATEGY_AUDIT_PROMPT
 from data.repo import TradeRepository
+from system.config import settings
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("ai_auditor")
@@ -112,13 +113,13 @@ class AIAuditor:
     def _call_ai(self, prompt: str) -> Optional[str]:
         from analysis.review.analyzer import AIAnalyzer
 
-        if not os.getenv("DASHSCOPE_API_KEY"):
-            logger.warning("DASHSCOPE_API_KEY 未配置，跳过 AI 审计")
+        if not settings.AI_MODEL:
+            logger.warning("AI_MODEL 未配置，跳过 AI 审计")
             return None
 
         try:
             analyzer = AIAnalyzer()
-            analyzer.model = "qwen3.6-plus"
+            analyzer.model = settings.AI_MODEL
             text = analyzer._call_ai(
                 prompt=prompt,
                 system_prompt="你是策略审计分析师。严格按 JSON 格式输出（用```json包裹），不要额外解释。",

@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-from system.config.settings import DATABASE_PATH, LOGS_DIR
+from system.config import settings
 from system.utils.dns_bypass import install as install_dns_bypass
 
 # 绕过 Shadowrocket/Surge 本地代理的 DNS 劫持
@@ -80,7 +80,7 @@ class ReviewAnalyzer:
 
         Args:
             trade_date: 交易日期，默认今天
-            model: 覆盖默认模型（如 'deepseek-v3'、'qwen3.6-plus'）
+            model: 覆盖默认模型
 
         Returns:
             AI 生成的复盘报告文本
@@ -1112,7 +1112,7 @@ class ReviewAnalyzer:
             )
 
             models_to_run = [
-                ("qwen3.6-plus", "千问"),
+                (settings.AI_MODEL, settings.AI_MODEL),
             ]
 
             reports = {}  # {model_name: report_text}
@@ -1152,7 +1152,7 @@ class ReviewAnalyzer:
             except Exception as e:
                 self.logger.warning(f"保存复盘报告失败（不影响主流程）：{e}")
 
-            report = reports.get("qwen3.6-plus")
+            report = reports.get(settings.AI_MODEL)
             if not report:
                 report = next((v for v in reports.values() if v), None)
             if not report:
@@ -1771,29 +1771,47 @@ class ReviewAnalyzer:
 
 
 class AIAnalyzer:
-    """AI 分析引擎（支持 Function Calling）"""
+    """AI 分析引擎 — 支持多 Provider（DashScope / DeepSeek）。"""
+
+    # 模型名 → provider 自动路由
+    QWEN_PREFIXES = ("qwen", "qwq", "qvq")
+    DEEPSEEK_PREFIXES = ("deepseek",)
 
     def __init__(self):
         self.logger = get_core_logger("ai_analyzer")
-        self.api_key = os.getenv("DASHSCOPE_API_KEY", "")
-        self.endpoint = os.getenv(
-            "DASHSCOPE_ENDPOINT",
-            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
-        )
-        self.model = os.getenv("DASHSCOPE_ANALYSIS_MODEL", "qwen3.5-plus")
-
-        # 验证 API Key 配置
-        if not self.api_key:
-            raise ValueError("DASHSCOPE_API_KEY 未配置，请在.env 文件中设置")
-
-        # 验证 API Key 格式（百炼 API Key 以 sk-sp-开头）
-        if not (self.api_key.startswith("sk-") or self.api_key.startswith("sk-sp-")):
-            self.logger.warning("API Key 格式可能不正确（应以 sk-或 sk-sp-开头）")
-
+        self.model = settings.AI_MODEL
+        self._init_provider()
         self.session = requests.Session()
         self.logger.info(
-            f"AI 分析引擎初始化完成（模型：{self.model}，支持 Function Calling）"
+            f"AI 分析引擎初始化完成（模型：{self.model}，Provider：{self._provider}）"
         )
+
+    def _init_provider(self):
+        """根据模型名或 AI_PROVIDER 环境变量自动选择 API 端点+鉴权。"""
+        provider = settings.AI_PROVIDER
+        model_lower = self.model.lower() if self.model else ""
+
+        if not provider or provider == "auto":
+            if any(model_lower.startswith(p) for p in self.QWEN_PREFIXES):
+                provider = "dashscope"
+            elif any(model_lower.startswith(p) for p in self.DEEPSEEK_PREFIXES):
+                provider = "deepseek"
+            else:
+                provider = "dashscope"  # 默认走 DashScope
+
+        if provider == "deepseek":
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "")
+            self.endpoint = settings.DEEPSEEK_ENDPOINT
+        else:
+            self.api_key = os.getenv("DASHSCOPE_API_KEY", "")
+            self.endpoint = settings.DASHSCOPE_ENDPOINT
+
+        self._provider = provider
+
+        if not self.api_key:
+            raise ValueError(f"AI API Key 未配置（provider={provider}），请在 .env 中设置")
+        if not self.model:
+            raise ValueError("AI_MODEL 未配置，请在 .env 中设置，例: AI_MODEL=deepseek-chat")
 
     def _call_ai(
         self,
@@ -1802,22 +1820,9 @@ class AIAnalyzer:
         enable_search: bool = False,
         max_tokens: Optional[int] = None,
     ) -> Optional[str]:
-        """调用 AI 模型
-
-        Args:
-            prompt: 用户 prompt
-            system_prompt: 系统 prompt
-            enable_search: 是否启用联网搜索（百炼专属功能）
-        """
-        # 根据模型名选择 provider
-        if self.model.startswith("deepseek"):
-            api_key = os.getenv("DEEPSEEK_API_KEY", "")
-            endpoint = os.getenv(
-                "DEEPSEEK_ENDPOINT", "https://api.deepseek.com/v1/chat/completions"
-            )
-        else:
-            api_key = self.api_key
-            endpoint = self.endpoint
+        """调用 AI 模型。根据 provider 自动选择 API 格式。"""
+        api_key = self.api_key
+        endpoint = self.endpoint
 
         if not api_key:
             return "AI API Key 未配置，无法生成分析"
@@ -1838,12 +1843,12 @@ class AIAnalyzer:
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
 
-            # 启用百炼联网搜索功能（仅百炼支持）
-            if enable_search and not self.model.startswith("deepseek"):
+            # DashScope 独有参数
+            if self._provider == "dashscope" and enable_search:
                 payload["enable_search"] = True
 
             self.logger.info(
-                f"开始调用 AI API（模型：{self.model}，端点：{endpoint}，超时：600 秒）..."
+                f"开始调用 AI API（模型：{self.model}，Provider：{self._provider}，超时：600 秒）..."
             )
             response = self.session.post(
                 endpoint, json=payload, headers=headers, timeout=600
@@ -1853,15 +1858,14 @@ class AIAnalyzer:
             self.logger.info(f"AI API 响应成功（状态码：{response.status_code}）")
             result = response.json()
 
-            # 百炼 API 响应格式：{choices: [{message: {content: "..."}}]}
-            # 或：{output: {text: "..."}}
+            # 统一解析：choices[0].message.content（DeepSeek/DashScope 均兼容）
             content = ""
             if "choices" in result and result["choices"]:
                 content = result["choices"][0].get("message", {}).get("content", "")
             elif "output" in result:
                 content = result["output"].get("text", "")
 
-            # 过滤千问模型的 CoT 思考过程
+            # 过滤 CoT 思考过程
             content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
 
             if not content:
@@ -1900,15 +1904,8 @@ class AIAnalyzer:
         try:
             from system.utils.stock_tools import TOOLS_DEFINITION
 
-            # 根据模型名选择 provider
-            if self.model.startswith("deepseek"):
-                api_key = os.getenv("DEEPSEEK_API_KEY", "")
-                endpoint = os.getenv(
-                    "DEEPSEEK_ENDPOINT", "https://api.deepseek.com/v1/chat/completions"
-                )
-            else:
-                api_key = self.api_key
-                endpoint = self.endpoint
+            api_key = self.api_key
+            endpoint = self.endpoint
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -1922,8 +1919,10 @@ class AIAnalyzer:
                 "messages": messages,
                 "tools": _tools,
                 "tool_choice": tool_choice,
-                "parallel_tool_calls": True,
             }
+            # parallel_tool_calls 仅 DeepSeek/OpenAI 兼容格式支持
+            if self._provider != "dashscope":
+                payload["parallel_tool_calls"] = True
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens
 
