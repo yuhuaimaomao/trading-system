@@ -265,61 +265,142 @@ class PaperAccount:
         from trade.portfolio.portfolio import Position
 
         snap = self.repo.get_latest_snapshot(account="paper")
+        snap_valid = False
 
         if snap:
-            self._portfolio.cash = snap["cash"]
-            self._portfolio._peak_value = max(
-                self._portfolio._peak_value, snap.get("total_value", 0) or 0
-            )
-            self._portfolio._prev_total = snap.get("total_value", 0) or 0
-            snap_date = snap["trade_date"]
-            logger.info(
-                f"从快照恢复: trade_date={snap_date} cash={snap['cash']:,.0f} "
-                f"total_value={snap['total_value']:,.0f}"
-            )
-        else:
+            snap_total = snap.get("total_value", 0) or 0
+            snap_cash = snap.get("cash", 0) or 0
+            snap_mv = snap.get("market_value", 0) or 0
+
+            # 校验快照合理性：总资产需 ≈ 现金 + 市值
+            expected_total = snap_cash + snap_mv
+            if snap_total <= 0 or abs(snap_total - expected_total) > self._portfolio.initial_cash * 2:
+                logger.warning(
+                    f"快照数据异常 (total={snap_total:.0f} ≠ cash+mv={expected_total:.0f})，丢弃"
+                )
+            else:
+                snap_valid = True
+                self._portfolio.cash = snap_cash
+                snap_peak = snap.get("peak_value", 0) or snap_total
+                if snap_peak <= self._portfolio.initial_cash * 5:
+                    self._portfolio._peak_value = max(
+                        self._portfolio._peak_value, snap_peak
+                    )
+                self._portfolio._prev_total = snap_total
+                snap_date = snap["trade_date"]
+                logger.info(
+                    f"从快照恢复: trade_date={snap_date} cash={snap_cash:,.0f} "
+                    f"total_value={snap_total:,.0f}"
+                )
+
+        if not snap_valid:
             snap_date = None
+
+        # 从持仓表恢复（优先今天，没有则取最近有数据的日期）
+        pos_rows = self.repo.get_positions_by_date(trade_date, "paper")
+        if not pos_rows:
+            pos_rows = self.repo.get_latest_positions("paper")
+        if pos_rows:
+            total_cost = 0.0
+            for row in pos_rows:
+                code = row["stock_code"]
+                volume = row.get("volume", 0)
+                avg_cost = row.get("avg_cost", 0)
+                total_cost += volume * avg_cost
+                self._portfolio.positions[code] = Position(
+                    stock_code=code,
+                    stock_name=row.get("stock_name", ""),
+                    volume=volume,
+                    avg_cost=avg_cost,
+                    current_price=row.get("current_price", 0),
+                    market_value=row.get("market_value", 0),
+                    pnl=row.get("pnl", 0),
+                    pnl_pct=row.get("pnl_pct", 0),
+                    entry_date=row.get("entry_date", trade_date),
+                    locked_volume=row.get("locked_volume", 0),
+                )
+                logger.info(
+                    f"恢复持仓: {code} {row.get('stock_name', '')} "
+                    f"{volume}股 成本{avg_cost:.2f}"
+                )
+            # 扣除已占用资金，确保 cash 与持仓一致
+            if not snap_valid:
+                self._portfolio.cash -= total_cost
+                logger.info(f"无快照恢复：扣除持仓成本 {total_cost:,.0f}，现金余额 {self._portfolio.cash:,.0f}")
+
+        # 无快照时，在持仓恢复后写入正确的初始快照
+        if not snap_valid:
             init_cash = self._portfolio.initial_cash
             self.repo.insert_snapshot(
                 {
                     "trade_date": trade_date,
-                    "total_value": init_cash,
-                    "cash": init_cash,
-                    "market_value": 0,
+                    "total_value": self._portfolio.total_value,
+                    "cash": self._portfolio.cash,
+                    "market_value": sum(p.market_value for p in self._portfolio.positions.values()),
                     "daily_pnl": 0,
                     "total_pnl": 0,
                     "drawdown": 0,
-                    "position_count": 0,
+                    "position_count": len(self._portfolio.positions),
                     "sector_exposure": "{}",
                     "account": "paper",
                     "created_at": datetime.now().isoformat(),
                 }
             )
-            logger.info(f"首次运行，写入初始快照: cash={init_cash:,.0f}")
-
-        # 从持仓表恢复
-        if snap_date:
-            pos_rows = self.repo.get_positions_by_date(snap_date, "paper")
-            for row in pos_rows:
-                code = row["stock_code"]
-                self._portfolio.positions[code] = Position(
-                    stock_code=code,
-                    stock_name=row.get("stock_name", ""),
-                    volume=row.get("volume", 0),
-                    avg_cost=row.get("avg_cost", 0),
-                    current_price=row.get("current_price", 0),
-                    market_value=row.get("market_value", 0),
-                    pnl=row.get("pnl", 0),
-                    pnl_pct=row.get("pnl_pct", 0),
-                    entry_date=row.get("entry_date", snap_date),
-                    locked_volume=row.get("locked_volume", 0),
-                )
-                logger.info(
-                    f"恢复持仓: {code} {row.get('stock_name', '')} "
-                    f"{row.get('volume', 0)}股 成本{row.get('avg_cost', 0):.2f}"
-                )
+            logger.info(
+                f"首次运行，写入初始快照: total={self._portfolio.total_value:,.0f} "
+                f"cash={self._portfolio.cash:,.0f}"
+            )
 
     # ===== 查询 =====
+
+    @staticmethod
+    def _get_pre_close(code: str) -> float:
+        """从 QMT 获取个股昨收价。"""
+        try:
+            from system.qmt.client import QMTClient
+            client = QMTClient()
+            result = client.quote(code)
+            if result.get("success", True):
+                data = result.get("data", result)
+                return float(data.get("preClose") or data.get("pre_close") or 0)
+        except Exception:
+            pass
+        return 0.0
+
+    _day_high_cache: dict = {}
+
+    @classmethod
+    def _get_day_high(cls, code: str) -> float:
+        """从 QMT 获取个股日内最高价（交易所实时数据）。带缓存避免同轮重复请求。"""
+        if code in cls._day_high_cache:
+            return cls._day_high_cache[code]
+        try:
+            from system.qmt.client import QMTClient
+            client = QMTClient()
+            result = client.quote(code)
+            if result.get("success", True):
+                data = result.get("data", result)
+                h = float(data.get("high") or 0)
+                cls._day_high_cache[code] = h
+                return h
+        except Exception:
+            pass
+        return 0.0
+
+    @classmethod
+    def _clear_day_high_cache(cls):
+        cls._day_high_cache.clear()
+
+    def _get_today_open_value(self) -> float:
+        """今日开盘基准 = 上个交易日最后快照的 total_value，无则初始资金。"""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            snap = self.repo.get_latest_snapshot_before(today, "paper")
+            if snap:
+                return snap.get("total_value", 0) or 0
+        except Exception:
+            pass
+        return self._portfolio.initial_cash
 
     def get_position_summary(self) -> list[str]:
         lines = []
@@ -342,29 +423,27 @@ class PaperAccount:
     # ===== 内部 =====
 
     def _persist_state(self):
-        """实时落库：每次买卖后更新快照表和持仓表，盘中随时可查到当前状态。
-
-        不调 portfolio.snapshot()，避免搅乱 daily_pnl / _prev_total。
-        """
+        """实时落库：每次买卖后更新快照表和持仓表，盘中随时可查到当前状态。"""
         p = self._portfolio
         trade_date = self._trade_date
-        self.repo.insert_snapshot(
-            {
-                "trade_date": trade_date,
-                "total_value": p.total_value,
-                "cash": p.cash,
-                "market_value": sum(pos.market_value for pos in p.positions.values()),
-                "daily_pnl": p.daily_pnl,
-                "total_pnl": p.total_pnl,
-                "drawdown": p.drawdown,
-                "position_count": len(p.positions),
-                "sector_exposure": "{}",
-                "account": "paper",
-                "created_at": datetime.now().isoformat(),
-            }
-        )
+
+        total_drawdown = 0.0
         pos_rows = []
         for code, pos in p.positions.items():
+            # 昨收（隔夜持仓需要）
+            pre_close = getattr(pos, "pre_close", 0) or 0
+            if pre_close <= 0:
+                pre_close = self._get_pre_close(code)
+                pos.pre_close = pre_close
+
+            # 日内最高（回撤基准，从 QMT 实时获取）
+            day_high = self._get_day_high(code)
+            if day_high > 0:
+                pos.day_high = max(getattr(pos, "day_high", 0) or 0, day_high)
+            pos_day_high = getattr(pos, "day_high", 0) or pos.current_price
+            dd = (pos_day_high - pos.current_price) * pos.volume if pos_day_high > 0 else 0
+            total_drawdown += dd
+
             pos_rows.append(
                 {
                     "stock_code": code,
@@ -375,10 +454,29 @@ class PaperAccount:
                     "market_value": pos.market_value,
                     "pnl": pos.pnl,
                     "pnl_pct": pos.pnl_pct,
+                    "pre_close": pre_close,
+                    "daily_pnl": 0,  # 当日盈亏用统一公式算，不逐只存
+                    "holding_days": getattr(pos, "holding_days", 0) or 0,
                     "entry_date": pos.entry_date,
                     "locked_volume": getattr(pos, "locked_volume", 0),
                 }
             )
+
+        self.repo.insert_snapshot(
+            {
+                "trade_date": trade_date,
+                "total_value": p.total_value,
+                "cash": p.cash,
+                "market_value": sum(pos.market_value for pos in p.positions.values()),
+                "daily_pnl": p.total_value - self._get_today_open_value(),
+                "total_pnl": p.total_pnl,
+                "drawdown": round(total_drawdown, 2),
+                "position_count": len(p.positions),
+                "sector_exposure": "{}",
+                "account": "paper",
+                "created_at": datetime.now().isoformat(),
+            }
+        )
         self.repo.insert_positions(trade_date, "paper", pos_rows)
 
     def _record_order(
@@ -435,10 +533,10 @@ class PaperAccount:
         pos_count = len(p.positions)
         pos_pct = (p.total_value - p.cash) / p.total_value if p.total_value > 0 else 0
         self.telegram.send(
-            f"📝 模拟盘买入 — {code} {name}\n"
+            f"💰 模拟盘买入 — {code} {name}\n"
             f"   价格: {price:.2f} × {volume} 股  金额: {amount:,.0f}  佣金: {commission:.0f}\n"
-            f"   来源: {source}\n"
-            f"   📦 持仓: {pos_count}/{settings.MAX_POSITIONS}  仓位: {pos_pct:.0%}  总资产: {p.total_value:,.0f}"
+            f"   来源: {'策略信号' if source == 'signal' else '复盘精选'}\n"
+            f"   持仓: {pos_count}/{settings.MAX_POSITIONS}  仓位: {pos_pct:.0%}  总资产: {p.total_value:,.0f}"
         )
 
     def _notify_sell(
@@ -447,10 +545,10 @@ class PaperAccount:
         p = self._portfolio
         pos_count = len(p.positions)
         pos_pct = (p.total_value - p.cash) / p.total_value if p.total_value > 0 else 0
-        emoji = "✅" if pnl > 0 else "⚠️"
+        emoji = "💰" if pnl > 0 else "📉"
         self.telegram.send(
             f"{emoji} 模拟盘卖出 — {code} {name}\n"
             f"   价格: {price:.2f} × {volume} 股  成本: {avg_cost:.2f}  盈亏: {pnl:+,.0f} ({pnl_pct:+.1f}%)\n"
-            f"   费用: {commission:.1f}  原因: {reason}\n"
-            f"   📦 持仓: {pos_count}/{settings.MAX_POSITIONS}  仓位: {pos_pct:.0%}  总资产: {p.total_value:,.0f}"
+            f"   原因: {reason}\n"
+            f"   持仓: {pos_count}/{settings.MAX_POSITIONS}  仓位: {pos_pct:.0%}  总资产: {p.total_value:,.0f}"
         )

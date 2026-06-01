@@ -75,7 +75,7 @@ def cmd_monitor():
     )
     _log_dir.mkdir(parents=True, exist_ok=True)
     _monitor_fh = open(  # noqa: SIM115
-        str(_log_dir / "monitor_output.log"), "a", encoding="utf-8", buffering=1
+        str(_log_dir / "monitor.log"), "a", encoding="utf-8", buffering=1
     )
     _sys.stdout = _monitor_fh
     _sys.stderr = _monitor_fh
@@ -455,8 +455,30 @@ def cmd_listen():
 
 def cmd_qmt_collect():
     """QMT 实时数据采集进程 — 独立进程，TCP 推送至 Watcher + DB 容灾"""
+    import logging
+    import os
+    import sys as _sys
+
+    from datetime import datetime as _dt
+
     from data.live.qmt_collector import QMTCollector
+    from system.config.settings import PROJECT_ROOT
     from system.utils.logger import get_task_logger, set_current_task
+
+    # stdout/stderr → qmt_collect.log（含所有 logging.getLogger 的输出）
+    _log_dir = (
+        PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
+    )
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _collect_fh = open(  # noqa: SIM115
+        str(_log_dir / "qmt_collect.log"), "a", encoding="utf-8", buffering=1
+    )
+    _sys.stdout = _collect_fh
+    _sys.stderr = _collect_fh
+
+    # 确保所有 logger 输出流到 stderr（被重定向到 qmt_collect.log）
+    logging.basicConfig(level=logging.DEBUG, stream=_sys.stderr, force=True,
+                        format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s")
 
     set_current_task("qmt_collect")
     logger = get_task_logger("qmt_collect")

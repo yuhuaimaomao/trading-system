@@ -169,7 +169,7 @@ SCENARIO_SIGNALS = {
             ("宽度恶化", lambda m: m.breadth_trend == "deteriorating"),
         ],
         "threshold": 0.40,
-        "pre_action": "正常买入，pullback 入场",
+        "pre_action": "正常买入，回调入场",
     },
     "accelerating_up": {
         "label": "上涨加速 → 可能冲顶",
@@ -201,7 +201,7 @@ SCENARIO_SIGNALS = {
             ("继续新低", lambda m: m.price_velocity < -0.05),
         ],
         "threshold": 0.30,
-        "pre_action": "关注反转确认，prepare 试探仓位",
+        "pre_action": "关注反转确认，准备试探仓位",
     },
     "potential_reversal_down": {
         "label": "顶部迹象 → 可能反转",
@@ -254,7 +254,7 @@ SCENARIO_SIGNALS = {
             ("振幅扩大", lambda m: m.range_expanding),
         ],
         "threshold": 0.50,
-        "pre_action": "正常交易，standard 入场",
+        "pre_action": "正常交易，标准入场",
     },
 }
 
@@ -749,22 +749,22 @@ class MarketStateMixin:
         bottom1 = min(v1, key=lambda x: x[1])
         bottom2 = min(v2, key=lambda x: x[1])
 
-        # 两个底部接近（差异<0.5%）
+        # 两个底部接近（差异<1%）
         b1, b2 = bottom1[1], bottom2[1]
-        if abs(b1 - b2) / b1 > 0.005:
+        if abs(b1 - b2) / b1 > 0.01:
             return False
 
-        # 中间有一波反弹（两底之间的高点>底部的0.8%）
+        # 中间有一波反弹（两底之间的高点>底部的1%）
         mid_section = px[bottom1[0] : mid + bottom2[0]]
         if not mid_section:
             return False
         peak = max(mid_section)
-        if peak <= 0 or (peak - min(b1, b2)) / min(b1, b2) < 0.008:
+        if peak <= 0 or (peak - min(b1, b2)) / min(b1, b2) < 0.01:
             return False
 
-        # 第二次探底后已开始回升（价格 > 第二底部 + 0.3%）
+        # 第二次探底后已开始回升（价格 > 第二底部 + 0.5%）
         cur = px[-1]
-        return cur > b2 * 1.003
+        return cur > b2 * 1.005
 
     # ━━━━━━━━ M型双顶 ━━━━━━━━
 
@@ -791,17 +791,17 @@ class MarketStateMixin:
         top1 = max(p1, key=lambda x: x[1])
         top2 = max(p2, key=lambda x: x[1])
 
-        # 两个顶部接近（差异<0.5%）
+        # 两个顶部接近（差异<1%）
         t1, t2 = top1[1], top2[1]
-        if abs(t1 - t2) / t1 > 0.005:
+        if abs(t1 - t2) / t1 > 0.01:
             return False
 
-        # 中间有回落（两顶之间的低点<顶部的0.6%）
+        # 中间有显著回落（两顶之间的低点<顶部的1%）
         mid_section = px[top1[0] : mid + top2[0]]
         if not mid_section:
             return False
         valley = min(mid_section)
-        if (max(t1, t2) - valley) / max(t1, t2) < 0.006:
+        if (max(t1, t2) - valley) / max(t1, t2) < 0.01:
             return False
 
         # 第二次冲高后已在回落
@@ -1335,41 +1335,46 @@ class MarketStateMixin:
         )
 
     def _compute_key_levels(self) -> tuple[list[float], list[float]]:
-        """计算日内关键支撑/阻力位。"""
+        """计算日内关键支撑/阻力位。
+
+        支撑：日内低点 > 昨收 > MA20 > MA60（取在现价下方的）
+        阻力：日内高点 > MA20 > MA60 > 昨收（取在现价上方的）
+        """
         px = self._index_prices
         hi, lo = self._index_high, self._index_low
-        if len(px) < 10 or hi <= lo:
+        if len(px) < 5 or hi <= lo:
             return [], []
 
         cur = px[-1]
-        ema12 = self._calc_intraday_ema(px, 12)
 
-        support = []
-        resistance = []
+        # 昨收（从 collector 推送或 QMT 查询）
+        pre_close = 0.0
+        idx_q = getattr(self, "_last_index_quote", None) or {}
+        pre_close = idx_q.get("pre_close", 0) or 0
 
-        # 日内低点
-        if cur > lo:
-            support.append(lo)
-        # EMA12
-        if ema12 > 0:
-            if cur > ema12:
-                support.append(ema12)
-            else:
-                resistance.append(ema12)
-        # 开盘价
-        open_price = px[0]
-        if open_price > 0:
-            if cur > open_price:
-                support.append(open_price)
-            else:
-                resistance.append(open_price)
-        # 日内高点
-        if cur < hi:
-            resistance.append(hi)
+        # MA20 / MA60（从 DB 日线缓存）
+        _, _, ma20 = self._get_index_baseline()
+        ma60 = self._get_index_ma60()
 
-        # 去重排序
-        support = sorted(set(round(s, 2) for s in support if s < cur), reverse=True)
-        resistance = sorted(set(round(r, 2) for r in resistance if r > cur))
+        # 候选位：(值, 标签)
+        candidates = []
+        if lo > 0 and lo < cur:
+            candidates.append((lo, "日内低点"))
+        if pre_close > 0:
+            candidates.append((pre_close, "昨收"))
+        if ma20 > 0:
+            candidates.append((ma20, "MA20"))
+        if ma60 > 0:
+            candidates.append((ma60, "MA60"))
+        if hi > 0 and hi > cur:
+            candidates.append((hi, "日内高点"))
+
+        support = sorted(
+            set(round(v, 2) for v, _ in candidates if v < cur), reverse=True
+        )
+        resistance = sorted(
+            set(round(v, 2) for v, _ in candidates if v > cur)
+        )
         return support[:3], resistance[:3]
 
     def _update_scenario_engine(self, micro: MicroSignals) -> MarketOutlook:
@@ -1553,38 +1558,34 @@ class MarketStateMixin:
         self._scenario_last_alert_scan = scan
 
         # 构建消息
-        alt_lines = []
+        alt_parts = []
         for alt in outlook.alternatives:
-            act = f" → {alt.pre_action}" if alt.pre_action else ""
-            alt_lines.append(f"   {alt.label} ({alt.probability:.0%}){act}")
+            alt_parts.append(f"{alt.label} ({alt.probability:.0%})")
 
-        level_lines = []
-        if outlook.key_support:
-            level_lines.append(
-                f"   支撑: {', '.join(f'{s:.2f}' for s in outlook.key_support)}"
-            )
-        if outlook.key_resistance:
-            level_lines.append(
-                f"   阻力: {', '.join(f'{r:.2f}' for r in outlook.key_resistance)}"
-            )
+        # 主情景 + 备选并一行
+        primary_str = f"{outlook.primary.label} ({outlook.primary.probability:.0%})"
+        if alt_parts:
+            primary_str += f"  |  {'  '.join(alt_parts)}"
 
-        confirm_str = (
-            f"{outlook.primary.confirm_at:.2f}" if outlook.primary.confirm_at else "—"
-        )
-        invalidate_str = (
-            f"{outlook.primary.invalidate_at:.2f}"
-            if outlook.primary.invalidate_at
-            else "—"
-        )
+        confirm_at = outlook.primary.confirm_at
+        invalidate_at = outlook.primary.invalidate_at
+        gate_line = ""
+        if confirm_at or invalidate_at:
+            parts = []
+            direction = outlook.primary.direction
+            if confirm_at:
+                verb = "跌破" if direction == "bearish" else "突破"
+                parts.append(f"{verb} {confirm_at:.2f} 确认")
+            if invalidate_at:
+                verb = "突破" if direction == "bearish" else "跌破"
+                parts.append(f"{verb} {invalidate_at:.2f} 否定")
+            gate_line = f"   {' / '.join(parts)}\n"
 
         self._alert(
             f"🔮 市场预判  {datetime.now().strftime('%H:%M')}\n"
-            f"   {outlook.primary.label} ({outlook.primary.probability:.0%})  "
-            f"确认: {confirm_str}  否定: {invalidate_str}"
-            + ("\n   ─────────────────────────" if alt_lines else "")
-            + ("\n" + "\n".join(alt_lines) if alt_lines else "")
-            + ("\n" + "\n".join(level_lines) if level_lines else "")
-            + f"\n   → {outlook.primary.pre_action or '保持观察'}"
+            f"   {primary_str}\n"
+            + (f"{gate_line}" if gate_line else "")
+            + f"   → {outlook.primary.pre_action or '保持观察'}"
         )
 
         self._scenario_prev_outlook = outlook
@@ -1712,7 +1713,7 @@ class MarketStateMixin:
         # ━━ 组装 ━━
         parts = []
         if prob >= 0.35:
-            parts.append(f"🔮 {primary.label}({prob:.0%})")
+            parts.append(f"市场预判: {primary.label}({prob:.0%})")
         if sector_reason:
             parts.append(sector_reason)
 
@@ -1895,26 +1896,24 @@ class MarketStateMixin:
 
         # 安全/单边上涨不告警
         if pattern in ("normal", "uptrend"):
-            if self._index_alerted_downtrend:
-                self._index_alerted_downtrend = False
             return
 
-        # V/W型反转 — 清除下跌标记
+        # 反转信号（V/W底）同 pattern 间隔 30 轮
         if pattern in ("v_reversal", "w_bottom", "gap_down_recover"):
-            if self._index_alerted_downtrend:
-                self._index_alerted_downtrend = False
+            last_scan = getattr(self, "_pattern_last_alert", {}).get(pattern, 0)
+            if self._scan_count - last_scan >= 30:
+                if not hasattr(self, "_pattern_last_alert"):
+                    self._pattern_last_alert = {}
+                self._pattern_last_alert[pattern] = self._scan_count
                 self._alert(regime.alert_msg)
             return
 
-        # 阻止买入类 — 只告警一次
-        if not regime.allow_buy:
-            if not self._index_alerted_downtrend:
-                self._index_alerted_downtrend = True
-                self._alert(regime.alert_msg)
-            return
-
-        # 允许但需警惕类 — 每次都告警
-        if regime.alert_level == "warn":
+        # 所有告警类：同 pattern 至少间隔 50 轮才重发（形态可能因数据抖动反复切换）
+        last_scan = getattr(self, "_pattern_last_alert", {}).get(pattern, 0)
+        if self._scan_count - last_scan >= 50:
+            if not hasattr(self, "_pattern_last_alert"):
+                self._pattern_last_alert = {}
+            self._pattern_last_alert[pattern] = self._scan_count
             self._alert(regime.alert_msg)
 
     # ━━━━━━━━ 量价背离 ━━━━━━━━
@@ -2105,14 +2104,21 @@ class MarketStateMixin:
         if alerts:
             current = prices[-1]
             trend_desc = self._index_trend_desc(
-                prices, self._last_index_quote.get("pre_close", 0)
+                prices,
+                (self._last_index_quote or {}).get("pre_close", 0),
             )
             advice = self._index_tech_advice(alerts, st)
-            self._alert(
-                f"📈 上证技术指标\n"
-                f"   上证: {current:.2f}  {' | '.join(alerts)}  {trend_desc}\n"
-                f"   → {advice}"
-            )
+            if not advice:
+                return  # 无实质信号，不推送
+
+            # 只推送有实质信号的告警（背离、RSI极端、MACD交叉等）
+            div_lines = [a for a in alerts if "背离" in a]
+
+            msg = f"📈 上证指数  {current:.2f}  {trend_desc}"
+            for a in div_lines:
+                msg += f"\n   {a}"
+            msg += f"\n   → {advice}"
+            self._alert(msg)
 
     def _index_trend_desc(self, prices: list[float], pre_close: float = 0) -> str:
         if len(prices) < 10:
@@ -2129,7 +2135,7 @@ class MarketStateMixin:
             direction = "持续下行"
         else:
             direction = "横盘震荡"
-        return f"{direction} 变幅{chg:+.2f}%"
+        return f"{direction} {chg:+.2f}%"
 
     def _index_tech_advice(self, alerts: list[str], st: dict) -> str:
         has_div_bottom = any("底背离" in a for a in alerts)
@@ -2143,22 +2149,22 @@ class MarketStateMixin:
         macd_cross = st.get("macd_cross")
 
         if has_div_bottom:
-            return "下跌动能衰竭，关注反转确认后可小仓位试探"
+            return "底背离，下跌动能衰竭，关注反转确认后可小仓位试探"
         if has_div_top:
-            return "上涨动能衰竭，建议减仓或观望，不宜追高"
+            return "顶背离，上涨动能衰竭，建议减仓或观望"
         if has_rsi_os and macd_cross == "golden":
             return "超卖+金叉共振，可考虑分批低吸"
         if has_rsi_ob and macd_cross == "death":
             return "超买+死叉共振，建议减仓避险"
         if has_rsi_os:
-            return "超卖区，关注企稳信号，不宜追空"
+            return "超卖区，关注企稳信号"
         if has_rsi_ob:
-            return "超买区，追高风险大，建议等回调"
+            return "超买区，追高风险大，等回调"
         if macd_cross == "golden":
-            return "MACD金叉，多头信号，可关注买入机会"
+            return "MACD金叉，多头信号"
         if macd_cross == "death":
-            return "MACD死叉，空头信号，建议观望为主"
-        return "技术信号出现，结合大盘环境和板块走势综合判断"
+            return "MACD死叉，空头信号"
+        return ""  # 纯KDJ/J值波动，不推送
 
     # ━━━━━━━━ 指数分析 ━━━━━━━━
 
@@ -2180,6 +2186,20 @@ class MarketStateMixin:
         except Exception:
             pass
         return (0, 0, 0)
+
+    def _get_index_ma60(self) -> float:
+        """获取上证指数 MA60。"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            row = conn.execute(
+                """SELECT ma60 FROM stock_basic
+                   WHERE stock_code='000001'
+                   ORDER BY trade_date DESC LIMIT 1"""
+            ).fetchone()
+            conn.close()
+            return (row[0] or 0) if row else 0
+        except Exception:
+            return 0
 
     def _analyze_index_fluctuation(self) -> str | None:
         """大盘波动≥0.5%时，调用AI预判走势。"""

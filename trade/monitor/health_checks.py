@@ -298,20 +298,6 @@ def _cross_validate_preclose_stability(ctx: CheckContext) -> list[str]:
     return []
 
 
-def _cross_validate_direction(ctx: CheckContext) -> list[str]:
-    if not ctx.sector_stats or len(ctx.index_prices) < 2:
-        return []
-    market_avg = sum(
-        s.get("change_pct", 0) for s in ctx.sector_stats.values()
-    ) / max(len(ctx.sector_stats), 1)
-    index_dir = 1 if ctx.index_prices[-1] > ctx.index_prices[0] else -1
-    sector_dir = 1 if market_avg > 0 else -1
-    if index_dir != sector_dir and abs(market_avg) > 0.005:
-        a = lambda d: "↑" if d > 0 else "↓"
-        return [f"⚠️ 方向背离: 上证{a(index_dir)} 板块{a(sector_dir)} ({market_avg:+.4f})"]
-    return []
-
-
 def _cross_validate_market_value(ctx: CheckContext) -> list[str]:
     if not ctx.positions:
         return []
@@ -496,14 +482,6 @@ def _scan_count_monotonic(ctx: CheckContext) -> list[str]:
     return []
 
 
-def _index_prices_length(ctx: CheckContext) -> list[str]:
-    expected = ctx.scan_count
-    actual = len(ctx.index_prices)
-    if expected > 10 and actual > 0 and abs(expected - actual) > 5:
-        return [f"⚠️ 序列长度异常: scan={expected} prices={actual} (差{abs(expected - actual)})"]
-    return []
-
-
 def _locked_volume_consistency(ctx: CheckContext) -> list[str]:
     total_locked = sum(getattr(p, "locked_volume", 0) for p in ctx.positions.values())
     if ctx.scan_count > 200 and total_locked > 0:
@@ -615,7 +593,6 @@ CHECKS = [
     # 5. 双路交叉验证
     _cross_validate_change_pct,
     _cross_validate_preclose_stability,
-    _cross_validate_direction,
     _cross_validate_market_value,
     _cross_validate_pnl,
     _cross_validate_index_high_low,
@@ -629,7 +606,6 @@ CHECKS = [
     _recompute_ema,
     # 9. 累积/跨轮
     _scan_count_monotonic,
-    _index_prices_length,
     _locked_volume_consistency,
     _sector_data_accumulating,
     _trade_date_stable,

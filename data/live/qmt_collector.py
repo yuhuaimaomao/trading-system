@@ -20,7 +20,7 @@ from system.qmt.client import QMTClient
 logger = logging.getLogger(__name__)
 
 PORT = 15555
-FETCH_INTERVAL = 60  # 秒
+# 采集循环不停轮询，select 超时 2s，无 watcher 连接时不停拉取
 MORNING_START = dt_time(9, 25)
 MORNING_END = dt_time(11, 30)
 AFTERNOON_START = dt_time(13, 0)
@@ -33,7 +33,6 @@ class QMTCollector:
     def __init__(self):
         self.db_path = settings.DATABASE_PATH
         self._trade_date = datetime.now().strftime("%Y-%m-%d")
-        self._last_fetch_ts: float = 0
         self._running = True
 
         # DB migration
@@ -251,6 +250,7 @@ class QMTCollector:
         """取 QMT 数据 → push socket → write DB。"""
         t0 = time.time()
         now_iso = datetime.now().isoformat(timespec="seconds")
+        now_ts = time.time()  # epoch 浮点，watcher DB 恢复用
         pushed_market = False
         pushed_index = False
 
@@ -350,22 +350,26 @@ class QMTCollector:
         )
 
     def run(self):
-        """主循环 — select 多路复用。"""
+        """主循环 — 持续采集，拿到数据立刻推送。"""
         while self._running:
+            # 午休暂停
             if not self._in_trading_hours():
                 time.sleep(5)
                 continue
 
             self._trade_date = datetime.now().strftime("%Y-%m-%d")
 
+            # 拉取全市场行情 + 指数 → 写 DB（Watcher 连着时同步推送）
+            self._fetch_and_push()
+
+            # select 处理连接事件，超时设为 2s（快速轮询）
             reads = [self._server]
             if self._watcher_sock:
                 reads.append(self._watcher_sock)
 
             try:
-                ready, _, _ = select.select(reads, [], [], 60.0)
+                ready, _, _ = select.select(reads, [], [], 2.0)
             except (ValueError, OSError):
-                # socket 已关闭
                 time.sleep(1)
                 continue
 
@@ -375,12 +379,6 @@ class QMTCollector:
                 elif fd is self._watcher_sock:
                     self._check_watcher_disconnect(fd)
 
-            # 定时 fetch
-            now = time.time()
-            if now - self._last_fetch_ts >= FETCH_INTERVAL:
-                self._fetch_and_push()
-                self._last_fetch_ts = time.time()
-
         self._close_watcher()
         self._server.close()
         logger.info("QMT Collector 退出")
@@ -389,16 +387,28 @@ class QMTCollector:
         """前台运行，盘后休眠。"""
         logger.info("QMT Collector 启动")
         self._init_klines()
+        _was_trading = False
 
         while True:
-            if self._in_trading_hours():
+            in_trading = self._in_trading_hours()
+            if in_trading:
                 self._trade_date = datetime.now().strftime("%Y-%m-%d")
+                _was_trading = True
                 try:
                     self.run()
                 except Exception as e:
                     logger.error(f"主循环异常: {e}", exc_info=True)
                     time.sleep(5)
+            elif _was_trading:
+                # 盘中运行过 → 刚收盘 → 拉最后一次数据落盘，退出
+                logger.info("已收盘，拉取最后一次数据...")
+                self._trade_date = datetime.now().strftime("%Y-%m-%d")
+                try:
+                    self._fetch_and_push()
+                except Exception as e:
+                    logger.error(f"收盘数据拉取失败: {e}")
+                logger.info("QMT Collector 退出")
+                return
             else:
-                # 盘后重置，等下一个交易日
-                self._last_fetch_ts = 0
-                time.sleep(30)
+                # 盘前启动 → 等开盘
+                time.sleep(10)

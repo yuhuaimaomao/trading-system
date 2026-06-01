@@ -79,6 +79,9 @@ _POSITION_COLS = frozenset(
         "market_value",
         "pnl",
         "pnl_pct",
+        "pre_close",
+        "daily_pnl",
+        "holding_days",
         "entry_date",
         "locked_volume",
         "trade_date",
@@ -177,6 +180,13 @@ _IMPROVEMENT_COLS = frozenset(
         "created_at",
     }
 )
+
+
+def _round_val(v):
+    """浮点数统一保留 3 位小数。"""
+    if isinstance(v, float):
+        return round(v, 3)
+    return v
 
 
 def _validate_cols(cols: frozenset, keys):
@@ -337,12 +347,35 @@ class TradeRepository:
 
     def insert_snapshot(self, snap_dict: dict):
         _validate_cols(_SNAPSHOT_COLS, snap_dict.keys())
+        vals = [_round_val(v) for v in snap_dict.values()]
         with self._conn() as conn:
             cols = ", ".join(snap_dict.keys())
             placeholders = ", ".join(["?" for _ in snap_dict])
-            sql = f"INSERT OR REPLACE INTO trade_portfolio_snapshots ({cols}) VALUES ({placeholders})"
-            conn.execute(sql, list(snap_dict.values()))
+            sql = f"INSERT INTO trade_portfolio_snapshots ({cols}) VALUES ({placeholders})"
+            conn.execute(sql, vals)
             conn.commit()
+
+    def get_first_snapshot_of_day(self, trade_date: str, account: str) -> dict | None:
+        """获取当日最早快照。"""
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT {self._SNAPSHOT_ALL_COLS} FROM trade_portfolio_snapshots "
+                f"WHERE trade_date=? AND account=? ORDER BY id ASC LIMIT 1",
+                (trade_date, account),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_snapshot_before(self, trade_date: str, account: str) -> dict | None:
+        """获取指定日期之前的最新快照（用于取昨日收盘资产）。"""
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT {self._SNAPSHOT_ALL_COLS} FROM trade_portfolio_snapshots "
+                f"WHERE trade_date < ? AND account=? ORDER BY id DESC LIMIT 1",
+                (trade_date, account),
+            ).fetchone()
+            return dict(row) if row else None
 
     def get_snapshots(self, start: str = None, end: str = None) -> list[dict]:
         with self._conn() as conn:
@@ -402,7 +435,7 @@ class TradeRepository:
     _POSITION_ALL_COLS = (
         "id, trade_date, account, stock_code, stock_name, volume, "
         "avg_cost, current_price, market_value, pnl, pnl_pct, "
-        "entry_date, locked_volume, created_at"
+        "pre_close, daily_pnl, holding_days, entry_date, locked_volume, created_at"
     )
 
     def get_latest_snapshot(self, account: str) -> dict | None:
@@ -427,6 +460,23 @@ class TradeRepository:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_latest_positions(self, account: str) -> list[dict]:
+        """查最近一个交易日有数据的持仓（今天没数据时 fallback）。"""
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            latest_date = conn.execute(
+                "SELECT MAX(trade_date) FROM trade_portfolio_positions WHERE account=?",
+                (account,),
+            ).fetchone()
+            if not latest_date or not latest_date[0]:
+                return []
+            rows = conn.execute(
+                f"""SELECT {self._POSITION_ALL_COLS} FROM trade_portfolio_positions
+                   WHERE account=? AND trade_date=? ORDER BY stock_code""",
+                (account, latest_date[0]),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def insert_positions(self, trade_date: str, account: str, positions: list[dict]):
         """批量保存持仓明细（按日按账户覆盖）。"""
         with self._conn() as conn:
@@ -441,9 +491,10 @@ class TradeRepository:
                 _validate_cols(_POSITION_COLS, p.keys())
                 cols = ", ".join(p.keys())
                 placeholders = ", ".join(["?" for _ in p])
+                vals = [_round_val(v) for v in p.values()]
                 conn.execute(
                     f"INSERT INTO trade_portfolio_positions ({cols}) VALUES ({placeholders})",
-                    list(p.values()),
+                    vals,
                 )
             conn.commit()
 

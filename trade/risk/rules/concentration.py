@@ -12,12 +12,16 @@ def check_concentration(
     max_sector: float = 0.70,
 ) -> tuple[bool, str]:
     """检查单票和板块集中度"""
+    # 计算加仓后的总占比（已有持仓 + 本次买入）
+    current_pct = 0.0
     if stock_code in portfolio.positions:
-        return True, ""
+        current_pct = portfolio.positions[stock_code].market_value / max(portfolio.total_value, 1)
 
-    # 单票检查
-    if target_pct > max_single:
-        return False, f"单票 {target_pct:.0%} 超上限 {max_single:.0%}"
+    new_total_pct = current_pct + target_pct
+
+    # 单票检查（含加仓场景）
+    if new_total_pct > max_single:
+        return False, f"单票 {new_total_pct:.0%} 超上限 {max_single:.0%}"
 
     # 板块检查
     if sector_code:

@@ -75,11 +75,11 @@ def get_task_logger(task_name: str, trade_date: str = None) -> logging.Logger:
     fh.setFormatter(detailed_fmt)
     logger.addHandler(fh)
 
-    if os.isatty(1):  # 终端才输出，避免管道 tee 双写
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
-        ch.setFormatter(detailed_fmt)
-        logger.addHandler(ch)
+    # 始终添加 StreamHandler → stderr，被重定向捕获后写入日志文件
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(detailed_fmt)
+    logger.addHandler(ch)
 
     return logger
 
@@ -154,3 +154,45 @@ def get_core_logger(name: str, trade_date: str = None) -> logging.Logger:
 def get_system_logger(name: str) -> logging.Logger:
     """基础设施日志（保持兼容）"""
     return get_core_logger(name)
+
+
+def setup_root_logger(task_name: str, trade_date: str = None):
+    """将 root logger 统一指向任务日志文件。
+
+    调用一次后，所有 logging.getLogger(__name__) 的日志都会自动写入
+    tasks/{task_name}.log。必须在 stdout 重定向前调用。
+    """
+    if trade_date is None:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    log_dir = Path(LOGS_DIR) / trade_date / "tasks"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = str(log_dir / f"{task_name}.log")
+
+    fmt = logging.Formatter(
+        "%(asctime)s.%(msecs)03d - %(levelname)s - [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    for h in root.handlers:
+        if isinstance(h, logging.FileHandler) and h.baseFilename == log_file:
+            return  # 已安装，幂等
+
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+
+    # 确保 trade / data / system 层级不阻塞冒泡
+    for name in ("trade", "data", "system"):
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.DEBUG)
+        lg.propagate = True
+
+    # 已有的 StreamHandler 保留但设为 WARNING+
+    for h in root.handlers:
+        if isinstance(h, logging.StreamHandler):
+            h.setLevel(logging.WARNING)

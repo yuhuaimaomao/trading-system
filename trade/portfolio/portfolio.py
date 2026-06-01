@@ -92,7 +92,7 @@ class Portfolio:
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.positions: Dict[str, Position] = {}
-        self._peak_value = initial_cash
+        self._peak_value = 0.0  # 初始为0，由首轮 update_prices/snapshot 设为首个净值
         self._prev_total = initial_cash
         self.snapshots: List[PortfolioSnapshot] = []
         self.trade_log: List[dict] = []
@@ -103,9 +103,14 @@ class Portfolio:
 
     @property
     def drawdown(self) -> float:
-        if self._peak_value == 0:
-            return 0.0
-        return (self._peak_value - self.total_value) / self._peak_value
+        """日内回撤 = Σ((日内最高 - 现价) × 股数)，由 _persist_state 计算"""
+        total = 0.0
+        for pos in self.positions.values():
+            day_high = getattr(pos, "day_high", 0) or pos.current_price
+            dd = (day_high - pos.current_price) * pos.volume
+            if dd > 0:
+                total += dd
+        return total
 
     @property
     def daily_pnl(self) -> float:
@@ -184,8 +189,8 @@ class Portfolio:
             old_total_cost = old.avg_cost * old.volume
             new_total_cost = price * volume + commission
             old.volume += volume
-            old.avg_cost = (
-                (old_total_cost + new_total_cost) / old.volume
+            old.avg_cost = round(
+                (old_total_cost + new_total_cost) / old.volume, 2
                 if old.volume > 0
                 else price
             )
@@ -194,9 +199,9 @@ class Portfolio:
             old.locked_volume += volume  # 当日加仓部分 T+1 锁定
             # entry_date 保持最早的
         else:
-            actual_avg_cost = (
-                (price * volume + commission) / volume if volume > 0 else price
-            )
+            actual_avg_cost = round(
+                (price * volume + commission) / volume, 2
+            ) if volume > 0 else price
             pos = Position(
                 stock_code=stock_code,
                 stock_name=stock_name,

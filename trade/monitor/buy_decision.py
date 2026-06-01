@@ -174,15 +174,15 @@ class BuyDecisionMixin:
             j = intra["kdj_j"]
             vs_ma5 = intra["price_vs_ma5"]
 
-            intra_parts = [f"日内RSI6={r6:.0f} RSI12={r12:.0f}"]
+            intra_parts = [f"RSI6={r6:.0f} RSI12={r12:.0f}"]
             intra_parts.append(f"MACD={macd_dir}(bar={intra['macd_bar']:.2f})")
             intra_parts.append(
                 f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={j:.1f}"
             )
             if vs_ma5 != 0:
                 side = "上" if vs_ma5 > 0 else "下"
-                intra_parts.append(f"价在日内MA5{side}{abs(vs_ma5):.1f}%")
-            parts.append(f"📉 日内: {' | '.join(intra_parts)}")
+                intra_parts.append(f"价在MA5{side}{abs(vs_ma5):.1f}%")
+            parts.append(f"日内: {' | '.join(intra_parts)}")
 
         # 7. 盘口 + 大单
         ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
@@ -598,6 +598,31 @@ class BuyDecisionMixin:
                 if near_support and not reject_reasons:
                     # 在支撑位附近买入，安全性较高
                     size_mul = min(1.0, size_mul * 1.2)
+        except Exception:
+            pass
+
+        # 3b. 日线级指标（KDJ/RSI — 从 stock_indicators 读昨日收盘数据）
+        try:
+            conn = sqlite3.connect(self.db_path)
+            daily = conn.execute(
+                """SELECT rsi6, rsi12, kdj_k, kdj_d, kdj_j, ma5, ma10, ma20
+                   FROM stock_indicators WHERE stock_code=? AND ma5 > 0
+                   ORDER BY trade_date DESC LIMIT 1""",
+                (code,),
+            ).fetchone()
+            conn.close()
+            if daily:
+                d_rsi6, d_rsi12, d_k, d_d, d_j, d_ma5, d_ma10, d_ma20 = daily
+                if d_j is not None and d_j > 100:
+                    reject_reasons.append(f"日线KDJ极度超买(J={d_j:.0f})")
+                elif d_j is not None and d_j > 85:
+                    warn_reasons.append(f"日线KDJ超买(J={d_j:.0f})")
+                    size_mul *= 0.6
+                if d_rsi6 is not None and d_rsi6 >= 80:
+                    reject_reasons.append(f"日线RSI6超买({d_rsi6:.0f})，不宜追高")
+                elif d_rsi6 is not None and d_rsi6 >= 70:
+                    warn_reasons.append(f"日线RSI6偏高({d_rsi6:.0f})")
+                    size_mul *= 0.7
         except Exception:
             pass
 
@@ -1018,19 +1043,18 @@ class BuyDecisionMixin:
         if shift_pct < 2.0:
             return new_min, new_max, ""
 
-        # 构建告警理由
-        parts = [
-            f"原区间 {buy_min:.2f}~{buy_max:.2f} → 修正 {new_min:.2f}~{new_max:.2f}"
-        ]
-        parts.append(f"🔮 {adj['reason']}")
+        # 构建告警理由（分行，不拼一行）
+        zone_str = f"原区间 {buy_min:.2f}~{buy_max:.2f} → 修正 {new_min:.2f}~{new_max:.2f}"
+        market_str = adj.get("reason", "")
+        parts = [zone_str, market_str]
 
         if in_new_zone:
-            parts.append("→ 价格已进入修正区间")
+            parts.append("价格已进入修正区间")
         elif below_new_zone:
             below = (new_min - price) / price * 100
-            parts.append(f"→ 价格低于修正区间 {below:.1f}%")
+            parts.append(f"价格低于修正区间 {below:.1f}%")
 
-        reason = " | ".join(parts)
+        reason = "\n   ".join(parts)
         return new_min, new_max, reason
 
     # ======================== 第一层：信号触发 ========================
@@ -1137,14 +1161,22 @@ class BuyDecisionMixin:
             # ━━━ 高于买入区 — 预测性接近 + 板块走强提醒 ━━━
             if above_zone:
                 above_pct = (price - buy_max) / buy_max * 100
+                logger.info(
+                    f"买入评估 [{code} {name}] 高于买入区 {above_pct:+.1f}% "
+                    f"价格{price:.2f} 区间{buy_min:.2f}~{buy_max:.2f} 板块{trend}"
+                )
 
                 # 情景引擎：市场预测回调 + 距买入区 < 3% → 提前预告准备入场
+                # 但如果预判是死猫跳/恐慌，回调不可靠，不提示买入
                 if above_pct <= 3.0:
                     outlook = getattr(self, "_scenario_prev_outlook", None)
                     if (
                         outlook
                         and outlook.primary.direction == "bearish"
                         and outlook.urgency in ("critical", "act")
+                        and "死猫跳" not in outlook.primary.label
+                        and "恐慌" not in outlook.primary.label
+                        and "下跌" not in outlook.primary.label
                     ):
                         approach_key = f"approach:{c['alert_key']}"
                         last_scan = alert_state.get(approach_key, 0)
@@ -1154,21 +1186,55 @@ class BuyDecisionMixin:
                                 f"🔔 {tag}买入区接近 — {code} {name}\n"
                                 f"   现价: {price:.2f}  距区间: {above_pct:.1f}%  "
                                 f"区间: {buy_min:.2f}~{buy_max:.2f}\n"
-                                f"   止损: {sl:.2f}  止盈: {tp:.2f}{trend}\n"
+                                f"   止损: {sl:.2f}  止盈: {tp:.2f}\n"
+                                f"   板块:{trend}\n"
                                 f"   🔮 {outlook.primary.label} ({outlook.primary.probability:.0%})"
-                                f"  → 市场预测回调，准备入场"
+                                f"  → 市场回调中，关注买入区"
                             )
                         continue
 
-                if "持续走强" in trend:
+                # 追高提醒：仅板块走强时才有追的价值，弱板块涨了也不跟
+                is_sector_strong = "持续走强" in trend or ("走强" in trend and "弱" not in trend)
+                is_sector_weak = any(w in trend for w in ("持续走弱", "弱于大盘", "普跌", "横盘"))
+                if is_sector_strong and not is_sector_weak:
                     alert_state[c["alert_key"]] = (price, True)
-                    above_pct = (price - buy_max) / buy_max * 100
-                    self._alert(
-                        f"📈 {tag}追高提醒 — {code} {name}\n"
-                        f"   现价: {price:.2f}  高于区间上限: {buy_max:.2f}  超出: {above_pct:+.1f}%\n"
-                        f"   止损: {sl:.2f}  止盈: {tp:.2f}{trend}\n"
-                        f"   → 不自动追高，建议判断是否上调买入区"
-                    )
+                    chase_key = f"chase:{c['alert_key']}"
+                    last_chase = alert_state.get(chase_key, 0)
+                    if self._scan_count - last_chase >= 15:
+                        alert_state[chase_key] = self._scan_count
+                        above_pct = (price - buy_max) / buy_max * 100
+                        # 日内技术指标（不含买入建议，只给数据）
+                        intra_str = ""
+                        intra = self._get_intraday_indicators(code)
+                        if intra["available"]:
+                            r6, r12 = intra["rsi6"], intra["rsi12"]
+                            macd_dir = "多头" if intra["macd_direction"] == "bullish" else "空头" if intra["macd_direction"] == "bearish" else "震荡"
+                            intra_parts = [f"RSI6={r6:.0f} RSI12={r12:.0f}"]
+                            intra_parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
+                            intra_parts.append(f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}")
+                            vs_ma5 = intra["price_vs_ma5"]
+                            if vs_ma5 != 0:
+                                side = "上" if vs_ma5 > 0 else "下"
+                                intra_parts.append(f"价在MA5{side}{abs(vs_ma5):.1f}%")
+                            intra_str = f"\n   日内: {' | '.join(intra_parts)}"
+
+                        ai_judgment = self._ai_chase_opinion(
+                            code, name, price, buy_min, buy_max, sl, tp, trend, above_pct
+                        )
+                        if ai_judgment:
+                            if not hasattr(self, "_ai_chase_cache"):
+                                self._ai_chase_cache = {}
+                            self._ai_chase_cache[code] = ai_judgment
+                        ai_block = f"\n   🤖 {ai_judgment}" if ai_judgment else ""
+                        self._alert(
+                            f"📈 追高提醒 — {code} {name}\n"
+                            f"   现价 {price:.2f}  买入区 {buy_min:.2f}~{buy_max:.2f}  超出 {above_pct:+.1f}%\n"
+                            f"   止损 {sl:.2f}  止盈 {tp:.2f}\n"
+                            f"   板块 {trend}"
+                            f"{intra_str}\n"
+                            f"   ─────────────────────────"
+                            f"{ai_block}"
+                        )
                 continue
 
             if not in_zone and not below_zone:
@@ -1176,15 +1242,20 @@ class BuyDecisionMixin:
 
             # ━━━ 低于买入区 ━━━
             if below_zone and not in_zone:
+                below_pct = (buy_min - price) / buy_min * 100
                 below_action, below_reason, below_mul = self._evaluate_below_zone(
                     code, price, buy_min, buy_max
                 )
 
                 if below_action == "abandon":
+                    logger.info(
+                        f"买入决策 [{code} {name}] 放弃 低于买入区{below_pct:.1f}% → {below_reason}"
+                    )
                     alert_state[c["alert_key"]] = (price, True)
                     self._alert(
                         f"❌ {tag}信号放弃 — {code} {name}\n"
-                        f"   现价: {price:.2f}  低于区间: {buy_min:.2f}~{buy_max:.2f}{trend}\n"
+                        f"   现价: {price:.2f}  低于区间: {buy_min:.2f}~{buy_max:.2f}\n"
+                        f"   板块:{trend}\n"
                         f"   → {below_reason}"
                     )
                     if on_abandon:
@@ -1192,6 +1263,9 @@ class BuyDecisionMixin:
                     continue
 
                 elif below_action == "watching":
+                    logger.info(
+                        f"买入决策 [{code} {name}] 观察 低于买入区{below_pct:.1f}% → {below_reason}"
+                    )
                     continue
 
                 else:
@@ -1206,7 +1280,7 @@ class BuyDecisionMixin:
                         f"   板块:{trend}\n"
                         f"   ─────────────────────────\n"
                         f"{context}\n"
-                        f"   📐 {below_reason}  模拟盘减仓至 {below_mul:.0%}{market_note}"
+                        f"   📐 {below_reason}  单票仓位 {settings.DEFAULT_POSITION_PCT * below_mul:.1%}{market_note}"
                     )
                     if not paper_full and market_ok:
                         self._execute_paper_buy(
@@ -1237,7 +1311,8 @@ class BuyDecisionMixin:
                 market_advice = regime_alert_msg or self._get_market_risk_advice()
                 self._alert(
                     f"⏸️ {tag}大盘风险 — {code} {name}\n"
-                    f"   现价: {price:.2f}  买入区: {buy_min:.2f}~{buy_max:.2f}{trend}\n"
+                    f"   现价: {price:.2f}  买入区: {buy_min:.2f}~{buy_max:.2f}\n"
+                    f"   板块:{trend}\n"
                     f"   → {market_advice}"
                 )
                 continue
@@ -1267,7 +1342,8 @@ class BuyDecisionMixin:
                 alert_state[c["alert_key"]] = (price, True)
                 self._alert(
                     f"⏸️ {tag}暂缓买入 — {code} {name}\n"
-                    f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}{trend}\n"
+                    f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}\n"
+                    f"   板块:{trend}\n"
                     f"   → {entry_skip_reason}"
                 )
                 continue
@@ -1276,22 +1352,60 @@ class BuyDecisionMixin:
                 alert_state[c["alert_key"]] = (price, True)
                 self._alert(
                     f"🚫 涨停无法买入 — {code} {name}\n"
-                    f"   涨停价: {self._limit_cache.get(code, {}).get('limit_up', 0):.2f}{trend}\n"
+                    f"   涨停价: {self._limit_cache.get(code, {}).get('limit_up', 0):.2f}\n"
+                    f"   板块:{trend}\n"
                     f"   → 封涨停板，不建议排板"
                 )
                 continue
 
-            context = self._analyze_buy_context(code, price, buy_min, buy_max)
-            alert_state[c["alert_key"]] = (price, True)
-
             decision_allowed, decision_reason, size_mul = self._evaluate_buy_decision(
                 code, price, buy_min, buy_max
             )
-            decision_line = ""
+
+            alert_state[c["alert_key"]] = (price, True)
+
             if not decision_allowed:
-                decision_line = f"\n   ⛔ 模拟盘跳过: {decision_reason}"
-            elif size_mul < 1.0:
-                decision_line = f"\n   ⚠️ 模拟盘减仓至 {size_mul:.0%}: {decision_reason}"
+                # 进入买入区但系统拒绝 → 推送拒绝理由，不含买入建议
+                logger.info(
+                    f"买入决策 [{code} {name}] 拒绝 价格{price:.2f} 区间{buy_min:.2f}~{buy_max:.2f} → {decision_reason}"
+                )
+                # 日内技术指标
+                intra_str = ""
+                intra = self._get_intraday_indicators(code)
+                if intra["available"]:
+                    macd_dir = "多头" if intra["macd_direction"] == "bullish" else "空头" if intra["macd_direction"] == "bearish" else "震荡"
+                    parts = [f"RSI6={intra['rsi6']:.0f} RSI12={intra['rsi12']:.0f}"]
+                    parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
+                    parts.append(f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}")
+                    intra_str = f"\n   日内: {' | '.join(parts)}"
+                # 回落至买入区但被系统拒绝 → AI 针对拒绝理由做二判
+                ai_judgment = self._ai_chase_opinion(
+                    code, name, price, buy_min, buy_max, sl, tp, trend,
+                    (price - buy_max) / buy_max * 100,
+                    reject_reason=decision_reason
+                )
+                ai_line = f"\n   ─────────────────────────\n   🤖 {ai_judgment}" if ai_judgment else ""
+                self._alert(
+                    f"⏸️ 暂不买入 — {code} {name}\n"
+                    f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}  止损: {sl:.2f}  止盈: {tp:.2f}\n"
+                    f"   板块:{trend}{intra_str}\n"
+                    f"   ⛔ {decision_reason}"
+                    f"{ai_line}"
+                )
+                continue
+
+            context = self._analyze_buy_context(code, price, buy_min, buy_max)
+
+            decision_line = ""
+            if size_mul < 1.0:
+                decision_line = f"\n   ⚠️ 单票仓位 {settings.DEFAULT_POSITION_PCT * size_mul:.1%}: {decision_reason}"
+                logger.info(
+                    f"买入决策 [{code} {name}] 减仓 价格{price:.2f} 仓位{settings.DEFAULT_POSITION_PCT * size_mul:.1%} → {decision_reason}"
+                )
+            else:
+                logger.info(
+                    f"买入决策 [{code} {name}] 全仓 价格{price:.2f} 区间{buy_min:.2f}~{buy_max:.2f}"
+                )
 
             self._alert(
                 f"🔴 {tag}买入信号 — {code} {name}\n"
@@ -1394,6 +1508,17 @@ class BuyDecisionMixin:
         regime: MarketRegime | bool | None。size_mul 已由调用方修正过。
         大盘 stop_mult 用于动态调整止损宽度。
         """
+        # 名额质量门控：名额越少要求越高，防止低质量信号占坑
+        filled = len(self.paper_account.positions)
+        remaining = settings.MAX_POSITIONS - filled
+        min_mul = {0: 0.99, 1: 0.80, 2: 0.65, 3: 0.55, 4: 0.50}.get(remaining, 0.50)
+        if size_mul < min_mul:
+            logger.info(
+                f"买入决策 [{code} {name}] 放弃 名额{filled}/{settings.MAX_POSITIONS} "
+                f"质量不足 size_mul={size_mul:.0%} < {min_mul:.0%}"
+            )
+            return
+
         # 兼容旧版 bool market_ok
         if isinstance(regime, bool):
             if not regime:

@@ -83,6 +83,8 @@ def ensure_tables():
             market_value REAL,
             pnl REAL,
             pnl_pct REAL,
+            pre_close REAL DEFAULT 0,
+            daily_pnl REAL DEFAULT 0,
             entry_date TEXT DEFAULT '',
             created_at TEXT,
             UNIQUE(trade_date, account, stock_code)
@@ -108,6 +110,29 @@ def ensure_tables():
             ON trade_signals(trade_date);
         CREATE INDEX IF NOT EXISTS idx_trade_orders_date
             ON trade_orders(trade_date);
+
+        -- 实时数据采集表（watcher 盘中容灾恢复用）
+        CREATE TABLE IF NOT EXISTS market_snapshots (
+            trade_date TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            code TEXT NOT NULL,
+            change_pct REAL DEFAULT 0,
+            price REAL DEFAULT 0,
+            amount REAL DEFAULT 0,
+            PRIMARY KEY (trade_date, ts, code)
+        );
+
+        CREATE TABLE IF NOT EXISTS index_snapshots (
+            trade_date TEXT NOT NULL,
+            ts REAL NOT NULL,
+            price REAL NOT NULL DEFAULT 0,
+            high REAL DEFAULT 0,
+            low REAL DEFAULT 0,
+            pre_close REAL DEFAULT 0,
+            change_pct REAL DEFAULT 0,
+            amount REAL DEFAULT 0,
+            PRIMARY KEY (trade_date, ts)
+        );
     """)
 
     conn.commit()

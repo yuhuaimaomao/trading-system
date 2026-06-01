@@ -67,6 +67,21 @@ class PositionRiskMixin:
             base_tp_lower = 1.0
             base_trail_tighten = 1.0
 
+        # 自动补全 _pos_meta（买入持久化失败等边缘情况可能导致缺条目）
+        for code, pos in self.paper_account.positions.items():
+            if code not in self._pos_meta:
+                self._pos_meta[code] = {
+                    "sl": 0,
+                    "tp": 0,
+                    "trailing_stop": 0.05,
+                    "highest_price": pos.current_price or 0,
+                    "sector": "",
+                    "score": 0,
+                    "signal_id": None,
+                }
+                logger.warning(f"自动补全缺失元数据: {code}")
+
+        t1_locked = 0
         for code, pos in list(self.paper_account.positions.items()):
             meta = self._pos_meta.get(code, {})
             sl = meta.get("sl", 0)
@@ -81,6 +96,8 @@ class PositionRiskMixin:
                 continue
 
             is_today_buy = pos.entry_date == self._trade_date
+            if is_today_buy:
+                t1_locked += 1
             trend = self._get_sector_trend(code)
             limit_down = self._is_limit_down(code, price)
             is_sector_weak = any(w in trend for w in ("持续走弱", "弱于大盘", "普跌"))
@@ -95,16 +112,30 @@ class PositionRiskMixin:
             if is_sector_accel_down:
                 sl_tighten *= 0.90
                 tp_lower *= 0.90
+                trail_tighten *= 0.90
             elif is_sector_weak:
                 sl_tighten *= 0.95
+                tp_lower *= 0.95
+                trail_tighten *= 0.95
 
             # 记录调整因子供健康检查独立重算验证
+            if code not in self._pos_meta:
+                self._pos_meta[code] = {}
             self._pos_meta[code]["_sl_tighten"] = sl_tighten
             self._pos_meta[code]["_tp_lower"] = tp_lower
             self._pos_meta[code]["_trail_tighten"] = trail_tighten
 
+            pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
+
             # T+1 前不触发止损止盈
-            if not is_today_buy:
+            if is_today_buy:
+                # 每30轮汇总输出一次，避免刷屏
+                if self._scan_count % 30 == 0:
+                    logger.info(
+                        f"持仓风控 [{code} {pos.stock_name}] T+1锁定 跳过止损止盈 "
+                        f"价格{price:.2f} 成本{pos.avg_cost:.2f} 盈亏{pnl_pct:+.1f}%"
+                    )
+            else:
                 # ── 止损：大盘/板块弱时收紧触发线 ──
                 triggered, effective_sl = should_stop_loss(
                     price, pos.avg_cost, sl, sl_tighten
@@ -174,7 +205,18 @@ class PositionRiskMixin:
 
             pos.update_price(price)
             if price > highest_price:
+                if code not in self._pos_meta:
+                    self._pos_meta[code] = {}
                 self._pos_meta[code]["highest_price"] = price
+
+        # 每10轮输出持仓风控摘要
+        if self._scan_count % 10 == 0:
+            total_positions = len(self.paper_account.positions)
+            logger.info(
+                f"持仓风控摘要 扫描#{self._scan_count} 持仓{total_positions}只 "
+                f"T+1锁定{t1_locked}只 可操作{total_positions - t1_locked}只 "
+                f"风险等级{risk_level}"
+            )
 
     def _check_retracement_stop(
         self,
@@ -296,7 +338,8 @@ class PositionRiskMixin:
 
         self._alert(
             f"{emoji} {stype}卖出 — {code} {name}\n"
-            f"   现价: {price:.2f}  触发: {trigger:.2f}  {pnl_label}: {chg:+.1f}%{extra_str}{trend}\n"
+            f"   现价: {price:.2f}  触发: {trigger:.2f}  {pnl_label}: {chg:+.1f}%{extra_str}\n"
+            f"   板块:{trend}\n"
             f"   📋 模拟盘已卖出"
         )
 
@@ -493,7 +536,14 @@ class PositionRiskMixin:
                 code, price, entry_price, sl, tp, is_today_buy
             )
             status_changed = new_status != watch["status"]
-            should_alert = scans_since >= 20 or status_changed
+            if status_changed:
+                logger.info(
+                    f"持仓监控 [{code} {name}] 状态变更 {watch['status']}→{new_status} "
+                    f"价格{price:.2f} 成本{entry_price:.2f} 盈亏{pnl_pct:+.1f}%"
+                )
+            # T+1 锁定仓位无法操作，拉大推送间隔 (60轮≈12分钟)
+            alert_interval = 60 if is_today_buy else 20
+            should_alert = scans_since >= alert_interval or status_changed
 
             # === 被套/深套：反弹减仓目标盯盘（每轮检查，不只等周期告警） ===
             if new_status in ("trapped", "deep_trapped") and entry_price > 0:
@@ -581,8 +631,44 @@ class PositionRiskMixin:
                 status_label = status_labels.get(new_status, new_status)
                 line = (
                     f"{emoji.get(new_status, '👀')} {code} {name}  现价: {price:.2f}  {day_label}  盈亏: {pnl_pct:+.1f}%\n"
-                    f"   止损: {sl:.2f}  止盈: {tp:.2f}{trend}"
+                    f"   止损: {sl:.2f}  止盈: {tp:.2f}\n"
+                    f"   板块:{trend}"
                 )
+                # 日内技术指标 + 方向预判
+                intra = self._get_intraday_indicators(code)
+                if intra["available"]:
+                    macd_dir = "多头" if intra["macd_direction"] == "bullish" else "空头" if intra["macd_direction"] == "bearish" else "震荡"
+                    parts = [f"RSI6={intra['rsi6']:.0f} RSI12={intra['rsi12']:.0f}"]
+                    parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
+                    parts.append(f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}")
+                    vs_ma5 = intra["price_vs_ma5"]
+                    if vs_ma5 != 0:
+                        side = "上" if vs_ma5 > 0 else "下"
+                        parts.append(f"价MA5{side}{abs(vs_ma5):.1f}%")
+                    line += f"\n   日内: {' | '.join(parts)}"
+
+                    # 短线方向预判
+                    j = intra["kdj_j"]
+                    r6 = intra["rsi6"]
+                    score = 0
+                    if intra["macd_direction"] == "bullish":
+                        score += 1
+                    elif intra["macd_direction"] == "bearish":
+                        score -= 1
+                    if r6 < 30:
+                        score += 1  # 超卖反弹预期
+                    elif r6 > 70:
+                        score -= 1
+                    if j < 20:
+                        score += 1
+                    elif j > 80:
+                        score -= 1
+                    if vs_ma5 > 0:
+                        score += 1
+                    elif vs_ma5 < 0:
+                        score -= 1
+                    bias = "偏多 ↑" if score >= 3 else "偏多" if score >= 1 else "偏空 ↓" if score <= -3 else "偏空" if score <= -1 else "震荡"
+                    line += f"\n   短线: {bias}"
 
                 if new_status == "deep_trapped":
                     exit_ctx = self._analyze_exit_context(

@@ -713,7 +713,7 @@ class TelegraphCollector:
 
     def _parse_ai_json(self, text: str) -> list:
         """解析 AI 返回 JSON，失败抛出 JSONDecodeError"""
-        return _json.loads(text)
+        return json.loads(text)
 
     def _repair_truncated_json(self, text: str) -> Optional[str]:
         """尝试修复因 max_tokens 截断导致的 JSON 不完整"""
@@ -753,8 +753,8 @@ class TelegraphCollector:
                         item.get("ai_summary", "")[:100],
                         item.get("ai_sentiment", "中性"),
                         item.get("ai_impact", "")[:100],
-                        _json.dumps(item.get("ai_stocks", []), ensure_ascii=False),
-                        _json.dumps(item.get("ai_sectors", []), ensure_ascii=False),
+                        json.dumps(item.get("ai_stocks", []), ensure_ascii=False),
+                        json.dumps(item.get("ai_sectors", []), ensure_ascii=False),
                         item.get("ai_importance", 0),
                         item.get("ai_direction", "其他"),
                         tid,

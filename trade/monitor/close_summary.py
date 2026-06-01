@@ -17,8 +17,79 @@ class CloseSummaryMixin:
     # ---- 入口（Watcher.run 收盘段调用） ----
 
     def _finalize_close(self):
-        """收盘后全部处理：DB 快照 + 信号过期 + Telegram 持仓汇总推送。"""
-        self.paper_account.snapshot(self._trade_date)
+        """收盘后全部处理：等 15:00 后拉收盘价 → DB 快照 + 信号过期 + Telegram 推送。"""
+        import time
+        from datetime import datetime as _dt, time as _time
+
+        # 等到 15:00:30 确保交易所收盘数据到位
+        close_time = _dt.combine(_dt.today(), _time(15, 0, 30))
+        wait = (close_time - _dt.now()).total_seconds()
+        if wait > 0:
+            logger.info(f"距收盘数据到位 {wait:.0f} 秒，等待中")
+            time.sleep(wait)
+
+        # 收盘后用 QMT 拉最新收盘价 + 日内最高价 + 昨收价刷新持仓
+        if self.qmt and self.paper_account.positions:
+            codes = list(self.paper_account.positions.keys())
+            try:
+                quotes = self.qmt.get_realtime(codes)
+                for code, pos in self.paper_account.positions.items():
+                    item = quotes.get(code)
+                    if item:
+                        new_price = item.get("lastPrice") or item.get("last_price") or item.get("price")
+                        if new_price:
+                            pos.update_price(float(new_price))
+                        day_high = item.get("high") or 0
+                        if day_high:
+                            pos.day_high = max(getattr(pos, "day_high", 0) or 0, float(day_high))
+                        pre_close = item.get("preClose") or item.get("pre_close") or 0
+                        if pre_close and not getattr(pos, "pre_close", 0):
+                            pos.pre_close = float(pre_close)
+                logger.info(f"收盘价刷新: {len(self.paper_account.positions)} 只持仓")
+            except Exception as e:
+                logger.warning(f"收盘价刷新失败: {e}")
+
+        # 用统一的 persist 落盘（持仓明细+快照，含 daily_pnl/drawdown）
+        self.paper_account._trade_date = self._trade_date
+        self.paper_account._persist_state()
+
+        # 把持仓+快照复制到明天，确保明天重启时能读到
+        from datetime import datetime as _dt, timedelta
+        next_date = (_dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            # 快照
+            snap = conn.execute(
+                """SELECT total_value, cash, market_value, total_pnl, position_count, sector_exposure
+                   FROM trade_portfolio_snapshots WHERE trade_date=? AND account='paper'
+                   ORDER BY id DESC LIMIT 1""",
+                (self._trade_date,),
+            ).fetchone()
+            if snap:
+                conn.execute(
+                    """INSERT INTO trade_portfolio_snapshots
+                       (trade_date, total_value, cash, market_value, daily_pnl, total_pnl,
+                        drawdown, position_count, sector_exposure, account, created_at)
+                       VALUES (?, ?, ?, ?, 0, ?, 0, ?, ?, 'paper', ?)""",
+                    (next_date, snap[0], snap[1], snap[2], snap[3], snap[4], snap[5], _dt.now().isoformat()),
+                )
+            # 持仓
+            for code, pos in self.paper_account.positions.items():
+                conn.execute("""INSERT OR REPLACE INTO trade_portfolio_positions
+                    (trade_date, account, stock_code, stock_name, volume, avg_cost, current_price,
+                     market_value, pnl, pnl_pct, pre_close, daily_pnl, holding_days, entry_date, locked_volume, created_at)
+                    VALUES (?, 'paper', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+                    (next_date, code, pos.stock_name, pos.volume, pos.avg_cost, pos.current_price,
+                     pos.market_value, pos.pnl, pos.pnl_pct,
+                     getattr(pos, 'pre_close', 0) or 0,
+                     (getattr(pos, 'holding_days', 0) or 0) + 1,
+                     pos.entry_date, 0,  # 新交易日锁仓清零
+                     _dt.now().isoformat()))
+            conn.commit()
+            conn.close()
+            logger.info(f"持仓已复制到 {next_date}，{len(self.paper_account.positions)} 只")
+        except Exception as e:
+            logger.warning(f"持仓复制失败: {e}")
 
         # 过期信号
         self._expire_signals()
@@ -38,34 +109,66 @@ class CloseSummaryMixin:
         except Exception as e:
             logger.warning(f"实盘收盘报告生成失败: {e}")
 
+    def _get_today_open_value(self) -> float:
+        """今日开盘基准 = 上个交易日最后一条快照的 total_value，无则初始资金。"""
+        try:
+            snap = self.repo.get_latest_snapshot_before(self._trade_date, "paper")
+            if snap:
+                return snap.get("total_value", 0) or 0
+        except Exception:
+            pass
+        return self.paper_account.initial_cash
+
     # ---- 模拟盘持仓汇总 ----
 
     def _build_paper_summary(self) -> str:
-        """生成模拟盘持仓汇总消息。"""
+        """生成模拟盘持仓汇总消息。所有金额从订单表+QMT实时算，不依赖内存状态。"""
         p = self.paper_account
-        total_pnl_pct = p.total_pnl / p.initial_cash * 100 if p.initial_cash > 0 else 0
+
+        # 现金从账户读取（买卖时实时更新+落库，重启从快照恢复）
+        cash = p.cash
+
+        # 持仓市值 + 回撤
+        drawdown = 0.0
+        total_mv = 0.0
+        pos_list = []
+        for code, pos in p.positions.items():
+            close = pos.current_price
+            cost = pos.avg_cost
+            vol = pos.volume
+            mv = close * vol
+            total_mv += mv
+            day_high = getattr(pos, "day_high", 0) or close
+            dd = (day_high - close) * vol
+            if dd > 0:
+                drawdown += dd
+            is_today = pos.entry_date == self._trade_date
+            daily_per_stock = (close - cost) * vol if is_today else 0
+            pos_list.append((code, pos.stock_name, close, cost, pos.pnl_pct, is_today, daily_per_stock))
+
+        total_value = cash + total_mv
+        total_pnl = total_value - p.initial_cash
+        total_pnl_pct = total_pnl / p.initial_cash * 100
+        position_ratio = total_mv / total_value * 100 if total_value > 0 else 0
+
+        # 当日盈亏 = 当前总资产 - 今日开盘总资产
+        daily_pnl = total_value - self._get_today_open_value()
+
         lines = [
             f"📊 收盘持仓报告  {self._trade_date}",
             "   ─────────────────────────",
-            f"   总资产: {p.total_value:,.0f}  现金: {p.cash:,.0f}  总盈亏: {p.total_pnl:+,.0f} ({total_pnl_pct:+.2f}%)",
-            f"   持仓: {len(p.positions)}/{settings.MAX_POSITIONS}  仓位: {p.position_ratio:.0%}  当日盈亏: {p.daily_pnl:+,.0f}  回撤: {p.drawdown:.2%}",
+            f"   总资产: {total_value:,.0f}  现金: {cash:,.0f}  总盈亏: {total_pnl:+,.0f} ({total_pnl_pct:+.2f}%)",
+            f"   持仓: {len(p.positions)}/{settings.MAX_POSITIONS}  仓位: {position_ratio:.0f}%  当日盈亏: {daily_pnl:+,.0f}  回撤: {drawdown:,.0f}",
         ]
 
-        if p.positions:
+        if pos_list:
             lines.append("")
-            lines.append("   📦 持仓明细")
-            for code, pos in p.positions.items():
-                emoji = _pnl_emoji(pos.pnl_pct)
+            for code, name, close, cost, pnl_pct, is_today, daily in pos_list:
+                emoji = _pnl_emoji(pnl_pct)
+                tag = f"当日 {daily:+,.0f}" if is_today else ""
                 lines.append(
-                    f"   {emoji} {code} {pos.stock_name}  现价: {pos.current_price:.2f}  "
-                    f"成本: {pos.avg_cost:.2f}  盈亏: {pos.pnl_pct:+.2%}"
-                )
-                meta = self._pos_meta.get(code, {})
-                sl = meta.get("sl", 0)
-                tp = meta.get("tp", 0)
-                lines.append(
-                    f"      止损: {sl:.2f}  止盈: {tp:.2f}  "
-                    f"市值: {pos.market_value:,.0f}"
+                    f"   {emoji} {code} {name}  收盘 {close:.2f}  "
+                    f"成本 {cost:.2f}  盈亏 {pnl_pct:+.2f}%  {tag}"
                 )
         else:
             lines.append("")
@@ -78,8 +181,10 @@ class CloseSummaryMixin:
             lines.append(f"   📝 今日成交 {len(filled)} 笔")
             for t in filled:
                 otype = "买入" if t["order_type"] == "buy" else "卖出"
+                code = t["stock_code"]
+                t_name = p.positions[code].stock_name if code in p.positions else code
                 lines.append(
-                    f"   📝 {otype} {t['stock_code']}  "
+                    f"   📝 {otype} {code} {t_name}  "
                     f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
                     f"金额: {t['filled_amount']:,.0f}"
                 )
@@ -124,8 +229,10 @@ class CloseSummaryMixin:
             lines.append(f"   📝 今日成交 {len(filled)} 笔")
             for t in filled:
                 otype = "买入" if t["order_type"] == "buy" else "卖出"
+                code = t["stock_code"]
+                t_name = p.positions[code].stock_name if code in p.positions else code
                 lines.append(
-                    f"   📝 {otype} {t['stock_code']}  "
+                    f"   📝 {otype} {code} {t_name}  "
                     f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
                     f"金额: {t['filled_amount']:,.0f}"
                 )
