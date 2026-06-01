@@ -58,13 +58,55 @@ class RuleAuditor:
         return [{"ts": r[0], "price": r[1]} for r in rows]
 
     def _get_close(self, trade_date: str, code: str) -> float | None:
+        """获取当日收盘价，优先级: trade_portfolio_positions > stock_basic > market_snapshots"""
         conn = sqlite3.connect(self.db_path)
+        # 1. 从持仓表取 current_price（收盘时更新过的）
         row = conn.execute(
-            "SELECT close FROM stock_basic WHERE trade_date=? AND stock_code=?",
+            "SELECT current_price FROM trade_portfolio_positions WHERE trade_date=? AND stock_code=? AND account='paper' LIMIT 1",
+            (trade_date, code),
+        ).fetchone()
+        if row and row[0]:
+            conn.close()
+            return float(row[0])
+        # 2. stock_basic
+        row = conn.execute(
+            "SELECT price FROM stock_basic WHERE trade_date=? AND stock_code=?",
+            (trade_date, code),
+        ).fetchone()
+        if row and row[0]:
+            conn.close()
+            return float(row[0])
+        # 3. market_snapshots 最新价格
+        row = conn.execute(
+            "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? ORDER BY ts DESC LIMIT 1",
             (trade_date, code),
         ).fetchone()
         conn.close()
         return float(row[0]) if row and row[0] else None
+
+    def _get_buy_pnl(self, trade_date: str, code: str) -> dict | None:
+        """从持仓表获取当日买入盈亏。"""
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT avg_cost, current_price, pnl_pct, volume FROM trade_portfolio_positions WHERE trade_date=? AND stock_code=? AND account='paper' LIMIT 1",
+            (trade_date, code),
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            return {"avg_cost": row[0], "close": row[1], "pnl_pct": row[2], "volume": row[3]}
+        return None
+
+    def _get_stop_fill(self, trade_date: str, code: str, after_ts: str) -> dict | None:
+        """查止损触发后是否实际成交。"""
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT filled_price, filled_volume, order_time FROM trade_orders WHERE trade_date=? AND stock_code=? AND order_type='sell' AND account='paper' AND order_time>=? ORDER BY order_time LIMIT 1",
+            (trade_date, code, after_ts),
+        ).fetchone()
+        conn.close()
+        if row:
+            return {"filled_price": row[0], "filled_volume": row[1], "order_time": row[2]}
+        return None
 
     # ---- 维度 1: 市场模式 ----
 
@@ -144,7 +186,7 @@ class RuleAuditor:
         conn = sqlite3.connect(self.db_path)
         cols = ["id", "trade_date", "ts", "decision_type", "stock_code", "decision_data", "created_at"]
 
-        # 买入触发
+        # 买入触发 — 优先用持仓表盈亏
         triggers = conn.execute(
             "SELECT * FROM watcher_decision_log WHERE trade_date=? AND decision_type='buy_trigger'",
             (trade_date,),
@@ -153,19 +195,30 @@ class RuleAuditor:
             log = dict(zip(cols, row))
             data = json.loads(log["decision_data"])
             code = log["stock_code"]
-            close = self._get_close(trade_date, code)
-            if close is None:
-                continue
-            price = data.get("price", 0)
-            pnl_pct = (close - price) / price * 100 if price else 0
+
+            # 优先从持仓表取实际盈亏
+            pos = self._get_buy_pnl(trade_date, code)
+            if pos:
+                pnl_pct = pos["pnl_pct"]
+                close = pos["close"]
+                price = pos["avg_cost"]  # 用实际成本价而非信号价
+            else:
+                close = self._get_close(trade_date, code)
+                if close is None:
+                    continue
+                price = data.get("price", 0)
+                pnl_pct = (close - price) / price * 100 if price else 0
+
             if pnl_pct < -3:
+                source = "持仓表" if pos else "收盘价推算"
                 findings.append({
                     "trade_date": trade_date, "finding_type": "buy_bad",
                     "severity": "P1", "stock_code": code,
                     "decision_log_ids": json.dumps([log["id"]]),
-                    "pattern_desc": f"买入 {code} 当日亏损 {pnl_pct:+.2f}%（仓位 {data.get('position_size', 0)}）",
+                    "pattern_desc": f"买入 {code} 当日亏损 {pnl_pct:+.2f}%（仓位 {data.get('position_size', 0)}，{source}）",
                     "evidence": json.dumps({"buy_price": price, "close": close,
-                        "pnl_pct": round(pnl_pct, 2), "entry_rule": data.get("entry_rule")}, ensure_ascii=False),
+                        "pnl_pct": round(pnl_pct, 2), "entry_rule": data.get("entry_rule"),
+                        "source": source}, ensure_ascii=False),
                 })
 
         # 买入过滤（反事实：如果买入会赚多少）
@@ -214,18 +267,35 @@ class RuleAuditor:
             trigger_price = data.get("trigger_price", 0)
             ts = log["ts"]
 
-            # 查后续30分钟该股走势（从 market_snapshots）
+            # 1. 先查是否实际成交
+            fill = self._get_stop_fill(trade_date, code, ts)
+            fill_info = {}
+            if fill:
+                fill_info = {"filled": True, "fill_price": fill["filled_price"],
+                             "fill_time": fill["order_time"],
+                             "slippage": round((fill["filled_price"] - trigger_price) / trigger_price * 100, 2)}
+
+            # 2. 查后续走势（优先 market_snapshots，fallback 持仓表收盘价）
             from_ts = datetime.fromisoformat(ts)
             to_ts = from_ts + timedelta(minutes=30)
+            from_str = str(from_ts.timestamp())
+            to_str = str(to_ts.timestamp())
             conn2 = sqlite3.connect(self.db_path)
             snaps = conn2.execute(
-                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND ts>=? AND ts<=? ORDER BY ts",
+                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? AND CAST(ts AS REAL)<=? ORDER BY ts",
                 (trade_date, code, from_ts.timestamp(), to_ts.timestamp()),
             ).fetchall()
             conn2.close()
 
             if len(snaps) < 3:
-                continue
+                # fallback: 持仓表收盘价（重复5次模拟价格序列）
+                pos = self._get_buy_pnl(trade_date, code)
+                if pos:
+                    close_val = pos["close"]
+                    snaps = [(close_val,) for _ in range(5)]
+                else:
+                    continue
+
             prices = [s[0] for s in snaps]
             post_low, post_high = min(prices), max(prices)
             rebound_pct = (post_high - trigger_price) / trigger_price * 100 if trigger_price else 0
@@ -237,7 +307,8 @@ class RuleAuditor:
                     "decision_log_ids": json.dumps([log["id"]]),
                     "pattern_desc": f"{code} 止损触发后反弹 {rebound_pct:+.2f}%，可能过早止损",
                     "evidence": json.dumps({"trigger_price": trigger_price, "post_low": post_low,
-                        "post_high": post_high, "rebound_pct": round(rebound_pct, 2)}, ensure_ascii=False),
+                        "post_high": post_high, "rebound_pct": round(rebound_pct, 2),
+                        **fill_info}, ensure_ascii=False),
                 })
             elif post_low < trigger_price * 0.97:
                 drop = abs((post_low - trigger_price) / trigger_price * 100)
@@ -247,7 +318,7 @@ class RuleAuditor:
                     "decision_log_ids": json.dumps([log["id"]]),
                     "pattern_desc": f"{code} 止损后继续跌 {drop:.1f}%，止损设太宽",
                     "evidence": json.dumps({"trigger_price": trigger_price, "post_low": post_low,
-                        "further_drop": round(drop, 2)}, ensure_ascii=False),
+                        "further_drop": round(drop, 2), **fill_info}, ensure_ascii=False),
                 })
         return findings
 
@@ -274,7 +345,7 @@ class RuleAuditor:
             to_ts = from_ts + timedelta(minutes=30)
             conn2 = sqlite3.connect(self.db_path)
             snaps = conn2.execute(
-                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND ts>=? AND ts<=? ORDER BY ts",
+                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? AND CAST(ts AS REAL)<=? ORDER BY ts",
                 (trade_date, code, from_ts.timestamp(), to_ts.timestamp()),
             ).fetchall()
             conn2.close()
@@ -363,7 +434,7 @@ class RuleAuditor:
             to_dt = from_dt + timedelta(minutes=30)
             conn2 = sqlite3.connect(self.db_path)
             end_rows = conn2.execute(
-                "SELECT sector_name, avg_change FROM sector_snapshots WHERE trade_date=? AND ts>=? AND ts<=? ORDER BY ts DESC LIMIT 20",
+                "SELECT sector_name, avg_change FROM sector_snapshots WHERE trade_date=? AND ts>=? AND ts<=? ORDER BY ts DESC",
                 (trade_date, from_dt.strftime("%Y-%m-%dT%H:%M:%S"), to_dt.strftime("%Y-%m-%dT%H:%M:%S")),
             ).fetchall()
             conn2.close()
