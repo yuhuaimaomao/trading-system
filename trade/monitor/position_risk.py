@@ -145,6 +145,13 @@ class PositionRiskMixin:
                     extra = ""
                     if sl_tighten < 1.0:
                         extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
+                    try:
+                        self._log_stop_trigger(stock_code=code, stype="止损",
+                            trigger_price=effective_sl, avg_cost=pos.avg_cost,
+                            pnl_pct=pnl_pct, risk_level=risk_level,
+                            sl_original=sl, sl_effective=effective_sl)
+                    except Exception:
+                        pass
                     self._handle_stop_signal(
                         key, code, pos.stock_name, "止损",
                         price, effective_sl, pos.avg_cost, trend, limit_down,
@@ -162,6 +169,12 @@ class PositionRiskMixin:
                     extra = ""
                     if tp_lower < 1.0:
                         extra = f"大盘{risk_level}→止盈下调至{effective_tp:.2f}"
+                    try:
+                        self._log_tp_trigger(stock_code=code, stype=stype,
+                            trigger_price=effective_tp, avg_cost=pos.avg_cost,
+                            pnl_pct=pnl_pct, tp_original=tp, tp_effective=effective_tp)
+                    except Exception:
+                        pass
                     self._handle_stop_signal(
                         key, code, pos.stock_name, stype,
                         price, effective_tp, pos.avg_cost, trend, limit_down,
@@ -175,6 +188,13 @@ class PositionRiskMixin:
                 )
                 if triggered:
                     key = f"{code}:trail"
+                    try:
+                        self._log_stop_trigger(stock_code=code, stype="移动止盈",
+                            trigger_price=trail_price, avg_cost=highest_price,
+                            pnl_pct=(price - pos.avg_cost) / pos.avg_cost if pos.avg_cost else 0,
+                            risk_level=risk_level, highest_price=highest_price)
+                    except Exception:
+                        pass
                     self._handle_stop_signal(
                         key, code, pos.stock_name, "移动止盈",
                         price, trail_price, highest_price, trend, limit_down,
@@ -193,6 +213,13 @@ class PositionRiskMixin:
                     risk_level=risk_level,
                 )
                 if retrace_signal:
+                    try:
+                        pnl_pct = (price - pos.avg_cost) / pos.avg_cost if pos.avg_cost else 0
+                        self._log_stop_trigger(stock_code=code, stype="利润回撤止盈",
+                            trigger_price=price, avg_cost=pos.avg_cost,
+                            pnl_pct=pnl_pct, risk_level=risk_level)
+                    except Exception:
+                        pass
                     self._handle_stop_signal(**retrace_signal)
                     continue
 
@@ -674,11 +701,23 @@ class PositionRiskMixin:
                     exit_ctx = self._analyze_exit_context(
                         code, price, entry_price, trend
                     )
+                    try:
+                        self._log_exit_analysis(stock_code=code,
+                            holding_status=new_status, market_env=pattern,
+                            sector_trend=trend)
+                    except Exception:
+                        pass
                     line += f"\n   💀 深度套牢超10%\n   {exit_ctx}"
                 elif new_status == "trapped":
                     exit_ctx = self._analyze_exit_context(
                         code, price, entry_price, trend
                     )
+                    try:
+                        self._log_exit_analysis(stock_code=code,
+                            holding_status=new_status, market_env=pattern,
+                            sector_trend=trend)
+                    except Exception:
+                        pass
                     line += f"\n   ⚠️ 被套5%~10%\n   {exit_ctx}"
                 elif new_status == "at_risk":
                     dist_pct = (price - sl) / price * 100 if sl > 0 and price > 0 else 0

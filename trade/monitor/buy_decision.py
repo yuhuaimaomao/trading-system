@@ -1340,6 +1340,15 @@ class BuyDecisionMixin:
 
             if entry_skip_reason:
                 alert_state[c["alert_key"]] = (price, True)
+                try:
+                    self._log_buy_filter(
+                        signal_id=c.get("signal_id", 0), stock_code=code,
+                        entry_rule=entry_rule, reason_filtered=entry_skip_reason,
+                        price=price, buy_min=buy_min, buy_max=buy_max,
+                        market_regime=pattern, sector_trend=trend, zone_pos=zone_pos,
+                    )
+                except Exception:
+                    pass
                 self._alert(
                     f"⏸️ {tag}暂缓买入 — {code} {name}\n"
                     f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}\n"
@@ -1396,21 +1405,41 @@ class BuyDecisionMixin:
 
             context = self._analyze_buy_context(code, price, buy_min, buy_max)
 
-            decision_line = ""
+            # 提前计算仓位，用于消息显示
+            max_amount, _size_reason = self._calculate_position_size(
+                code, price, buy_min, buy_max, pattern, trend
+            )
+            try:
+                self._log_position_size(
+                    stock_code=code, amount=max_amount, base_amount=max_amount,
+                    reason=_size_reason, sector_mult=position_mult, zone_mult=size_mul,
+                )
+            except Exception:
+                pass
+            if size_mul < 1.0 and max_amount > 0:
+                max_amount = int(max_amount * size_mul // 100 * 100)
+            actual_pct = max_amount / self.paper_account.total_value if self.paper_account.total_value > 0 else 0
+
+            # 仓位行（全仓/减仓都显示）
+            position_line = f"\n   📦 仓位: {actual_pct:.1%} (约¥{max_amount:,})"
+
+            # 理由行（仅减仓时显示）
+            reason_line = ""
             if size_mul < 1.0:
-                decision_line = f"\n   ⚠️ 单票仓位 {settings.DEFAULT_POSITION_PCT * size_mul:.1%}: {decision_reason}"
+                reason_line = f"\n   ⚠️ 理由: {decision_reason}"
                 logger.info(
-                    f"买入决策 [{code} {name}] 减仓 价格{price:.2f} 仓位{settings.DEFAULT_POSITION_PCT * size_mul:.1%} → {decision_reason}"
+                    f"买入决策 [{code} {name}] 减仓 价格{price:.2f} 仓位{actual_pct:.1%} → {decision_reason}"
                 )
             else:
                 logger.info(
-                    f"买入决策 [{code} {name}] 全仓 价格{price:.2f} 区间{buy_min:.2f}~{buy_max:.2f}"
+                    f"买入决策 [{code} {name}] 全仓 价格{price:.2f} 仓位{actual_pct:.1%} 区间{buy_min:.2f}~{buy_max:.2f}"
                 )
 
             self._alert(
                 f"🔴 {tag}买入信号 — {code} {name}\n"
-                f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}  止损: {sl:.2f}  止盈: {tp:.2f}\n"
-                f"   板块:{trend}{decision_line}\n"
+                f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}  止损: {sl:.2f}  止盈: {tp:.2f}"
+                f"{position_line}{reason_line}\n"
+                f"   板块:{trend}\n"
                 f"   ─────────────────────────\n"
                 f"{context}"
             )
@@ -1595,6 +1624,16 @@ class BuyDecisionMixin:
         if result.success:
             try:
                 self.repo.update_signal_status(signal_id, "bought")
+            except Exception:
+                pass
+            # 决策日志
+            try:
+                self._log_buy_trigger(
+                    signal_id=signal_id, stock_code=code, price=price,
+                    buy_min=buy_min, buy_max=buy_max, position_size=max_amount,
+                    entry_rule=getattr(regime, "entry_rule", "standard") if regime else "standard",
+                    sector_trend=trend, market_regime=pattern,
+                )
             except Exception:
                 pass
             # 写入 _pos_meta（盯盘决策数据）

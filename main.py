@@ -23,6 +23,7 @@ COMMANDS = [
     "listen",
     "qmt-collect",
     "strategy-audit",
+    "audit",
 ]
 
 
@@ -612,6 +613,85 @@ def cmd_strategy_audit():
     print(f"  改进建议: {improvement_count} 条")
 
 
+def cmd_audit():
+    """收盘后盯盘自审计：规则审计 + AI 审计 + 改进建议推送"""
+    import sys
+    from datetime import datetime
+
+    if "--help" in sys.argv:
+        print("用法: python main.py audit [选项]")
+        print("  --rule-only   仅规则审计")
+        print("  --ai-only     仅 AI 审计（需已有 audit_findings）")
+        print("  --apply N     应用第 N 条改进建议")
+        print("  --list        列出待处理的改进建议")
+        return
+
+    from data.repo import TradeRepository
+    from system.config.settings import TELEGRAM_REPORT_CHAT_ID
+
+    repo = TradeRepository()
+    trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    if "--list" in sys.argv:
+        imps = repo.get_pending_watcher_improvements()
+        if imps:
+            print(f"待处理改进建议 ({len(imps)} 条):")
+            for imp in imps:
+                print(f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}")
+        else:
+            print("无待处理改进建议")
+        return
+
+    apply_idx = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--apply" and i + 1 < len(sys.argv):
+            apply_idx = int(sys.argv[i + 1])
+            break
+
+    if apply_idx:
+        from trade.monitor.audit.improvement_applier import ImprovementApplier
+        applier = ImprovementApplier(repo)
+        result = applier.apply(apply_idx)
+        print(result)
+        try:
+            from system.utils.telegram import MessageSender
+            MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(result)
+        except Exception:
+            pass
+        return
+
+    rule_only = "--rule-only" in sys.argv
+    ai_only = "--ai-only" in sys.argv
+
+    if not ai_only:
+        from trade.monitor.audit.rule_auditor import RuleAuditor
+        print(f"规则审计 {trade_date} ...")
+        rule = RuleAuditor(repo=repo)
+        n = len(rule.run_and_save(trade_date))
+        print(f"  完成: {n} 条发现")
+
+    if not rule_only:
+        from trade.monitor.audit.ai_auditor import AIAuditor
+        print(f"AI 审计 {trade_date} ...")
+        ai = AIAuditor(repo=repo)
+        result = ai.run_and_save(trade_date)
+        if result:
+            n_imps = len(result.get("improvements", []))
+            print(f"  完成: {n_imps} 条改进建议")
+            imps = repo.get_pending_watcher_improvements()
+            for imp in imps[-3:]:
+                from trade.monitor.audit.improvement_applier import format_improvement_card
+                card = format_improvement_card(imp)
+                print(card)
+                try:
+                    from system.utils.telegram import MessageSender
+                    MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(card)
+                except Exception:
+                    pass
+        else:
+            print("  AI 审计无输出")
+
+
 def cmd_test():
     print("[test] 配置检查...")
     from system.config.settings import DASHSCOPE_API_KEY, DATABASE_PATH, LOGS_DIR
@@ -644,6 +724,7 @@ def main():
         "listen": cmd_listen,
         "qmt-collect": cmd_qmt_collect,
         "strategy-audit": cmd_strategy_audit,
+        "audit": cmd_audit,
     }.get(cmd, lambda: print(f"Unknown: {cmd}"))()
 
 

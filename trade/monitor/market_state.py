@@ -1880,6 +1880,33 @@ class MarketStateMixin:
         # —— 量价背离 ——
         self._check_volume_divergence(index_price)
 
+        # —— 决策日志（pattern 变更时写入） ——
+        try:
+            prev = getattr(self, "_last_logged_pattern", "")
+            if pattern != prev and self._scan_count > 0:
+                top3 = sorted(
+                    [(k, v[-1]) for k, v in self._sector_trend_history.items() if len(v) >= 3],
+                    key=lambda x: -x[1],
+                )[:3]
+                bottom3 = sorted(
+                    [(k, v[-1]) for k, v in self._sector_trend_history.items() if len(v) >= 3],
+                    key=lambda x: x[1],
+                )[:3]
+                self._log_regime_change(
+                    pattern=pattern,
+                    confidence=getattr(regime, "confidence", "medium"),
+                    prev_pattern=prev,
+                    index_price=index_price,
+                    index_change=change_pct,
+                    up_count=sum(1 for s in self._market_snapshot.values() if float(s.get("changePct", 0)) > 0),
+                    down_count=sum(1 for s in self._market_snapshot.values() if float(s.get("changePct", 0)) < 0),
+                    top_sectors=[[n, round(v, 2)] for n, v in top3],
+                    worst_sectors=[[n, round(v, 2)] for n, v in bottom3],
+                )
+                self._last_logged_pattern = pattern
+        except Exception:
+            pass
+
         return regime
 
     def _push_regime_alert(

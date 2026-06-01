@@ -109,6 +109,38 @@ class CloseSummaryMixin:
         except Exception as e:
             logger.warning(f"实盘收盘报告生成失败: {e}")
 
+        # 收盘后自动审计
+        self._run_post_close_audit()
+
+    def _run_post_close_audit(self):
+        """收盘后自动运行盯盘自审计（如果启用）。"""
+        from system.config.settings import AUDIT_ENABLED
+        if not AUDIT_ENABLED:
+            return
+        try:
+            logger.info("开始收盘审计...")
+
+            from trade.monitor.audit.rule_auditor import RuleAuditor
+            rule = RuleAuditor(repo=self.repo)
+            n_findings = len(rule.run_and_save(self._trade_date))
+            logger.info(f"规则审计完成: {n_findings} 条发现")
+
+            if n_findings > 0:
+                from trade.monitor.audit.ai_auditor import AIAuditor
+                ai = AIAuditor(repo=self.repo)
+                result = ai.run_and_save(self._trade_date)
+                if result:
+                    n_imps = len(result.get("improvements", []))
+                    n_lessons = len(result.get("lessons", []))
+                    logger.info(f"AI 审计完成: {n_imps} 改进, {n_lessons} 条教训")
+
+                    imps = self.repo.get_pending_watcher_improvements()
+                    for imp in imps[-3:]:
+                        from trade.monitor.audit.improvement_applier import format_improvement_card
+                        self._alert(format_improvement_card(imp))
+        except Exception as e:
+            logger.warning(f"收盘审计异常（不阻塞主流程）: {e}")
+
     def _get_today_open_value(self) -> float:
         """今日开盘基准 = 上个交易日最后一条快照的 total_value，无则初始资金。"""
         try:

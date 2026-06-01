@@ -19,6 +19,7 @@ from functools import lru_cache
 from data.repo import TradeRepository
 from system.config import settings
 from trade.monitor.abnormal import AbnormalMonitorMixin
+from trade.monitor.audit.decision_logger import DecisionLoggerMixin
 from trade.monitor.buy_decision import BuyDecisionMixin
 from trade.monitor.close_summary import CloseSummaryMixin
 from trade.monitor.closing import ClosingDecisionMixin
@@ -55,6 +56,7 @@ INDEX_DANGER_PCT = -0.01  # 上证跌破 MA20 且跌幅 > 1%
 
 
 class Watcher(
+    DecisionLoggerMixin,
     MarketStateMixin,
     BuyDecisionMixin,
     PositionRiskMixin,
@@ -523,6 +525,24 @@ class Watcher(
                     except Exception:
                         pass
                 self._check_sector_heat(self._market_snapshot, res_labels)
+                # 板块热度决策日志
+                try:
+                    top5 = sorted(
+                        [(k, round(v[-1], 2)) for k, v in self._sector_trend_history.items()
+                         if len(v) >= 3], key=lambda x: -x[1],
+                    )[:5]
+                    bottom3 = sorted(
+                        [(k, round(v[-1], 2)) for k, v in self._sector_trend_history.items()
+                         if len(v) >= 3], key=lambda x: x[1],
+                    )[:3]
+                    if top5 or bottom3:
+                        self._log_sector_alert(
+                            top_sectors=[[n, v] for n, v in top5],
+                            bottom_sectors=[[n, v] for n, v in bottom3],
+                            warnings=[], good=[],
+                        )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"板块热度检查异常: {e}", exc_info=True)
 
@@ -937,6 +957,16 @@ class Watcher(
             self._last_resonance_push_scan = self._scan_count
             self._last_resonance_index_dir = index_dir
             self._last_resonance_result = result
+            # 决策日志
+            try:
+                self._log_resonance_alert(
+                    index_direction=result.get("index_direction", ""),
+                    index_change=result.get("index_change", 0),
+                    resonance_down=[(n, round(c, 4)) for n, c, *_ in result.get("resonance_down", [])],
+                    counter_up=[(n, round(c, 4)) for n, c, *_ in result.get("counter_up", [])],
+                )
+            except Exception:
+                pass
 
     def _connect_collector(self):
         """连接 QMT Collector。可重复调用，内部有重试节流。"""

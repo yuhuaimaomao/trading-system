@@ -292,6 +292,67 @@ def ensure_tables():
             effectiveness_check TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- 盯盘自审计表
+        CREATE TABLE IF NOT EXISTS watcher_decision_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            decision_type TEXT NOT NULL,
+            stock_code TEXT,
+            decision_data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            finding_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            stock_code TEXT,
+            decision_log_ids TEXT,
+            pattern_desc TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS watcher_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lesson_type TEXT NOT NULL,
+            lesson_key TEXT NOT NULL,
+            lesson_content TEXT NOT NULL,
+            trigger_conditions TEXT,
+            occurrence_count INTEGER DEFAULT 1,
+            first_date DATE NOT NULL,
+            last_date DATE NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(lesson_type, lesson_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS watcher_improvements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            improvement_type TEXT NOT NULL,
+            target_module TEXT NOT NULL,
+            target_param TEXT,
+            suggested_change TEXT NOT NULL,
+            code_diff TEXT,
+            rationale TEXT NOT NULL,
+            evidence_ids TEXT,
+            status TEXT DEFAULT 'pending',
+            applied_date DATE,
+            effectiveness_check TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # 索引（与上面 SQL 分开，因为多条 executescript 不能带索引）
+    cursor.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_wdl_date_type ON watcher_decision_log(trade_date, decision_type);
+        CREATE INDEX IF NOT EXISTS idx_af_date_sev ON audit_findings(trade_date, severity);
+        CREATE INDEX IF NOT EXISTS idx_wl_type ON watcher_lessons(lesson_type);
+        CREATE INDEX IF NOT EXISTS idx_wi_status ON watcher_improvements(status);
     """)
 
     conn.commit()

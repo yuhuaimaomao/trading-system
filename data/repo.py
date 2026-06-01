@@ -688,3 +688,139 @@ class TradeRepository:
                 (date.today().isoformat(), imp_id),
             )
             conn.commit()
+
+    # ======================== 盯盘自审计 CRUD ========================
+
+    def insert_decision_log(self, trade_date: str, ts: str, decision_type: str,
+                            stock_code: str | None, decision_data: dict) -> int:
+        import json
+        with self._conn() as conn:
+            cursor = conn.execute(
+                """INSERT INTO watcher_decision_log
+                   (trade_date, ts, decision_type, stock_code, decision_data)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (trade_date, ts, decision_type, stock_code,
+                 json.dumps(decision_data, ensure_ascii=False)),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_decision_logs(self, trade_date: str, decision_type: str = None) -> list[dict]:
+        where = ["trade_date=?"]
+        params = [trade_date]
+        if decision_type:
+            where.append("decision_type=?")
+            params.append(decision_type)
+        sql = f"SELECT * FROM watcher_decision_log WHERE {' AND '.join(where)} ORDER BY ts"
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        cols = ["id", "trade_date", "ts", "decision_type", "stock_code",
+                "decision_data", "created_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def insert_audit_finding(self, finding: dict) -> int:
+        import json
+        with self._conn() as conn:
+            cols = ", ".join(finding.keys())
+            placeholders = ", ".join(["?" for _ in finding])
+            vals = []
+            for k in finding:
+                v = finding[k]
+                vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+            sql = f"INSERT INTO audit_findings ({cols}) VALUES ({placeholders})"
+            cursor = conn.execute(sql, vals)
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_audit_findings(self, trade_date: str) -> list[dict]:
+        sql = """SELECT * FROM audit_findings WHERE trade_date=?
+                 ORDER BY CASE severity
+                   WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END"""
+        with self._conn() as conn:
+            rows = conn.execute(sql, (trade_date,)).fetchall()
+        cols = ["id", "trade_date", "finding_type", "severity", "stock_code",
+                "decision_log_ids", "pattern_desc", "evidence", "created_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def upsert_watcher_lesson(self, lesson_type: str, lesson_key: str,
+                              lesson_content: str, trigger_conditions: dict = None,
+                              trade_date: str = None) -> int:
+        import json
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT id, occurrence_count FROM watcher_lessons WHERE lesson_type=? AND lesson_key=?",
+                (lesson_type, lesson_key),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """UPDATE watcher_lessons SET occurrence_count=?, last_date=?, is_active=1
+                       WHERE id=?""",
+                    (existing[1] + 1, trade_date, existing[0]),
+                )
+                conn.commit()
+                return existing[0]
+            else:
+                cursor = conn.execute(
+                    """INSERT INTO watcher_lessons
+                       (lesson_type, lesson_key, lesson_content, trigger_conditions, first_date, last_date)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (lesson_type, lesson_key, lesson_content,
+                     json.dumps(trigger_conditions, ensure_ascii=False) if trigger_conditions else None,
+                     trade_date, trade_date),
+                )
+                conn.commit()
+                return cursor.lastrowid
+
+    def get_active_watcher_lessons(self, lesson_type: str = None) -> list[dict]:
+        where = ["is_active=1"]
+        params = []
+        if lesson_type:
+            where.append("lesson_type=?")
+            params.append(lesson_type)
+        sql = f"SELECT * FROM watcher_lessons WHERE {' AND '.join(where)} ORDER BY occurrence_count DESC"
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        cols = ["id", "lesson_type", "lesson_key", "lesson_content",
+                "trigger_conditions", "occurrence_count", "first_date",
+                "last_date", "is_active", "created_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def insert_watcher_improvement(self, imp: dict) -> int:
+        import json
+        with self._conn() as conn:
+            cols = ", ".join(imp.keys())
+            placeholders = ", ".join(["?" for _ in imp])
+            vals = []
+            for k in imp:
+                v = imp[k]
+                vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+            sql = f"INSERT INTO watcher_improvements ({cols}) VALUES ({placeholders})"
+            cursor = conn.execute(sql, vals)
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_pending_watcher_improvements(self) -> list[dict]:
+        sql = "SELECT * FROM watcher_improvements WHERE status='pending' ORDER BY id"
+        with self._conn() as conn:
+            rows = conn.execute(sql).fetchall()
+        cols = ["id", "trade_date", "improvement_type", "target_module",
+                "target_param", "suggested_change", "code_diff", "rationale",
+                "evidence_ids", "status", "applied_date", "effectiveness_check", "created_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def update_watcher_improvement_status(self, imp_id: int, status: str,
+                                          applied_date: str = None):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE watcher_improvements SET status=?, applied_date=? WHERE id=?",
+                (status, applied_date, imp_id),
+            )
+            conn.commit()
+
+    def update_watcher_improvement_effectiveness(self, imp_id: int, check: str):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE watcher_improvements SET effectiveness_check=? WHERE id=?",
+                (check, imp_id),
+            )
+            conn.commit()
