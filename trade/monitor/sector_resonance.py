@@ -278,7 +278,9 @@ class SectorResonanceAnalyzer:
 
     # ======================== 格式化 ========================
 
-    def format_push_message(self, result: dict) -> str | None:
+    def format_push_message(
+        self, result: dict, my_codes: set | None = None
+    ) -> str | None:
         """格式化独立推送消息。无有效内容返回 None。"""
         has_any = any(
             result.get(k)
@@ -291,21 +293,51 @@ class SectorResonanceAnalyzer:
         idx_price = result.get("index_price", 0)
         idx_change = result.get("index_change", 0)
         lines = [
-            f"🏭 板块共振/逆势分析  {now}  上证: {idx_price:.2f} {idx_change:+.2%}"
+            f"🏭 板块异动  {now}",
+            f"上证 {idx_price:.2f}  {idx_change:+.2%}",
         ]
 
+        my_codes = my_codes or set()
+
         sections = [
-            ("📈 共振上行", result.get("resonance_up", []), False),
-            ("📉 共振下行", result.get("resonance_down", []), True),
+            ("🟢 共振上行", result.get("resonance_up", []), False),
+            ("🔴 共振下行", result.get("resonance_down", []), True),
             ("🔄 逆势走强", result.get("counter_up", []), False),
-            ("⚠️ 逆势走弱", result.get("counter_down", []), True),
+            ("🔴 逆势走弱", result.get("counter_down", []), True),
         ]
 
         for title, items, is_down in sections:
-            section = self._fmt_section(title, items, is_down)
-            if section:
-                lines.append("")
-                lines.append(section)
+            if not items:
+                continue
+            lines.append("")
+            lines.append(title)
+            lines.append("─" * 30)
+            for name, change, stats, leaders, trend_start in items:
+                up = stats.get("up", 0)
+                down = stats.get("down", 0)
+                trend_tag = f"  {trend_start}起" if trend_start else ""
+                vol_tag = ""
+                vr = stats.get("vol_ratio", 1.0)
+                if vr > settings.RESONANCE_VOL_SURGE_RATIO:
+                    vol_tag = "  🔥放量"
+                elif vr < settings.RESONANCE_VOL_SHRINK_RATIO:
+                    vol_tag = "  量缩"
+
+                # 标记持仓板块
+                my_tag = ""
+                for _code, _chg, leader_name in leaders:
+                    if _code in my_codes:
+                        my_tag = f"  ⚠️{leader_name}"
+                        break
+
+                lines.append(
+                    f"  {name}  {change:+.2f}%  涨{up}跌{down}{trend_tag}{vol_tag}{my_tag}"
+                )
+                if leaders:
+                    leader_str = "  ".join(f"{n} {c:+.1f}%" for _c, c, n in leaders)
+                    lines.append(f"  → {leader_str}")
+
+            lines.append(f"  ── 共 {len(items)} 个板块 ──")
 
         return "\n".join(lines)
 
@@ -313,47 +345,12 @@ class SectorResonanceAnalyzer:
         """为板块热度TOP5生成共振/逆势标签。返回 {sector_name: "📈共振"|...}。"""
         labels: dict[str, str] = {}
         mapping = [
-            ("resonance_up", "📈共振"),
-            ("resonance_down", "📉共振"),
+            ("resonance_up", "🟢共振"),
+            ("resonance_down", "🔴共振"),
             ("counter_up", "🔄逆势"),
-            ("counter_down", "⚠️逆势"),
+            ("counter_down", "🔴逆势"),
         ]
         for key, emoji_label in mapping:
             for name, *_ in result.get(key, []):
                 labels[name] = emoji_label
         return labels
-
-    # ======================== 内部格式化 ========================
-
-    @staticmethod
-    def _fmt_section(title: str, items: list, is_down: bool) -> str:
-        if not items:
-            return ""
-
-        section_lines = [f"   ━━━ {title} ━━━"]
-        for name, change, stats, leaders, trend_start in items:
-            up = stats.get("up", 0)
-            down = stats.get("down", 0)
-            vol_ratio = stats.get("vol_ratio", 1.0)
-
-            vol_ratio_val = stats.get("vol_ratio", settings.RESONANCE_VOL_SHRINK_RATIO * 2)
-            vol_tag = ""
-            if vol_ratio_val > settings.RESONANCE_VOL_SURGE_RATIO:
-                vol_tag = "  🔥放量"
-            elif vol_ratio_val < settings.RESONANCE_VOL_SHRINK_RATIO:
-                vol_tag = "  量缩"
-
-            time_tag = f"  {trend_start}起" if trend_start else ""
-
-            section_lines.append(
-                f"   {name}  {change:+.2f}%  涨{up}跌{down}{time_tag}{vol_tag}"
-            )
-
-            if leaders:
-                label = "领跌" if is_down else "龙头"
-                leader_str = " ".join(
-                    f"{name}({chg:+.1f}%)" for _code, chg, name in leaders
-                )
-                section_lines.append(f"    {label}: {leader_str}")
-
-        return "\n".join(section_lines)

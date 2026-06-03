@@ -22,8 +22,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from system.config.akshare_config import get_headers
 from system.config import settings
+from system.config.akshare_config import get_headers
 from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_collector_logger
 
@@ -492,7 +492,6 @@ class TelegraphCollector:
             trade_date: 交易日期，默认今天
         """
         import json as _json
-        import os as _os
         from datetime import datetime as _dt
 
         if trade_date is None:
@@ -713,7 +712,43 @@ class TelegraphCollector:
             self._mark_failed([r["telegraph_id"] for r in pending_rows])
 
     def _parse_ai_json(self, text: str) -> list:
-        """解析 AI 返回 JSON，失败抛出 JSONDecodeError"""
+        """解析 AI 返回 JSON，从混合文本中提取 JSON 数组。失败抛出 JSONDecodeError"""
+        import re
+
+        text = text.strip()
+        # 策略1: 直接解析（纯 JSON）
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # 策略2: 用 raw_decode 只取第一个完整 JSON 值（忽略尾部说明文字）
+        try:
+            decoder = json.JSONDecoder()
+            data, _ = decoder.raw_decode(text)
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+        # 策略3: 从文本中提取 JSON 数组（找到第一个 [ 和最后一个 ]）
+        start = text.find("[")
+        end = text.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+
+        # 策略4: 从 markdown 代码块中提取
+        match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # 全部失败，抛出原始错误
         return json.loads(text)
 
     def _repair_truncated_json(self, text: str) -> Optional[str]:

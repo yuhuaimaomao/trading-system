@@ -1508,6 +1508,69 @@ class StockTools:
             logger.error(f"❌ 经验教训查询失败：{e}")
             return {"total": 0, "by_type": {}, "error": str(e)}
 
+    def get_pending_signals(self, trade_date: str = None) -> Dict:
+        """
+        获取昨日所有 pending 状态的买入信号清单（复盘精选 + 趋势筛选）。
+
+        返回每只标的的：code, name, buy_zone, stop_loss, take_profit, score, source, reason。
+        早盘校准用——AI 据此判断哪些标的需修正/移除。
+        """
+        try:
+            if trade_date is None:
+                from datetime import datetime as _dt
+
+                from system.config.trading_calendar import get_previous_trading_day
+
+                trade_date = get_previous_trading_day(_dt.now().strftime("%Y-%m-%d"))
+
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT stock_code, stock_name, signal_source, buy_zone_min, buy_zone_max,
+                       stop_loss, take_profit, signal_score, reason, strategy_name
+                FROM trade_signals
+                WHERE trade_date = ? AND status = 'pending'
+                ORDER BY signal_source, signal_score DESC
+            """,
+                (trade_date,),
+            ).fetchall()
+            conn.close()
+
+            signals = []
+            for r in rows:
+                signals.append(
+                    {
+                        "stock_code": r["stock_code"],
+                        "stock_name": r["stock_name"],
+                        "source": r["signal_source"],
+                        "buy_zone": f"{r['buy_zone_min']}-{r['buy_zone_max']}"
+                        if r["buy_zone_min"]
+                        else "",
+                        "stop_loss": r["stop_loss"],
+                        "take_profit": r["take_profit"],
+                        "score": r["signal_score"],
+                        "reason": r["reason"][:80] if r["reason"] else "",
+                    }
+                )
+
+            logger.info(f"✅ pending 信号查询：{len(signals)} 只 ({trade_date})")
+            return {
+                "trade_date": trade_date,
+                "total": len(signals),
+                "signals": signals,
+                "error": None,
+            }
+
+        except Exception as e:
+            logger.error(f"❌ pending 信号查询失败：{e}")
+            return {
+                "trade_date": trade_date,
+                "total": 0,
+                "signals": [],
+                "error": str(e),
+            }
+
 
 # 工具定义（用于注册到 AI）
 # 符合 OpenAI Function Calling 格式
@@ -1852,6 +1915,23 @@ TOOLS_DEFINITION = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pending_signals",
+            "description": "获取昨日所有 pending 状态的买入信号清单（复盘精选+趋势筛选AI推荐）。返回每只标的的：stock_code, stock_name, source(REVIEW/AI_ENHANCED), buy_zone, stop_loss, take_profit, score。\n\n使用场景：\n- 早盘校准时，调用此工具获取昨日全部推荐标的的精确列表\n- 对照避雷针/隔夜电报/宏观变化，判断哪些需要修正或移除\n- 输出 <<<ADJUSTMENTS>>> 结构化修正指令\n\n单次返回 5-15 只标的，约 200-500 token",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_date": {
+                        "type": "string",
+                        "description": "上一个交易日 YYYY-MM-DD，默认自动取最近交易日",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -1889,4 +1969,5 @@ TOOL_FUNCTIONS = {
     "get_sector_zhongjun": lambda **kw: _get_tools().get_sector_zhongjun(**kw),
     "get_prediction_accuracy": lambda **kw: _get_tools().get_prediction_accuracy(**kw),
     "get_learning_lessons": lambda **kw: _get_tools().get_learning_lessons(**kw),
+    "get_pending_signals": lambda **kw: _get_tools().get_pending_signals(**kw),
 }

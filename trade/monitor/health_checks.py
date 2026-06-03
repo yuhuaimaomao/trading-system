@@ -24,10 +24,14 @@ class CheckContext:
 
     # ── 行情 ──
     prices: dict = field(default_factory=dict)
-    limit_cache: dict = field(default_factory=dict)  # {code: {limit_up, limit_down, pre_close}}
+    limit_cache: dict = field(
+        default_factory=dict
+    )  # {code: {limit_up, limit_down, pre_close}}
     index_prices: list = field(default_factory=list)
     index_high: float = 0.0
     index_low: float = 0.0
+    index_close_high: float = 0.0
+    index_close_low: float = 0.0
     index_pre_close: float = 0.0
     qmt_change_pct: float | None = None
 
@@ -125,7 +129,9 @@ def _account_equation(ctx: CheckContext) -> list[str]:
     mv = sum(p.market_value for p in ctx.positions.values())
     drift = abs(ctx.total_value - ctx.cash - mv)
     if drift > 10:
-        return [f"⚠️ 账户不一致: total={ctx.total_value:.0f} cash+mv={ctx.cash + mv:.0f} (差{drift:.0f})"]
+        return [
+            f"⚠️ 账户不一致: total={ctx.total_value:.0f} cash+mv={ctx.cash + mv:.0f} (差{drift:.0f})"
+        ]
     return []
 
 
@@ -146,7 +152,9 @@ def _entry_date_future(ctx: CheckContext) -> list[str]:
     alerts = []
     for code, pos in ctx.positions.items():
         if pos.entry_date and ctx.trade_date and pos.entry_date > ctx.trade_date:
-            alerts.append(f"🔴 未来持仓: {code} entry={pos.entry_date} > today={ctx.trade_date}")
+            alerts.append(
+                f"🔴 未来持仓: {code} entry={pos.entry_date} > today={ctx.trade_date}"
+            )
     return alerts
 
 
@@ -157,7 +165,9 @@ def _t1_lock_consistency(ctx: CheckContext) -> list[str]:
         locked = getattr(pos, "locked_volume", 0)
         is_today = (pos.entry_date == ctx.trade_date) if ctx.trade_date else False
         if is_today and locked < pos.volume:
-            alerts.append(f"⚠️ 锁仓不足: {code} 今日买入但 locked={locked} < vol={pos.volume}")
+            alerts.append(
+                f"⚠️ 锁仓不足: {code} 今日买入但 locked={locked} < vol={pos.volume}"
+            )
         if not is_today and locked > 0:
             alerts.append(f"⚠️ 锁仓残留: {code} 昨日买入但 locked={locked} > 0")
     return alerts
@@ -210,7 +220,9 @@ def _max_profit_non_decreasing(ctx: CheckContext) -> list[str]:
         watch = ctx.bought_watch.get(code, {})
         mp = watch.get("max_profit_pct", 0)
         if pos.avg_cost > 0:
-            cur_pct = (ctx.prices.get(code, pos.current_price) - pos.avg_cost) / pos.avg_cost
+            cur_pct = (
+                ctx.prices.get(code, pos.current_price) - pos.avg_cost
+            ) / pos.avg_cost
             if mp > 0 and cur_pct > mp + 0.02:
                 alerts.append(f"⚠️ 浮盈遗漏: {code} 当前{cur_pct:.1%} > 记录{mp:.1%}")
     return alerts
@@ -279,7 +291,11 @@ def _pending_signals_leak(ctx: CheckContext) -> list[str]:
 
 
 def _cross_validate_change_pct(ctx: CheckContext) -> list[str]:
-    if ctx.baseline_pre_close <= 0 or not ctx.index_prices or ctx.qmt_change_pct is None:
+    if (
+        ctx.baseline_pre_close <= 0
+        or not ctx.index_prices
+        or ctx.qmt_change_pct is None
+    ):
         return []
     our_pct = (ctx.index_prices[-1] - ctx.baseline_pre_close) / ctx.baseline_pre_close
     diff = abs(our_pct - ctx.qmt_change_pct)
@@ -294,7 +310,9 @@ def _cross_validate_preclose_stability(ctx: CheckContext) -> list[str]:
     if ctx.baseline_pre_close <= 0 or ctx.index_pre_close <= 0:
         return []
     if abs(ctx.index_pre_close - ctx.baseline_pre_close) > 0.01:
-        return [f"🔴 昨收价漂移: {ctx.baseline_pre_close:.2f}→{ctx.index_pre_close:.2f}"]
+        return [
+            f"🔴 昨收价漂移: {ctx.baseline_pre_close:.2f}→{ctx.index_pre_close:.2f}"
+        ]
     return []
 
 
@@ -302,7 +320,9 @@ def _cross_validate_market_value(ctx: CheckContext) -> list[str]:
     if not ctx.positions:
         return []
     mv_pos = sum(p.market_value for p in ctx.positions.values())
-    mv_calc = sum(ctx.prices.get(c, p.current_price) * p.volume for c, p in ctx.positions.items())
+    mv_calc = sum(
+        ctx.prices.get(c, p.current_price) * p.volume for c, p in ctx.positions.items()
+    )
     if mv_calc <= 0:
         return []
     drift = abs(mv_pos - mv_calc) / mv_calc
@@ -321,19 +341,24 @@ def _cross_validate_pnl(ctx: CheckContext) -> list[str]:
     )
     drift = abs(pnl_pos - pnl_calc)
     if pnl_calc != 0 and drift > abs(pnl_calc) * 0.02 + 10:
-        return [f"⚠️ 盈亏分歧: position.pnl={pnl_pos:.0f} 实算={pnl_calc:.0f} (差{drift:.0f})"]
+        return [
+            f"⚠️ 盈亏分歧: position.pnl={pnl_pos:.0f} 实算={pnl_calc:.0f} (差{drift:.0f})"
+        ]
     return []
 
 
 def _cross_validate_index_high_low(ctx: CheckContext) -> list[str]:
     if not ctx.index_prices or ctx.index_high <= 0:
         return []
-    ah, al = max(ctx.index_prices), min(ctx.index_prices)
+    # 用收盘价序列做交叉验证，而非 K 线最高/最低价
+    ch, cl = max(ctx.index_prices), min(ctx.index_prices)
     alerts = []
-    if abs(ctx.index_high - ah) > 0.5:
-        alerts.append(f"⚠️ 最高价不一致: 记录={ctx.index_high:.2f} 序列={ah:.2f}")
-    if abs(ctx.index_low - al) > 0.5:
-        alerts.append(f"⚠️ 最低价不一致: 记录={ctx.index_low:.2f} 序列={al:.2f}")
+    ref_high = ctx.index_close_high or ctx.index_high
+    ref_low = ctx.index_close_low or ctx.index_low
+    if abs(ref_high - ch) > 0.5:
+        alerts.append(f"⚠️ 最高价不一致: 记录={ref_high:.2f} 序列={ch:.2f}")
+    if abs(ref_low - cl) > 0.5:
+        alerts.append(f"⚠️ 最低价不一致: 记录={ref_low:.2f} 序列={cl:.2f}")
     return alerts
 
 
@@ -361,7 +386,7 @@ def _kdj_ordering(ctx: CheckContext) -> list[str]:
     j = t.get("kdj_j")
     if k is not None and k == d == j and ctx.scan_count > 20:
         if k == 50.0:  # 常见的默认/未计算值
-            return [f"⚠️ KDJ 未计算: K=D=J=50"]
+            return ["⚠️ KDJ 未计算: K=D=J=50"]
     return []
 
 
@@ -462,7 +487,8 @@ def _recompute_ema(ctx: CheckContext) -> list[str]:
     if len(ema12) >= 10:
         recent = ema12[-10:]
         swings = sum(
-            1 for i in range(1, len(recent))
+            1
+            for i in range(1, len(recent))
             if (recent[i] - recent[i - 1]) * (recent[i - 1] - recent[i - 2]) < 0
         )
         if swings >= 7:
@@ -479,13 +505,6 @@ def _scan_count_monotonic(ctx: CheckContext) -> list[str]:
     """scan_count 应单调递增"""
     if ctx.prev_scan_count > 0 and ctx.scan_count <= ctx.prev_scan_count:
         return [f"⚠️ 扫描计数回退: {ctx.prev_scan_count}→{ctx.scan_count}"]
-    return []
-
-
-def _locked_volume_consistency(ctx: CheckContext) -> list[str]:
-    total_locked = sum(getattr(p, "locked_volume", 0) for p in ctx.positions.values())
-    if ctx.scan_count > 200 and total_locked > 0:
-        return [f"⚠️ 尾盘仍有锁仓: {total_locked} 股"]
     return []
 
 
@@ -606,7 +625,6 @@ CHECKS = [
     _recompute_ema,
     # 9. 累积/跨轮
     _scan_count_monotonic,
-    _locked_volume_consistency,
     _sector_data_accumulating,
     _trade_date_stable,
     # 10. 贝叶斯概率累积

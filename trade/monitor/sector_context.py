@@ -8,6 +8,8 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime
 
+from system.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -487,7 +489,8 @@ class SectorContextMixin:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute(
                 """SELECT ts, price, high, low, amount FROM index_snapshots
-                   WHERE trade_date=? ORDER BY ts ASC""",
+                   WHERE trade_date=? AND (index_code='000001.SH' OR index_code IS NULL)
+                   ORDER BY ts ASC""",
                 (self._trade_date,),
             ).fetchall()
             conn.close()
@@ -516,6 +519,9 @@ class SectorContextMixin:
                 self._index_prices = closes
                 self._index_high = max(highs) if highs else max(closes)
                 self._index_low = min(lows) if lows else min(closes)
+                # 存储收盘价最大/最小值用于健康检查交叉验证
+                self._index_close_high = max(closes)
+                self._index_close_low = min(closes)
                 self._last_db_ts = max(self._last_db_ts, max_ts)
                 logger.info(
                     f"从DB恢复指数走势: {len(closes)}条 "
@@ -664,11 +670,11 @@ class SectorContextMixin:
 
         stats = self._sector_stats.get(industry)
         if not stats:
-            return ""
+            return "数据不足"
 
         history = stats.get("trend_history", [])
         if len(history) < 2:
-            return f" {industry} {stats['change_pct']:+.2f}%"
+            return "数据积累中"
 
         # 1. 趋势方向 + 强度
         first, last = history[0], history[-1]
@@ -775,3 +781,110 @@ class SectorContextMixin:
                 result += " | 概念 " + " ".join(con_parts)
 
         return result
+
+    def _detect_hot_sectors(self) -> list[dict]:
+        """盘中检测热门板块，用于动态候选生成。
+
+        综合评分维度：绝对涨幅、相对强度、宽度、连续性、量能、共振标签。
+        返回热度前 5 的板块，每个包含 {name, change_pct, score, reason, ...}。
+        """
+        if not self._sector_stats:
+            return []
+
+        res_labels = getattr(self, "_last_resonance_labels", {})
+        hot = []
+
+        for name, stats in self._sector_stats.items():
+            chg = stats.get("change_pct", 0)
+            rel = stats.get("relative", 0)
+            breadth = stats.get("breadth", 0)
+            cont = stats.get("continuity", 0)
+            vol = stats.get("vol_ratio", 1.0)
+            history = stats.get("trend_history", [])
+
+            if len(history) < 3:
+                continue
+
+            score = 0
+            reasons = []
+
+            if chg > 1.5:
+                score += 2
+                reasons.append(f"+{chg:.1f}%")
+            elif chg > 0.8:
+                score += 1
+                reasons.append(f"+{chg:.1f}%")
+
+            if rel > 1.0:
+                score += 2
+                reasons.append(f"强于大盘{rel:+.1f}%")
+            elif rel > 0.5:
+                score += 1
+
+            if breadth > 0.4:
+                score += 2
+                reasons.append("普涨")
+            elif breadth > 0.2:
+                score += 1
+
+            if cont >= 3:
+                score += 2
+                reasons.append(f"连续{cont}轮")
+            elif cont >= 2:
+                score += 1
+
+            if vol > 1.3:
+                score += 1
+                reasons.append("放量")
+
+            label = res_labels.get(name, "")
+            if label in ("🔄逆势", "🟢共振"):
+                score += 3
+                reasons.append(label)
+
+            if score >= settings.DYNAMIC_SECTOR_HEAT_THRESHOLD:
+                hot.append(
+                    {
+                        "name": name,
+                        "change_pct": chg,
+                        "relative": rel,
+                        "breadth": breadth,
+                        "continuity": cont,
+                        "vol_ratio": vol,
+                        "score": score,
+                        "reason": " ".join(reasons),
+                        "resonance_label": label,
+                    }
+                )
+
+        hot.sort(key=lambda x: -x["score"])
+        return hot[:5]
+
+    def _detect_cooling_sectors(self) -> list[str]:
+        """检测从热转冷的板块（用于换仓轮出）。
+
+        返回板块名列表。
+        """
+        if not self._sector_stats:
+            return []
+
+        cooling = []
+        for name, stats in self._sector_stats.items():
+            history = stats.get("trend_history", [])
+            if len(history) < 6:
+                continue
+
+            split = len(history) * 2 // 3
+            early_avg = sum(history[:split]) / split if split > 0 else 0
+            recent = history[split:]
+            recent_avg = sum(recent) / len(recent) if recent else 0
+
+            if (
+                early_avg > 0.3
+                and recent_avg < early_avg * 0.5
+                or len(recent) >= 3
+                and recent[-1] < recent[0] - 0.5
+            ):
+                cooling.append(name)
+
+        return cooling

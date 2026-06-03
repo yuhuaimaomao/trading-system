@@ -32,11 +32,11 @@ STORAGE_PATH = Path(
 # ===== API Keys =====
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
 # ===== AI 模型统一配置 =====
 # 全局默认模型，所有 AI 调用（复盘/早报/审计/电报/盯盘）都从此处取。
-# .env 中设置 AI_MODEL，例: AI_MODEL=qwen3.6-plus 或 AI_MODEL=deepseek-chat
+# .env 中设置 AI_MODEL，例: AI_MODEL=deepseek-v4-pro
 # 默认值由环境变量强控，不设默认模型名——未配置则启动报错。
 AI_MODEL = os.environ.get("AI_MODEL", "")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
@@ -98,7 +98,7 @@ REVIEW_PICK_POSITION_PCT = float(os.environ.get("REVIEW_PICK_POSITION_PCT", 0.08
 # ===== 异动检测阈值 =====
 ABNORMAL_RAPID_RISE_PCT = 1.0  # 急速拉升: 当前涨幅 - 上轮涨幅 > 1%
 ABNORMAL_VOLUME_SURGE_RATIO = 3.0  # 量比暴增: 当前成交量 > 上轮成交量 × 3
-ABNORMAL_NEAR_LIMIT_PCT = 7.0  # 逼近涨停: 涨幅 > 7%
+ABNORMAL_NEAR_LIMIT_PCT = 8.5  # 逼近涨停: 涨幅 > 8.5%
 
 # ===== 板块共振/逆势分析 =====
 RESONANCE_INDEX_DIRECTION_THRESHOLD = 0.001  # 指数方向判定: 变化率 > 0.1% 视为有方向
@@ -116,7 +116,9 @@ RESONANCE_INDEX_MIN_POINTS = 12  # 指数最小数据点数
 
 # ===== 盯盘自审计 =====
 AUDIT_ENABLED = os.environ.get("AUDIT_ENABLED", "true").lower() == "true"
-AUDIT_AUTO_APPLY_PARAM = os.environ.get("AUDIT_AUTO_APPLY_PARAM", "false").lower() == "true"
+AUDIT_AUTO_APPLY_PARAM = (
+    os.environ.get("AUDIT_AUTO_APPLY_PARAM", "false").lower() == "true"
+)
 AUDIT_RETENTION_DAYS = int(os.environ.get("AUDIT_RETENTION_DAYS", "90"))
 
 # ===== 市场环境判定 =====
@@ -134,6 +136,33 @@ MARKET_BREADTH_BULL = 3000  # 普涨: 上涨家数 > 3000
 MARKET_BREADTH_DIVIDE = 1500  # 分化: 上涨 1500~3000
 MARKET_BREADTH_BEAR = 800  # 普跌/恐慌: 上涨 < 800
 MARKET_BREADTH_BOUNCE = 2000  # 连跌修复: 恐慌后首日涨家数 > 2000
+REGIME_STABLE_SCANS = 5  # 新 regime 需连续 N 轮一致才确认切换（~5分钟）
+REGIME_JITTER_WINDOW = 5  # 5 分钟内切换超过 REGIME_JITTER_MAX 次触发告警
+REGIME_JITTER_MAX = 3
+BREADTH_DOWN_UP_RATIO = 3.0  # 下跌/上涨 > 此值且指数跌时暂停新开仓
+
+# ===== 自适应交易 =====
+# Phase 1: 早盘 AI 板块倾向
+MORNING_SECTOR_BIAS_ENABLED = (
+    os.environ.get("MORNING_SECTOR_BIAS_ENABLED", "true").lower() == "true"
+)
+# Phase 2: 盘中动态板块发现
+DYNAMIC_SECTOR_DISCOVERY_ENABLED = (
+    os.environ.get("DYNAMIC_SECTOR_DISCOVERY_ENABLED", "true").lower() == "true"
+)
+DYNAMIC_SECTOR_HEAT_THRESHOLD = int(
+    os.environ.get("DYNAMIC_SECTOR_HEAT_THRESHOLD", "4")
+)
+DYNAMIC_SECTOR_MAX_CANDIDATES = int(
+    os.environ.get("DYNAMIC_SECTOR_MAX_CANDIDATES", "10")
+)
+# Phase 3: 板块轮动
+SECTOR_ROTATION_ENABLED = (
+    os.environ.get("SECTOR_ROTATION_ENABLED", "false").lower() == "true"
+)
+SECTOR_ROTATION_COOLDOWN_SCANS = int(
+    os.environ.get("SECTOR_ROTATION_COOLDOWN_SCANS", "30")
+)
 
 # ===== 工具/缓存 =====
 DNS_CACHE_TTL = 600  # DNS 绕过缓存 TTL（秒）

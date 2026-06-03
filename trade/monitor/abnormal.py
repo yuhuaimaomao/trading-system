@@ -3,9 +3,7 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import json
 import logging
-import re
 import sqlite3
 import time
 from datetime import datetime
@@ -26,10 +24,100 @@ class AbnormalMonitorMixin:
             return
         try:
             messages = monitor.check(snapshot, resonance_labels)
-            for msg in messages:
-                self._alert(msg)
+            if not messages:
+                return
+
+            # 组装：指数 → 排名 → 持仓板块
+            now = datetime.now().strftime("%H:%M")
+            header = f"📊 板块热度  {now}"
+            index_line = self._format_market_header()
+            pos_line = self._format_my_sectors_line()
+
+            parts = [header]
+            if index_line:
+                parts.append(index_line)
+            parts.append("─" * 30)
+            parts.extend(messages)
+            if pos_line:
+                parts.append("─" * 30)
+                parts.append(pos_line)
+
+            self._alert("\n".join(parts))
         except Exception as e:
             logger.warning(f"板块热度检查异常: {e}")
+
+    def _format_market_header(self) -> str:
+        """多指数 + 涨跌比，放头部。"""
+        im = getattr(self, "_index_map", {})
+        parts = []
+        for code in ["000001.SH", "399006.SZ", "399303.SZ"]:
+            info = im.get(code, {})
+            if info:
+                name = info.get("name", code)
+                short = {
+                    "上证指数": "上证",
+                    "创业板指": "创业",
+                    "国证2000": "国证",
+                }.get(name, name[:2])
+                chg = info.get("change_pct", 0)
+                parts.append(f"{short} {chg:+.2%}")
+        bb = getattr(self, "_market_breadth", {})
+        up, down = bb.get("up", 0), bb.get("down", 0)
+        if up + down > 0:
+            parts.append(f"涨跌比 {up}:{down}")
+        return "  ".join(parts) if parts else ""
+
+    def _format_my_sectors_line(self) -> str:
+        """持仓板块一句话。"""
+        positions = getattr(self, "paper_account", None)
+        if not positions:
+            return ""
+        sector_stats = getattr(self, "_sector_stats", {})
+        industry_cache = getattr(self, "_industry_cache", {})
+        seen = set()
+        parts = []
+        for code in positions.positions:
+            ind = industry_cache.get(code, "")
+            if ind and ind not in seen:
+                seen.add(ind)
+                s = sector_stats.get(ind, {})
+                chg = s.get("change_pct", 0)
+                parts.append(f"{ind} {chg:+.1f}%")
+        return f"持仓板块: {'  '.join(parts)}" if parts else ""
+
+    def _format_market_judgment(self) -> str:
+        """综合多指数 + 宽度，给一句话盘面判断。"""
+        im = getattr(self, "_index_map", {})
+        bb = getattr(self, "_market_breadth", {})
+        up, down = bb.get("up", 0), bb.get("down", 0)
+        total = up + down
+        if total == 0:
+            return ""
+
+        down_ratio = down / total
+        sh = im.get("000001.SH", {})
+        cy = im.get("399006.SZ", {})
+        gz = im.get("399303.SZ", {})
+        sh_chg = sh.get("change_pct", 0)
+        cy_chg = cy.get("change_pct", 0)
+        gz_chg = gz.get("change_pct", 0)
+
+        if down_ratio > 0.7:
+            return f"普跌行情（跌{down_ratio:.0%}），观望为主，暂停买入"
+        if cy_chg > 0.01 and down_ratio > 0.55:
+            return f"创业板领涨 {cy_chg:+.1%}，但个股普跌（跌{down_ratio:.0%}），指数失真，谨慎参与"
+        if cy_chg > 0.01 and down_ratio <= 0.45:
+            return f"创业板领涨 {cy_chg:+.1%}，个股活跃，精选强势板块"
+        if abs(sh_chg) < 0.003 and down_ratio > 0.55:
+            return f"上证横盘但个股普跌（跌{down_ratio:.0%}），权重护盘掩盖抛压，谨慎"
+        if sh_chg < -0.005 and down_ratio > 0.6:
+            return "指数与个股共振下跌，市场恐慌，暂停买入"
+        if gz_chg < -0.01 and down_ratio > 0.6:
+            return f"中小盘领跌 {gz_chg:+.1%}，市场情绪弱，观望"
+        if down_ratio <= 0.4 and sh_chg > 0.003:
+            return "普涨行情，顺势参与"
+
+        return ""
 
     def _get_sector_monitor(self):
         if self._sector_monitor is None:
@@ -64,6 +152,12 @@ class AbnormalMonitorMixin:
             if self._prev_snapshot and gap_sec <= 120:
                 # 快照未变化时跳过（collector 推送周期 > 检测周期）
                 if id(current_snapshot) != id(self._prev_snapshot):
+                    # 冷却：距上次异动推送 < 10 分钟 → 跳过
+                    last_alert = getattr(self, "_last_abnormal_alert", 0)
+                    if now_ts - last_alert < 600:
+                        self._prev_snapshot = current_snapshot
+                        self._prev_snapshot_ts = now_ts
+                        return
                     self._ensure_industry_cache()
                     messages = detector.detect_sector(
                         current_snapshot,
@@ -73,6 +167,7 @@ class AbnormalMonitorMixin:
                     )
                     if messages:
                         self._alert("\n".join(messages))
+                        self._last_abnormal_alert = now_ts
 
             self._prev_snapshot = current_snapshot
             self._prev_snapshot_ts = now_ts
@@ -231,8 +326,7 @@ class AbnormalDetector:
         near_limit = getattr(settings, "ABNORMAL_NEAR_LIMIT_PCT", 7.0)
         TOP_N = 10
 
-        rapid_hits = []  # (code, delta_pct, name, industry)
-        vol_hits = []
+        rapid_hits = []  # (code, delta_pct, vol_ratio, name, industry)
         limit_hits = []
 
         for code, info in current.items():
@@ -242,20 +336,19 @@ class AbnormalDetector:
             name = resolve_name(code) if resolve_name else code
             industry = industry_cache.get(code, "") if industry_cache else ""
 
-            if cur_chg - prev_chg > rapid_rise:
-                rapid_hits.append((code, cur_chg - prev_chg, name, industry))
-
+            price_delta = cur_chg - prev_chg
             cur_vol = float(info.get("amount", 0))
             prev_vol = float(prev.get("amount", 0))
-            if prev_vol > 0 and cur_vol > prev_vol * vol_surge:
-                vol_hits.append((code, cur_vol / prev_vol, name))
+            vol_ratio = cur_vol / prev_vol if prev_vol > 0 else 0
+
+            # 急速拉升且放量：必须同时满足
+            if price_delta > rapid_rise and vol_ratio > vol_surge:
+                rapid_hits.append((code, price_delta, vol_ratio, name, industry))
 
             if cur_chg >= near_limit and prev_chg < near_limit:
                 limit_hits.append((code, cur_chg, name))
 
-        # 按幅度降序排列
         rapid_hits.sort(key=lambda x: x[1], reverse=True)
-        vol_hits.sort(key=lambda x: x[1], reverse=True)
         limit_hits.sort(key=lambda x: x[1], reverse=True)
 
         now = datetime.now().strftime("%H:%M")
@@ -263,24 +356,20 @@ class AbnormalDetector:
         # 板块异动：同行业 3+ 只同时拉升 → 板块级告警
         if rapid_hits and industry_cache:
             ind_groups: dict[str, list] = {}
-            for code, delta, name, ind in rapid_hits:
+            for code, delta, vol_r, name, ind in rapid_hits:
                 if ind:
-                    ind_groups.setdefault(ind, []).append((code, delta, name))
+                    ind_groups.setdefault(ind, []).append((code, delta, vol_r, name))
             for ind, stocks in ind_groups.items():
                 if len(stocks) >= 3:
                     top_s = sorted(stocks, key=lambda x: x[1], reverse=True)[:5]
-                    lines = " ".join(f"{n}({d:+.1f}%)" for c, d, n in top_s)
+                    lines = " ".join(f"{n}({d:+.1f}% {v:.0f}×)" for c, d, v, n in top_s)
                     alerts.append(f"🔥 板块异动 {ind} {now}\n   {lines}")
 
         if rapid_hits:
             top = rapid_hits[:TOP_N]
-            lines = " ".join(f"{n} {d:+.1f}%" for c, d, n, _ in top)
+            lines = " ".join(f"{n} {d:+.1f}% {v:.0f}×" for c, d, v, n, _ in top)
             suffix = f" 等{len(rapid_hits)}只" if len(rapid_hits) > TOP_N else ""
-            alerts.append(f"🏭 急速拉升 {now}\n   {lines}{suffix}")
-        if vol_hits:
-            top = vol_hits[:TOP_N]
-            lines = " ".join(f"{n} {r:.0f}×" for c, r, n in top)
-            alerts.append(f"📊 量比暴增 {now}\n   {lines}")
+            alerts.append(f"🏭 急拉放量 {now}\n   {lines}{suffix}")
         if limit_hits:
             top = limit_hits[:TOP_N]
             lines = " ".join(f"{n} {d:+.1f}%" for c, d, n in top)
@@ -299,21 +388,16 @@ def _do_evaluate_swaps(
     price_info: dict = None,
     sector_context: str = "",
 ) -> bool:
-    """换仓评估入口：AI 优先，规则兜底。"""
-    result = _ai_evaluate_swap(
-        self, candidates, market_context, price_info, sector_context
-    )
-    if not result:
-        best_cand = max(candidates, key=lambda c: c.get("score", 0))
-        sell_code = _rule_swap_target(
-            self, best_cand["code"], best_cand.get("score", 0)
-        )
-        if not sell_code:
-            return False
-        buy_code = best_cand["code"]
-    else:
-        sell_code = result["sell"]
-        buy_code = result["buy"]
+    """换仓评估入口：规则兜底 + AI 异步评估。"""
+    # 提交 AI 评估（异步，不阻塞）
+    _submit_swap_ai(self, candidates, market_context, price_info, sector_context)
+
+    # 规则兜底：立即执行评分最高的换仓候选
+    best_cand = max(candidates, key=lambda c: c.get("score", 0))
+    sell_code = _rule_swap_target(self, best_cand["code"], best_cand.get("score", 0))
+    if not sell_code:
+        return False
+    buy_code = best_cand["code"]
 
     buy_cand = next((c for c in candidates if c["code"] == buy_code), None)
     if not buy_cand:
@@ -361,19 +445,17 @@ def _do_evaluate_swaps(
     return buy_result.success
 
 
-def _ai_evaluate_swap(
+def _submit_swap_ai(
     self,
     candidates: list[dict],
     market_context: str = "",
     price_info: dict = None,
     sector_context: str = "",
-) -> dict | None:
-    """AI 评估换仓，返回 {"sell": code, "buy": code} 或 None。"""
-    try:
-        from analysis.review.analyzer import AIAnalyzer
-        ai = AIAnalyzer()
-    except Exception:
-        return None
+):
+    """异步提交 AI 换仓评估（不阻塞扫描）。结果由 _process_pending_ai 处理。"""
+    aiq = getattr(self, "_ai_queue", None)
+    if aiq is None:
+        return
 
     pinfo = price_info or {}
     pos_lines = []
@@ -407,8 +489,7 @@ def _ai_evaluate_swap(
         )
         pos_lines.append(
             f"{code} {pos.stock_name}{sec_str} | 成本{pos.avg_cost:.2f} 现价{pos.current_price:.2f}{chg_str} "
-            f"盈亏{pos.pnl_pct:+.1f}% | 市值{pos.market_value:.0f} | "
-            f"止损{sl}(距现价{dist_sl:.1f}%) 止盈{tp}(距现价{dist_tp:+.1f}%)"
+            f"盈亏{pos.pnl_pct:+.1f}% | 止损{sl}(距现价{dist_sl:.1f}%) 止盈{tp}(距现价{dist_tp:+.1f}%)"
         )
     pos_text = "\n".join(pos_lines)
 
@@ -443,30 +524,20 @@ def _ai_evaluate_swap(
 
 只回复JSON：{{"sell": "要卖的代码", "buy": "要买的代码"}} 或 {{"sell": null, "buy": null}}。"""
 
-    try:
-        content = ai._call_ai(
-            prompt,
-            system_prompt="你是A股短线交易员。基于实时盘面判断换仓，只输出JSON。",
-            max_tokens=150,
-        )
-        if not content:
-            return None
-        content = re.sub(r"```\w*\n?|```", "", content).strip()
-        result = json.loads(content)
-        sell_code = result.get("sell")
-        buy_code = result.get("buy")
-        if sell_code and buy_code:
-            pos_codes = set(self.paper_account.positions.keys())
-            cand_codes = {c["code"] for c in candidates}
-            if sell_code in pos_codes and buy_code in cand_codes:
-                logger.info(f"AI 换仓决策: 卖{sell_code} 买{buy_code}")
-                return {"sell": sell_code, "buy": buy_code}
-            logger.warning(f"AI 换仓返回无效代码: sell={sell_code} buy={buy_code}")
-        logger.info("AI 换仓决策: 不换仓")
-        return None
-    except Exception as e:
-        logger.warning(f"AI 换仓评估异常 ({type(e).__name__}: {e})，fallback 规则")
-        return None
+    ok = aiq.submit(
+        "swap_eval",
+        prompt,
+        system_prompt="你是A股短线交易员。基于实时盘面判断换仓，只输出JSON。",
+        max_tokens=150,
+        dedupe=True,
+    )
+    if ok:
+        self._swap_ctx = {
+            "candidates": candidates,
+            "market_context": market_context,
+            "price_info": price_info,
+            "sector_context": sector_context,
+        }
 
 
 def _rule_swap_target(self, new_code: str, new_score: float) -> str | None:

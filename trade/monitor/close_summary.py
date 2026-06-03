@@ -19,7 +19,8 @@ class CloseSummaryMixin:
     def _finalize_close(self):
         """收盘后全部处理：等 15:00 后拉收盘价 → DB 快照 + 信号过期 + Telegram 推送。"""
         import time
-        from datetime import datetime as _dt, time as _time
+        from datetime import datetime as _dt
+        from datetime import time as _time
 
         # 等到 15:00:30 确保交易所收盘数据到位
         close_time = _dt.combine(_dt.today(), _time(15, 0, 30))
@@ -36,12 +37,32 @@ class CloseSummaryMixin:
                 for code, pos in self.paper_account.positions.items():
                     item = quotes.get(code)
                     if item:
-                        new_price = item.get("lastPrice") or item.get("last_price") or item.get("price")
+                        new_price = None
+                        try:
+                            suffix = "SH" if code.startswith("6") else "SZ"
+                            bars = self.qmt.get_history(
+                                f"{code}.{suffix}",
+                                period="1d",
+                                end=self._trade_date,
+                                count=1,
+                            )
+                            if bars:
+                                new_price = bars[-1].get("close")
+                        except Exception:
+                            pass
+                        if not new_price:
+                            new_price = (
+                                item.get("lastPrice")
+                                or item.get("last_price")
+                                or item.get("price")
+                            )
                         if new_price:
                             pos.update_price(float(new_price))
                         day_high = item.get("high") or 0
                         if day_high:
-                            pos.day_high = max(getattr(pos, "day_high", 0) or 0, float(day_high))
+                            pos.day_high = max(
+                                getattr(pos, "day_high", 0) or 0, float(day_high)
+                            )
                         pre_close = item.get("preClose") or item.get("pre_close") or 0
                         if pre_close and not getattr(pos, "pre_close", 0):
                             pos.pre_close = float(pre_close)
@@ -54,8 +75,12 @@ class CloseSummaryMixin:
         self.paper_account._persist_state()
 
         # 把持仓+快照复制到明天，确保明天重启时能读到
-        from datetime import datetime as _dt, timedelta
-        next_date = (_dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        from datetime import datetime as _dt
+        from datetime import timedelta
+
+        next_date = (
+            _dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
         try:
             conn = sqlite3.connect(self.db_path)
             # 快照
@@ -71,23 +96,46 @@ class CloseSummaryMixin:
                        (trade_date, total_value, cash, market_value, daily_pnl, total_pnl,
                         drawdown, position_count, sector_exposure, account, created_at)
                        VALUES (?, ?, ?, ?, 0, ?, 0, ?, ?, 'paper', ?)""",
-                    (next_date, snap[0], snap[1], snap[2], snap[3], snap[4], snap[5], _dt.now().isoformat()),
+                    (
+                        next_date,
+                        snap[0],
+                        snap[1],
+                        snap[2],
+                        snap[3],
+                        snap[4],
+                        snap[5],
+                        _dt.now().isoformat(),
+                    ),
                 )
             # 持仓
             for code, pos in self.paper_account.positions.items():
-                conn.execute("""INSERT OR REPLACE INTO trade_portfolio_positions
+                conn.execute(
+                    """INSERT OR REPLACE INTO trade_portfolio_positions
                     (trade_date, account, stock_code, stock_name, volume, avg_cost, current_price,
                      market_value, pnl, pnl_pct, pre_close, daily_pnl, holding_days, entry_date, locked_volume, created_at)
                     VALUES (?, 'paper', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-                    (next_date, code, pos.stock_name, pos.volume, pos.avg_cost, pos.current_price,
-                     pos.market_value, pos.pnl, pos.pnl_pct,
-                     getattr(pos, 'pre_close', 0) or 0,
-                     (getattr(pos, 'holding_days', 0) or 0) + 1,
-                     pos.entry_date, 0,  # 新交易日锁仓清零
-                     _dt.now().isoformat()))
+                    (
+                        next_date,
+                        code,
+                        pos.stock_name,
+                        pos.volume,
+                        pos.avg_cost,
+                        pos.current_price,
+                        pos.market_value,
+                        pos.pnl,
+                        pos.pnl_pct,
+                        getattr(pos, "pre_close", 0) or 0,
+                        (getattr(pos, "holding_days", 0) or 0) + 1,
+                        pos.entry_date,
+                        0,  # 新交易日锁仓清零
+                        _dt.now().isoformat(),
+                    ),
+                )
             conn.commit()
             conn.close()
-            logger.info(f"持仓已复制到 {next_date}，{len(self.paper_account.positions)} 只")
+            logger.info(
+                f"持仓已复制到 {next_date}，{len(self.paper_account.positions)} 只"
+            )
         except Exception as e:
             logger.warning(f"持仓复制失败: {e}")
 
@@ -115,18 +163,21 @@ class CloseSummaryMixin:
     def _run_post_close_audit(self):
         """收盘后自动运行盯盘自审计（如果启用）。"""
         from system.config.settings import AUDIT_ENABLED
+
         if not AUDIT_ENABLED:
             return
         try:
             logger.info("开始收盘审计...")
 
             from trade.monitor.audit.rule_auditor import RuleAuditor
+
             rule = RuleAuditor(repo=self.repo)
             n_findings = len(rule.run_and_save(self._trade_date))
             logger.info(f"规则审计完成: {n_findings} 条发现")
 
             if n_findings > 0:
                 from trade.monitor.audit.ai_auditor import AIAuditor
+
                 ai = AIAuditor(repo=self.repo)
                 result = ai.run_and_save(self._trade_date)
                 if result:
@@ -135,9 +186,22 @@ class CloseSummaryMixin:
                     logger.info(f"AI 审计完成: {n_imps} 改进, {n_lessons} 条教训")
 
                     imps = self.repo.get_pending_watcher_improvements()
-                    for imp in imps[-3:]:
-                        from trade.monitor.audit.improvement_applier import format_improvement_card
-                        self._alert(format_improvement_card(imp))
+                    if imps:
+                        from trade.monitor.audit.improvement_applier import (
+                            format_improvement_card,
+                        )
+
+                        cards = [format_improvement_card(i) for i in imps[-5:]]
+                        msg = (
+                            f"🔧 收盘审计 {self._trade_date}\n"
+                            f"   规则审计发现 → AI 生成 {len(imps)} 条改进建议\n\n"
+                            + "\n".join(cards)
+                            + "\n\n   💡 使用 /apply N 应用具体改进"
+                        )
+                        self._alert_private(msg)
+                        self._alert(
+                            f"🔧 收盘审计完成 → {len(imps)}条改进建议（详情私聊）"
+                        )
         except Exception as e:
             logger.warning(f"收盘审计异常（不阻塞主流程）: {e}")
 
@@ -176,7 +240,17 @@ class CloseSummaryMixin:
                 drawdown += dd
             is_today = pos.entry_date == self._trade_date
             daily_per_stock = (close - cost) * vol if is_today else 0
-            pos_list.append((code, pos.stock_name, close, cost, pos.pnl_pct, is_today, daily_per_stock))
+            pos_list.append(
+                (
+                    code,
+                    pos.stock_name,
+                    close,
+                    cost,
+                    pos.pnl_pct,
+                    is_today,
+                    daily_per_stock,
+                )
+            )
 
         total_value = cash + total_mv
         total_pnl = total_value - p.initial_cash

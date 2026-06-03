@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 import requests
 
 from system.config import settings
+from system.config.settings import DATABASE_PATH, LOGS_DIR
 from system.utils.dns_bypass import install as install_dns_bypass
 
 # 绕过 Shadowrocket/Surge 本地代理的 DNS 劫持
@@ -1164,6 +1165,9 @@ class ReviewAnalyzer:
             # 解析股票池
             stock_pool = self._extract_stock_pool(report)
             cleaned_report = self._remove_stock_pool(report)
+            cleaned_report = self._remove_predictions(cleaned_report)
+            # 去掉 AI 输出开头的 markdown 分隔线
+            cleaned_report = cleaned_report.lstrip("-").lstrip()
 
             # 提取预测
             try:
@@ -1416,6 +1420,17 @@ class ReviewAnalyzer:
         cleaned = re.sub(r"<<<STOCKS>>>.*?<<<END>>>", "", report_text, flags=re.DOTALL)
         cleaned = re.sub(r"\n\s*\n\s*\n", "\n\n", cleaned)
         self.logger.info("✅ 已删除复盘股票池标记")
+        return cleaned
+
+    def _remove_predictions(self, report_text: str) -> str:
+        """从复盘报告中删除预测结构化数据（推送前调用）"""
+        import re
+
+        cleaned = re.sub(
+            r"<<<PREDICTIONS>>>.*?<<<END>>>", "", report_text, flags=re.DOTALL
+        )
+        cleaned = re.sub(r"\n\s*\n\s*\n", "\n\n", cleaned)
+        self.logger.info("✅ 已删除复盘预测标记")
         return cleaned
 
     def _fetch_news(self, trade_date: str) -> dict:
@@ -1809,9 +1824,13 @@ class AIAnalyzer:
         self._provider = provider
 
         if not self.api_key:
-            raise ValueError(f"AI API Key 未配置（provider={provider}），请在 .env 中设置")
+            raise ValueError(
+                f"AI API Key 未配置（provider={provider}），请在 .env 中设置"
+            )
         if not self.model:
-            raise ValueError("AI_MODEL 未配置，请在 .env 中设置，例: AI_MODEL=deepseek-chat")
+            raise ValueError(
+                "AI_MODEL 未配置，请在 .env 中设置，例: AI_MODEL=deepseek-v4-pro"
+            )
 
     def _call_ai(
         self,

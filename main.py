@@ -24,6 +24,7 @@ COMMANDS = [
     "qmt-collect",
     "strategy-audit",
     "audit",
+    "verify-predictions",
 ]
 
 
@@ -105,13 +106,13 @@ def cmd_monitor():
             os.kill(old_pid, 0)
             logger.error(f"盯盘已在运行 (PID {old_pid})，拒绝重复启动")
             print(f"盯盘已在运行 (PID {old_pid})，如确认已停请删除 {pid_file}")
+            sys.exit(1)
         except (OSError, ValueError):
             os.remove(pid_file)
             fd = os.open(pid_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, "w") as f:
                 f.write(str(os.getpid()))
-            return  # 跳过 sys.exit
-        sys.exit(1)
+            # 旧 PID 文件已清理，继续启动
 
     def _cleanup():
         with suppress(OSError):
@@ -457,9 +458,7 @@ def cmd_listen():
 def cmd_qmt_collect():
     """QMT 实时数据采集进程 — 独立进程，TCP 推送至 Watcher + DB 容灾"""
     import logging
-    import os
     import sys as _sys
-
     from datetime import datetime as _dt
 
     from data.live.qmt_collector import QMTCollector
@@ -478,8 +477,12 @@ def cmd_qmt_collect():
     _sys.stderr = _collect_fh
 
     # 确保所有 logger 输出流到 stderr（被重定向到 qmt_collect.log）
-    logging.basicConfig(level=logging.DEBUG, stream=_sys.stderr, force=True,
-                        format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        stream=_sys.stderr,
+        force=True,
+        format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s",
+    )
 
     set_current_task("qmt_collect")
     logger = get_task_logger("qmt_collect")
@@ -637,7 +640,9 @@ def cmd_audit():
         if imps:
             print(f"待处理改进建议 ({len(imps)} 条):")
             for imp in imps:
-                print(f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}")
+                print(
+                    f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
+                )
         else:
             print("无待处理改进建议")
         return
@@ -650,11 +655,13 @@ def cmd_audit():
 
     if apply_idx:
         from trade.monitor.audit.improvement_applier import ImprovementApplier
+
         applier = ImprovementApplier(repo)
         result = applier.apply(apply_idx)
         print(result)
         try:
             from system.utils.telegram import MessageSender
+
             MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(result)
         except Exception:
             pass
@@ -665,6 +672,7 @@ def cmd_audit():
 
     if not ai_only:
         from trade.monitor.audit.rule_auditor import RuleAuditor
+
         print(f"规则审计 {trade_date} ...")
         rule = RuleAuditor(repo=repo)
         n = len(rule.run_and_save(trade_date))
@@ -672,6 +680,7 @@ def cmd_audit():
 
     if not rule_only:
         from trade.monitor.audit.ai_auditor import AIAuditor
+
         print(f"AI 审计 {trade_date} ...")
         ai = AIAuditor(repo=repo)
         result = ai.run_and_save(trade_date)
@@ -680,16 +689,87 @@ def cmd_audit():
             print(f"  完成: {n_imps} 条改进建议")
             imps = repo.get_pending_watcher_improvements()
             for imp in imps[-3:]:
-                from trade.monitor.audit.improvement_applier import format_improvement_card
+                from trade.monitor.audit.improvement_applier import (
+                    format_improvement_card,
+                )
+
                 card = format_improvement_card(imp)
                 print(card)
                 try:
                     from system.utils.telegram import MessageSender
+
                     MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(card)
                 except Exception:
                     pass
         else:
             print("  AI 审计无输出")
+
+
+def cmd_verify_predictions():
+    """收盘后核验复盘预测 vs 次日实际市场数据"""
+    import sys
+    from datetime import datetime
+
+    from analysis.review.prediction_verifier import PredictionVerifier
+    from system.config.trading_calendar import get_previous_trading_day
+    from system.utils.logger import get_task_logger, set_current_task
+    from system.utils.telegram import MessageSender
+
+    set_current_task("verify_predictions")
+    logger = get_task_logger("verify_predictions")
+
+    # 解析 --date 参数
+    push_date = None
+    args = [a for a in sys.argv[2:] if not a.startswith("--")]
+    for i, a in enumerate(sys.argv):
+        if a == "--date" and i + 1 < len(sys.argv):
+            push_date = sys.argv[i + 1]
+            break
+    if not push_date and args:
+        push_date = args[0]
+    if not push_date:
+        push_date = get_previous_trading_day(datetime.now().strftime("%Y-%m-%d"))
+
+    logger.info(f"开始核验 {push_date} 的预测…")
+    verifier = PredictionVerifier()
+    report = verifier.verify(push_date)
+
+    if report.get("error"):
+        msg = f"❌ 预测核验失败: {report['error']}"
+        logger.error(msg)
+        print(msg)
+        return
+
+    # 汇总输出
+    lines = [
+        f"📊 预测核验报告 {report['push_date']}（对比 {report['checked_date']} 实际数据）",
+        f"核验总数：{report['total']} 条",
+        f"  指数：{report['index_count']} 条 | 板块：{report['sector_count']} 条 | 情景：{report['scenario_count']} 条",
+        f"✅ 正确：{report['correct']} 条",
+        f"❌ 错误：{report['incorrect'] - report['unmatched']} 条",
+        f"⚠️ 未匹配：{report['unmatched']} 条",
+        f"📈 准确率：{report['accuracy']:.1f}%",
+    ]
+    summary = "\n".join(lines)
+    print(summary)
+    logger.info(summary.replace("\n", " | "))
+
+    # 逐条明细
+    for detail in report.get("details", []):
+        icon = "✅" if detail["is_correct"] else "❌"
+        line = f"  {icon} [{detail['pred_type']}] {detail['target_name']}: {detail['actual_result']}"
+        logger.info(line)
+
+    if report.get("unmatched_sectors"):
+        logger.warning(f"未匹配板块: {', '.join(report['unmatched_sectors'])}")
+
+    # Telegram 推送
+    try:
+        telegram = MessageSender()
+        telegram.send(summary)
+        logger.info("✅ 核验报告已推送 Telegram")
+    except Exception as e:
+        logger.warning(f"Telegram 推送失败: {e}")
 
 
 def cmd_test():
@@ -725,6 +805,7 @@ def main():
         "qmt-collect": cmd_qmt_collect,
         "strategy-audit": cmd_strategy_audit,
         "audit": cmd_audit,
+        "verify-predictions": cmd_verify_predictions,
     }.get(cmd, lambda: print(f"Unknown: {cmd}"))()
 
 

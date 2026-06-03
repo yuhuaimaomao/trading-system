@@ -51,5 +51,47 @@ MORNING_BRIEF_PROMPT = """
 1. 风格犀利直接，像交易员晨会对话，不要书面语
 2. 做减法，只写有变化的部分，没变化的一笔带过
 3. 所有数值用阿拉伯数字
-4. 总长度控制在 800 字以内
+4. 文字简报控制在 800 字以内（<<<ADJUSTMENTS>>> 块不计入字数）
+
+【FC 工具：早盘校准】
+
+你可以调用 get_pending_signals 工具获取昨日所有推荐标的的精确列表（代码、名称、买入区间、止损止盈、来源）。
+
+校准规则：
+- 避雷针明确点名的标的 → action: "cancel"（移除，不参与今日交易）
+- 避雷针中间接提及、有利空传闻但未证实的 → action: "downgrade"（保留但降低评分）
+- 隔夜宏观大幅波动（A50>±1%、纳指>±2%）→ 对高开/低开敏感的标的 action: "adjust"，修改买入区间
+- 隔夜电报利好方向与昨日推荐方向重叠 → 不需要修正，在文字简报中标注
+- 如果避雷针、电报、宏观均无重大变化 → 不需要调用工具，直接出文字简报，不输出修正块
+
+**重要**：
+- 如果决定修正，调用 get_pending_signals 获取精确标的列表
+- 在文字简报的「风险+操作更新」中列出被修正的标的和原因
+- 在报告末尾附加结构化修正块（格式见下），系统会自动解析并更新数据库
+
+【修正块格式】（仅在需要修正时输出，不需要则不输出）
+
+<<<ADJUSTMENTS>>>
+[
+  {{"stock_code": "000539", "action": "cancel", "reason": "避雷针点名监管函立案调查"}},
+  {{"stock_code": "600795", "action": "adjust", "new_buy_zone_min": 4.85, "new_buy_zone_max": 5.10, "new_stop_loss": 4.60, "reason": "A50夜盘跌1.2%开盘承压"}},
+  {{"stock_code": "002354", "action": "downgrade", "new_score": 55, "reason": "板块龙头断板，跟风票风险加大"}},
+  {{"sector": "半导体", "action": "focus", "priority": 5, "size_multiplier": 1.5, "reason": "政策催化+隔夜纳指科技反弹2.1%"}},
+  {{"sector": "电力", "action": "avoid", "priority": 4, "size_multiplier": 0.3, "reason": "前期涨幅过大，避雷针提示减持"}}
+]
+<<<END>>>
+
+stock 级别 action（三种）：
+- cancel：移除标的，status 改 cancelled，盯盘跳过
+- adjust：修改买入区间、止损、止盈（只传要改的字段，没传的表示不变）
+- downgrade：降低评分，不取消但降低优先级
+
+sector 级别 action（三种，可选，新功能）：
+- focus：AI 认为该板块今日有明确的上涨驱动。设 priority(1-5，越高越优先)、size_multiplier(1.0~2.0)
+- avoid：AI 认为该板块今日有明确的下跌风险。设 priority(1-5)、size_multiplier(0.2~0.8)
+- selective：板块有分化，指定 stock_codes 数组可关注，其余回避
+注意：
+- 只对 AI 有明确判断的板块（利好/利空证据充分）输出 sector action
+- 不能确定方向的板块不输出，系统按默认策略处理
+- 不在此列表中的标的/板块 = keep，无需修改
 """

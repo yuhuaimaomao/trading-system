@@ -43,6 +43,7 @@ class FunctionCallingEngine:
             "get_historical_calibration": self.stock_tools.get_historical_calibration,
             "get_learning_lessons": self.stock_tools.get_learning_lessons,
             "get_prediction_accuracy": self.stock_tools.get_prediction_accuracy,
+            "get_pending_signals": self.stock_tools.get_pending_signals,
             "search_stock": self.stock_tools.search_stock,
             "search_sector": self.stock_tools.search_sector,
         }

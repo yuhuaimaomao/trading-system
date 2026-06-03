@@ -66,17 +66,21 @@ class MorningBrief:
             risk_warnings=risk_text if risk_text else "（今日无避雷针内容）",
         )
 
-        # 7. 调用 AI
-        brief = self._call_ai(prompt)
+        # 7. 调用 AI（支持 FC，AI 自行决定是否调用 get_pending_signals）
+        brief, adjustments = self._call_ai_with_fc(prompt, yesterday)
 
         if not brief:
             self.logger.error("AI 生成早盘简报失败")
             return
 
-        # 8. 添加标题行
-        full_text = f"⚔️ 刺客早盘 {trade_date}\n\n{brief}"
+        # 8. 应用修正
+        if adjustments:
+            applied = self._apply_adjustments(adjustments, yesterday)
+            self.logger.info(f"早盘校准: {applied} 条修正已应用")
 
-        # 9. 推送
+        # 9. 清理修正块 + 添加标题行 + 推送
+        clean_text = self._remove_adjustments(brief)
+        full_text = f"⚔️ 刺客早盘 {trade_date}\n\n{clean_text}"
         self._send(full_text)
         self.logger.info("早盘简报已生成并推送")
 
@@ -255,27 +259,236 @@ class MorningBrief:
         return risk_text
 
     # ================================================================
-    # AI 调用
+    # AI 调用（支持 FC）
     # ================================================================
 
-    def _call_ai(self, prompt: str) -> str:
-        """调用 AI 生成早盘简报"""
-        try:
-            from analysis.review.analyzer import AIAnalyzer
+    def _call_ai_with_fc(self, prompt: str, yesterday: str) -> tuple:
+        """调用 AI 生成早报，支持 FC 自主判断是否校准。返回 (文本, adjustments列表)。"""
 
-            ai = AIAnalyzer()
-            system_prompt = (
-                "你是一个顶级游资操盘手，做盘前晨会分析。"
-                "风格犀利直接，像交易员之间的对话。"
-                "所有数值用阿拉伯数字，不要用中文数字。"
+        from analysis.review.analyzer import AIAnalyzer
+        from system.utils.function_calling import FunctionCallingEngine
+        from system.utils.stock_tools import TOOLS_DEFINITION
+
+        ai = AIAnalyzer()
+        fc_engine = FunctionCallingEngine()
+        system_prompt = (
+            "你是一个顶级游资操盘手，做盘前晨会分析。"
+            "风格犀利直接，像交易员之间的对话。"
+            "所有数值用阿拉伯数字，不要用中文数字。"
+            "你可以调用 get_pending_signals 工具获取昨日推荐标的的精确列表。"
+        )
+
+        # 只给早报相关的工具（避免 tool_choice=auto 时乱调）
+        morning_tools = [
+            t
+            for t in TOOLS_DEFINITION
+            if t["function"]["name"] == "get_pending_signals"
+        ]
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        content = ""
+        round_num = 0
+
+        while round_num < 4:  # 最多4轮，防止死循环
+            round_num += 1
+            response = ai._call_ai_with_tools(
+                messages,
+                tools=morning_tools,
+                tool_choice="auto",
+                max_tokens=6000,  # 文字简报800字 + ADJUSTMENTS JSON(可能200-500 token) + FC 中间回复
             )
-            result = ai._call_ai(prompt, system_prompt=system_prompt, max_tokens=4000)
-            if result:
-                self.logger.info(f"AI 生成成功（{len(result)}字）")
-            return result
-        except Exception as e:
-            self.logger.error(f"AI 调用失败: {e}")
-            return None
+
+            content = response.get("content", "")
+            tool_calls = response.get("tool_calls", [])
+
+            if tool_calls:
+                self.logger.info(f"FC 第{round_num}轮: {len(tool_calls)} 个工具调用")
+                assistant_msg = {"role": "assistant", "content": content or ""}
+                assistant_msg["tool_calls"] = tool_calls
+                messages.append(assistant_msg)
+
+                tool_messages = fc_engine.process_tool_calls(tool_calls)
+                messages.extend(tool_messages)
+                continue
+
+            # 无工具调用 = AI 认为不需要校准，或者已经完成
+            if content:
+                break
+
+        if not content:
+            self.logger.error("AI 返回空")
+            return None, []
+
+        # 解析修正块
+        adjustments = self._parse_adjustments(content)
+        return content, adjustments
+
+    def _parse_adjustments(self, text: str) -> list:
+        """从 AI 响应中解析 <<<ADJUSTMENTS>>> 结构化修正指令。"""
+        import json as _json
+        import re
+
+        # 标准模式：<<<ADJUSTMENTS>>> ... <<<END>>>
+        match = re.search(r"<<<ADJUSTMENTS>>>(.*?)<<<END>>>", text, re.DOTALL)
+        # 兜底：没有 <<<END>>>，取到文末
+        if not match:
+            match = re.search(r"<<<ADJUSTMENTS>>>(.*)", text, re.DOTALL)
+        if not match:
+            return []
+
+        raw = match.group(1).strip()
+        # 清理 markdown 代码块标记
+        raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+        raw = re.sub(r"\n?```\s*$", "", raw)
+
+        try:
+            data = _json.loads(raw)
+            if isinstance(data, list):
+                self.logger.info(f"✅ 解析到 {len(data)} 条修正指令")
+                return data
+        except _json.JSONDecodeError as e:
+            # DeepSeek 有时在 JSON 后追加说明文字，用 raw_decode 只取第一个完整值
+            if "Extra data" in str(e) or "extra data" in str(e):
+                try:
+                    decoder = _json.JSONDecoder()
+                    data, _ = decoder.raw_decode(raw)
+                    if isinstance(data, list):
+                        self.logger.info(
+                            f"✅ raw_decode 解析到 {len(data)} 条修正指令（忽略尾部文字）"
+                        )
+                        return data
+                except _json.JSONDecodeError:
+                    pass
+            self.logger.warning(f"ADJUSTMENTS JSON 解析失败: {e}")
+
+        return []
+
+    def _apply_adjustments(self, adjustments: list, trade_date: str) -> int:
+        """应用修正指令到 trade_signals 表。"""
+        import sqlite3
+
+        conn = sqlite3.connect(DATABASE_PATH)
+        applied = 0
+
+        for adj in adjustments:
+            code = adj.get("stock_code", "")
+            action = adj.get("action", "")
+            reason = adj.get("reason", "")
+
+            if action == "cancel":
+                conn.execute(
+                    """UPDATE trade_signals SET status='cancelled',
+                       reason=reason || ' [早盘校准: ' || ? || ']'
+                       WHERE stock_code=? AND trade_date=? AND status='pending'""",
+                    (reason, code, trade_date),
+                )
+                self.logger.info(f"  ❌ 移除: {code} ({reason})")
+                applied += 1
+
+            elif action == "adjust":
+                changes = {
+                    k: v
+                    for k, v in adj.items()
+                    if k
+                    in (
+                        "new_buy_zone_min",
+                        "new_buy_zone_max",
+                        "new_stop_loss",
+                        "new_take_profit",
+                        "new_score",
+                    )
+                }
+                if not changes:
+                    continue
+                # 构建 SET 子句
+                field_map = {
+                    "new_buy_zone_min": "buy_zone_min",
+                    "new_buy_zone_max": "buy_zone_max",
+                    "new_stop_loss": "stop_loss",
+                    "new_take_profit": "take_profit",
+                    "new_score": "signal_score",
+                }
+                sets = []
+                params = []
+                for adj_key, adj_val in changes.items():
+                    db_col = field_map.get(adj_key)
+                    if db_col:
+                        sets.append(f"{db_col}=?")
+                        params.append(adj_val)
+                if not sets:
+                    continue
+                sets.append("reason=reason || ' [早盘校准: ' || ? || ']'")
+                params.append(reason)
+                params.extend([code, trade_date])
+                conn.execute(
+                    f"UPDATE trade_signals SET {', '.join(sets)} "
+                    f"WHERE stock_code=? AND trade_date=? AND status='pending'",
+                    params,
+                )
+                self.logger.info(f"  🔧 调整: {code} {list(changes.keys())} ({reason})")
+                applied += 1
+
+            elif action == "downgrade":
+                new_score = adj.get("new_score")
+                if new_score is not None:
+                    conn.execute(
+                        """UPDATE trade_signals SET signal_score=?,
+                           reason=reason || ' [早盘校准: ' || ? || ']'
+                           WHERE stock_code=? AND trade_date=? AND status='pending'""",
+                        (new_score, reason, code, trade_date),
+                    )
+                    self.logger.info(f"  ⬇ 降级: {code} score→{new_score} ({reason})")
+                    applied += 1
+
+            elif action in ("focus", "avoid", "selective"):
+                sector = adj.get("sector", "")
+                if not sector:
+                    continue
+                import json
+
+                conn.execute(
+                    """INSERT OR REPLACE INTO morning_sector_bias
+                       (trade_date, sector_name, bias, priority, size_multiplier, stock_codes, reason)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        trade_date,
+                        sector,
+                        action,
+                        adj.get("priority", 3),
+                        adj.get("size_multiplier", 1.0),
+                        json.dumps(adj.get("stock_codes", [])),
+                        reason,
+                    ),
+                )
+                emoji = {"focus": "🎯", "avoid": "🚫", "selective": "🔍"}.get(
+                    action, ""
+                )
+                self.logger.info(
+                    f"  {emoji} 板块倾向: {sector} {action} "
+                    f"priority={adj.get('priority', 3)} mult={adj.get('size_multiplier', 1.0)} ({reason})"
+                )
+                applied += 1
+
+        conn.commit()
+        conn.close()
+        return applied
+
+    def _remove_adjustments(self, text: str) -> str:
+        """从推送文本中删除修正块（仅系统解析用，不推送给用户）。"""
+        import re
+
+        # 标准模式：<<<ADJUSTMENTS>>> ... <<<END>>>
+        cleaned = re.sub(r"<<<ADJUSTMENTS>>>.*?<<<END>>>", "", text, flags=re.DOTALL)
+        # 兜底：如果 AI 漏掉了 <<<END>>>，从标记截断到文末
+        idx = cleaned.find("<<<ADJUSTMENTS>>>")
+        if idx != -1:
+            cleaned = cleaned[:idx]
+        cleaned = re.sub(r"\n\s*\n\s*\n", "\n\n", cleaned)
+        return cleaned.strip()
 
     # ================================================================
     # 推送

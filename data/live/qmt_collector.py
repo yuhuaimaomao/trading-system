@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 PORT = 15555
 # 采集循环不停轮询，select 超时 2s，无 watcher 连接时不停拉取
-MORNING_START = dt_time(9, 25)
+MORNING_START = dt_time(9, 30)
 MORNING_END = dt_time(11, 30)
 AFTERNOON_START = dt_time(13, 0)
 MARKET_CLOSE = dt_time(15, 0)
@@ -74,7 +74,12 @@ class QMTCollector:
                 try:
                     conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
                 except sqlite3.OperationalError:
-                    pass  # 列已存在
+                    pass
+            for col, typ in [("index_code", "TEXT DEFAULT '000001.SH'")]:
+                try:
+                    conn.execute(f"ALTER TABLE index_snapshots ADD COLUMN {col} {typ}")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
             conn.close()
         except Exception as e:
@@ -83,6 +88,7 @@ class QMTCollector:
     def _write_index_snapshot(
         self,
         ts: float,
+        code: str,
         price: float,
         high: float,
         low: float,
@@ -94,16 +100,26 @@ class QMTCollector:
             conn = sqlite3.connect(self.db_path)
             conn.execute(
                 """INSERT OR REPLACE INTO index_snapshots
-                   (trade_date, ts, price, high, low, pre_close, change_pct, amount)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (self._trade_date, ts, price, high, low, pre_close, change_pct, amount),
+                   (trade_date, ts, index_code, price, high, low, pre_close, change_pct, amount)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    self._trade_date,
+                    ts,
+                    code,
+                    price,
+                    high,
+                    low,
+                    pre_close,
+                    change_pct,
+                    amount,
+                ),
             )
             conn.commit()
             conn.close()
         except Exception as e:
             logger.warning(f"index_snapshots 写入失败: {e}")
 
-    def _write_market_snapshots(self, ts_str: str, stocks: dict[str, dict]):
+    def _write_market_snapshots(self, ts: float, stocks: dict[str, dict]):
         """批量写 market_snapshots。"""
         rows = []
         for code, item in stocks.items():
@@ -117,7 +133,7 @@ class QMTCollector:
             rows.append(
                 (
                     self._trade_date,
-                    ts_str,
+                    ts,
                     code,
                     round(chg, 4),
                     round(float(price), 4),
@@ -154,11 +170,15 @@ class QMTCollector:
                 return
 
             bars = []
+            today_start = time.mktime(
+                datetime.now()
+                .replace(hour=9, minute=0, second=0, microsecond=0)
+                .timetuple()
+            )
             for bar in data:
                 close_val = bar.get("close")
                 if close_val is None:
                     continue
-                # K 线时间戳 — 优先用 bar 的时间，否则用当前时间回推
                 bar_time = bar.get("time") or bar.get("timestamp")
                 if bar_time:
                     ts = (
@@ -168,6 +188,9 @@ class QMTCollector:
                     )
                 else:
                     ts = time.time()
+                # 只保留今日 9:00 之后的 K 线
+                if ts < today_start:
+                    continue
 
                 pre_close = float(bar.get("preClose", 0) or 0)
                 close_val = float(bar.get("close", 0))
@@ -177,6 +200,7 @@ class QMTCollector:
                     (
                         self._trade_date,
                         ts,
+                        "000001.SH",
                         close_val,
                         float(bar.get("high", 0)),
                         float(bar.get("low", 0)),
@@ -190,8 +214,8 @@ class QMTCollector:
                 conn = sqlite3.connect(self.db_path)
                 conn.executemany(
                     """INSERT OR REPLACE INTO index_snapshots
-                       (trade_date, ts, price, high, low, pre_close, change_pct, amount)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (trade_date, ts, index_code, price, high, low, pre_close, change_pct, amount)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     bars,
                 )
                 conn.commit()
@@ -274,61 +298,78 @@ class QMTCollector:
                         if price is None:
                             continue
                         price_float = float(price)
-                        # 归一化 changePct 为小数格式（0.035=3.5%）
-                        # QMT 不同版本返回格式不一致，启发式检测
-                        raw_chg = item.get("changePct") or item.get("change_pct") or 0
-                        chg_float = float(raw_chg)
-                        if abs(chg_float) > 1:
-                            chg_float = chg_float / 100
+                        # QMT 返回的 changePct 已为百分比值（-4.5 = -4.5%），直接使用
+                        raw_chg = item.get("changePct")
+                        if raw_chg is None:
+                            raw_chg = item.get("change_pct", 0)
+                        amt = item.get("amount")
+                        if amt is None:
+                            amt = 0
                         stocks[short] = {
                             "price": price_float,
-                            "changePct": chg_float,
-                            "amount": float(item.get("amount", 0) or 0),
+                            "changePct": float(raw_chg),
+                            "amount": float(amt),
                         }
                     if stocks:
                         ts = time.time()
                         self._send_json({"type": "market", "ts": ts, "stocks": stocks})
-                        self._write_market_snapshots(now_iso, stocks)
+                        self._write_market_snapshots(ts, stocks)
                         pushed_market = True
                         logger.debug(f"market push: {len(stocks)} 只")
         except Exception as e:
             logger.warning(f"all_quotes 获取失败: {e}")
 
-        # 2. 上证指数
+        # 2. 多指数采集（上证+深证+创业板+国证2000+科创50）
+        INDEX_CODES = {
+            "000001.SH": "上证指数",
+            "399001.SZ": "深证成指",
+            "399006.SZ": "创业板指",
+            "399303.SZ": "国证2000",
+            "000688.SH": "科创50",
+        }
         try:
-            result = self.qmt.quote("000001.SH")
-            if result.get("success", True):
+            for code, name in INDEX_CODES.items():
+                result = self.qmt.quote(code)
+                if not result.get("success", True):
+                    continue
                 data = result.get("data", result)
-                if isinstance(data, dict):
-                    price = data.get("lastPrice") or data.get("last_price")
-                    if price:
-                        ts = time.time()
-                        pre_close = float(data.get("preClose") or 0)
-                        # 不使用 QMT changePct（格式不稳定：/quote 返回百分比值如 3.5，边界情况会误判）
-                        change_pct = (
-                            (float(price) - pre_close) / pre_close if pre_close else 0
-                        )
-                        amount = float(data.get("amount") or data.get("turnover") or 0)
-                        msg = {
-                            "type": "index",
-                            "ts": ts,
-                            "price": float(price),
-                            "pre_close": pre_close,
-                            "change_pct": change_pct,
-                            "amount": amount,
-                        }
-                        self._send_json(msg)
-                        self._write_index_snapshot(
-                            ts,
-                            float(price),
-                            float(price),
-                            float(price),
-                            pre_close,
-                            change_pct,
-                            amount,
-                        )
-                        pushed_index = True
-                        logger.debug(f"index push: {float(price):.2f}")
+                if not isinstance(data, dict):
+                    continue
+                price = data.get("lastPrice") or data.get("last_price")
+                if not price:
+                    continue
+                ts = time.time()
+                pre_close = float(data.get("preClose") or 0)
+                change_pct = (float(price) - pre_close) / pre_close if pre_close else 0
+                amount = float(data.get("amount") or data.get("turnover") or 0)
+                idx_high = float(data.get("high") or price)
+                idx_low = float(data.get("low") or price)
+                msg = {
+                    "type": "index",
+                    "ts": ts,
+                    "code": code,
+                    "name": name,
+                    "price": float(price),
+                    "high": idx_high,
+                    "low": idx_low,
+                    "pre_close": pre_close,
+                    "change_pct": change_pct,
+                    "amount": amount,
+                }
+                self._send_json(msg)
+                self._write_index_snapshot(
+                    ts,
+                    code,
+                    float(price),
+                    idx_high,
+                    idx_low,
+                    pre_close,
+                    change_pct,
+                    amount,
+                )
+                pushed_index = True
+                if code == "000001.SH":
+                    logger.debug(f"index push: {name} {float(price):.2f}")
         except Exception as e:
             logger.warning(f"index quote 获取失败: {e}")
 
@@ -349,11 +390,17 @@ class QMTCollector:
             MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
         )
 
+    @staticmethod
+    def _after_market() -> bool:
+        return datetime.now().time() >= MARKET_CLOSE
+
     def run(self):
-        """主循环 — 持续采集，拿到数据立刻推送。"""
+        """主循环 — 持续采集，拿到数据立刻推送。收盘退出。"""
         while self._running:
             # 午休暂停
             if not self._in_trading_hours():
+                if self._after_market():
+                    break  # 收盘，退出循环
                 time.sleep(5)
                 continue
 

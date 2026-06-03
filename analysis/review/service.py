@@ -457,6 +457,21 @@ class ReviewService:
             logger.info("=" * 70)
             logger.info("✅ 复盘执行完成")
             logger.info("=" * 70)
+
+            # 自动核验旧预测（T-2 预测 vs T-1 实际，此时数据已齐全）
+            try:
+                from analysis.review.prediction_verifier import PredictionVerifier
+                from system.config.trading_calendar import get_previous_trading_day
+
+                prev_prev = get_previous_trading_day(
+                    get_previous_trading_day(trade_date)
+                )
+                if prev_prev:
+                    PredictionVerifier().verify(prev_prev)
+                    logger.info("✅ 历史预测自动核验完成")
+            except Exception as e:
+                logger.warning(f"预测自动核验失败（不影响主流程）: {e}")
+
             return ai_success
 
         except Exception as e:

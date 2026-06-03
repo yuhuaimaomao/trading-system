@@ -10,7 +10,6 @@ AI 不替代量化规则，而是叠加一层判断层。
 from __future__ import annotations
 
 import json
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -355,11 +354,12 @@ class AIAdvisor:
         from datetime import datetime
 
         from data.repo import TradeRepository
+        from system.config.settings import DATABASE_PATH
 
         if not decisions:
             return
 
-        repo = TradeRepository(db_path=self._db_path)
+        repo = TradeRepository(db_path=DATABASE_PATH)
         trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
         now = datetime.now().isoformat()
 
@@ -409,7 +409,6 @@ class AIAdvisor:
         report_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%H%M%S")
 
-        # 保存原始文本
         report_path = (
             report_dir / f"strategy_ai_response_{date_str}_{model_name}_{ts}.txt"
         )
@@ -420,30 +419,6 @@ class AIAdvisor:
             f.write("=" * 60 + "\n\n")
             f.write(text)
         logger.info(f"AI 原始返回已落盘: {report_path}")
-
-        # 保存持仓审查 JSON
-        if holdings_review:
-            hr_path = (
-                report_dir
-                / f"strategy_holdings_review_{date_str}_{model_name}_{ts}.json"
-            )
-            hr_data = []
-            for hr in holdings_review:
-                hr_data.append(
-                    {
-                        "stock_code": hr.stock_code,
-                        "account": hr.account,
-                        "action": hr.action,
-                        "new_stop_loss": hr.new_stop_loss,
-                        "new_take_profit": hr.new_take_profit,
-                        "expected_holding_days": hr.expected_holding_days,
-                        "tomorrow_outlook": hr.tomorrow_outlook,
-                        "reason": hr.reason,
-                    }
-                )
-            with open(hr_path, "w", encoding="utf-8") as f:
-                json.dump(hr_data, f, ensure_ascii=False, indent=2)
-            logger.info(f"持仓审查已落盘: {hr_path}")
 
     @staticmethod
     def _parse_json_response(

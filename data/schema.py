@@ -114,7 +114,7 @@ def ensure_tables():
         -- 实时数据采集表（watcher 盘中容灾恢复用）
         CREATE TABLE IF NOT EXISTS market_snapshots (
             trade_date TEXT NOT NULL,
-            ts TEXT NOT NULL,
+            ts REAL NOT NULL,
             code TEXT NOT NULL,
             change_pct REAL DEFAULT 0,
             price REAL DEFAULT 0,
@@ -344,6 +344,21 @@ def ensure_tables():
             applied_date DATE,
             effectiveness_check TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS morning_sector_bias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            sector_name TEXT NOT NULL,
+            bias TEXT NOT NULL CHECK(bias IN ('focus','avoid','neutral','selective')),
+            priority INTEGER DEFAULT 3,
+            max_positions INTEGER DEFAULT 0,
+            relaxed_thresholds TEXT,
+            size_multiplier REAL DEFAULT 1.0,
+            stock_codes TEXT,
+            reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trade_date, sector_name)
         );
     """)
 

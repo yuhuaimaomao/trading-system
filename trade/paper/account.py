@@ -57,6 +57,7 @@ class PaperAccount:
         self.db_path = db_path
         self.telegram = telegram_bot
         self.repo = TradeRepository(db_path=db_path)
+        self.__trade_date: str | None = None  # 外部可覆盖，None 时回退到当天
 
     # ===== 属性（兼容 Portfolio duck typing，供 RiskEngine 等使用）=====
 
@@ -108,7 +109,11 @@ class PaperAccount:
 
     @property
     def _trade_date(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        return self.__trade_date or datetime.now().strftime("%Y-%m-%d")
+
+    @_trade_date.setter
+    def _trade_date(self, value: str):
+        self.__trade_date = value
 
     def buy(
         self,
@@ -160,9 +165,15 @@ class PaperAccount:
         )
 
         if self.telegram:
-            self._notify_buy(code, name, price, volume, amount, commission, source)
+            try:
+                self._notify_buy(code, name, price, volume, amount, commission, source)
+            except Exception as e:
+                logger.warning(f"买入通知失败: {e}")
 
-        self._persist_state()
+        try:
+            self._persist_state()
+        except Exception as e:
+            logger.warning(f"买入落库失败: {e}")
         logger.info(
             f"模拟盘买入: {code} {name} {volume}股 @{price:.2f} 佣金{commission:.0f}"
         )
@@ -206,19 +217,25 @@ class PaperAccount:
         pnl_pct = (price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
 
         if self.telegram:
-            self._notify_sell(
-                code,
-                stock_name,
-                price,
-                volume,
-                avg_cost,
-                pnl,
-                pnl_pct,
-                commission,
-                reason,
-            )
+            try:
+                self._notify_sell(
+                    code,
+                    stock_name,
+                    price,
+                    volume,
+                    avg_cost,
+                    pnl,
+                    pnl_pct,
+                    commission,
+                    reason,
+                )
+            except Exception as e:
+                logger.warning(f"卖出通知失败: {e}")
 
-        self._persist_state()
+        try:
+            self._persist_state()
+        except Exception as e:
+            logger.warning(f"卖出落库失败: {e}")
         logger.info(f"模拟盘卖出: {code} {stock_name} 盈亏{pnl:+.0f}")
         return SellResult(
             success=True,
@@ -274,7 +291,10 @@ class PaperAccount:
 
             # 校验快照合理性：总资产需 ≈ 现金 + 市值
             expected_total = snap_cash + snap_mv
-            if snap_total <= 0 or abs(snap_total - expected_total) > self._portfolio.initial_cash * 2:
+            if (
+                snap_total <= 0
+                or abs(snap_total - expected_total) > self._portfolio.initial_cash * 2
+            ):
                 logger.warning(
                     f"快照数据异常 (total={snap_total:.0f} ≠ cash+mv={expected_total:.0f})，丢弃"
                 )
@@ -301,15 +321,30 @@ class PaperAccount:
         if not pos_rows:
             pos_rows = self.repo.get_latest_positions("paper")
         if pos_rows:
+            # 过滤今日已卖出的（trade_orders 有 sell 记录）
+            sold_today = set()
+            try:
+                orders = self.repo.get_orders_by_date(trade_date, "paper")
+                for o in orders:
+                    if o.get("order_type") == "sell":
+                        sold_today.add(o["stock_code"])
+            except Exception:
+                pass
+
             total_cost = 0.0
             for row in pos_rows:
                 code = row["stock_code"]
+                if code in sold_today:
+                    logger.info(f"跳过已卖出: {code} {row.get('stock_name', '')}")
+                    continue
                 volume = row.get("volume", 0)
                 avg_cost = row.get("avg_cost", 0)
                 total_cost += volume * avg_cost
+                # 名字兜底：DB 中为空则从 stock_basic 查
+                name = row.get("stock_name", "") or self._lookup_name(code)
                 self._portfolio.positions[code] = Position(
                     stock_code=code,
-                    stock_name=row.get("stock_name", ""),
+                    stock_name=name,
                     volume=volume,
                     avg_cost=avg_cost,
                     current_price=row.get("current_price", 0),
@@ -326,7 +361,9 @@ class PaperAccount:
             # 扣除已占用资金，确保 cash 与持仓一致
             if not snap_valid:
                 self._portfolio.cash -= total_cost
-                logger.info(f"无快照恢复：扣除持仓成本 {total_cost:,.0f}，现金余额 {self._portfolio.cash:,.0f}")
+                logger.info(
+                    f"无快照恢复：扣除持仓成本 {total_cost:,.0f}，现金余额 {self._portfolio.cash:,.0f}"
+                )
 
         # 无快照时，在持仓恢复后写入正确的初始快照
         if not snap_valid:
@@ -336,7 +373,9 @@ class PaperAccount:
                     "trade_date": trade_date,
                     "total_value": self._portfolio.total_value,
                     "cash": self._portfolio.cash,
-                    "market_value": sum(p.market_value for p in self._portfolio.positions.values()),
+                    "market_value": sum(
+                        p.market_value for p in self._portfolio.positions.values()
+                    ),
                     "daily_pnl": 0,
                     "total_pnl": 0,
                     "drawdown": 0,
@@ -358,6 +397,7 @@ class PaperAccount:
         """从 QMT 获取个股昨收价。"""
         try:
             from system.qmt.client import QMTClient
+
             client = QMTClient()
             result = client.quote(code)
             if result.get("success", True):
@@ -376,6 +416,7 @@ class PaperAccount:
             return cls._day_high_cache[code]
         try:
             from system.qmt.client import QMTClient
+
             client = QMTClient()
             result = client.quote(code)
             if result.get("success", True):
@@ -422,6 +463,24 @@ class PaperAccount:
 
     # ===== 内部 =====
 
+    def _lookup_name(self, code: str, fallback: str = "") -> str:
+        """从 stock_basic 查股票名字，失败返回 fallback。"""
+        if fallback:
+            return fallback
+        try:
+            import sqlite3
+
+            db = sqlite3.connect(self.db_path)
+            row = db.execute(
+                "SELECT stock_name FROM stock_basic WHERE stock_code=?", (code,)
+            ).fetchone()
+            db.close()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            pass
+        return code  # 最后 fallback 到代码本身
+
     def _persist_state(self):
         """实时落库：每次买卖后更新快照表和持仓表，盘中随时可查到当前状态。"""
         p = self._portfolio
@@ -430,6 +489,9 @@ class PaperAccount:
         total_drawdown = 0.0
         pos_rows = []
         for code, pos in p.positions.items():
+            # 名字兜底：内存中为空则从 stock_basic 查
+            name = pos.stock_name or self._lookup_name(code)
+
             # 昨收（隔夜持仓需要）
             pre_close = getattr(pos, "pre_close", 0) or 0
             if pre_close <= 0:
@@ -441,13 +503,17 @@ class PaperAccount:
             if day_high > 0:
                 pos.day_high = max(getattr(pos, "day_high", 0) or 0, day_high)
             pos_day_high = getattr(pos, "day_high", 0) or pos.current_price
-            dd = (pos_day_high - pos.current_price) * pos.volume if pos_day_high > 0 else 0
+            dd = (
+                (pos_day_high - pos.current_price) * pos.volume
+                if pos_day_high > 0
+                else 0
+            )
             total_drawdown += dd
 
             pos_rows.append(
                 {
                     "stock_code": code,
-                    "stock_name": pos.stock_name,
+                    "stock_name": name,
                     "volume": pos.volume,
                     "avg_cost": pos.avg_cost,
                     "current_price": pos.current_price,
@@ -462,22 +528,32 @@ class PaperAccount:
                 }
             )
 
-        self.repo.insert_snapshot(
-            {
-                "trade_date": trade_date,
-                "total_value": p.total_value,
-                "cash": p.cash,
-                "market_value": sum(pos.market_value for pos in p.positions.values()),
-                "daily_pnl": p.total_value - self._get_today_open_value(),
-                "total_pnl": p.total_pnl,
-                "drawdown": round(total_drawdown, 2),
-                "position_count": len(p.positions),
-                "sector_exposure": "{}",
-                "account": "paper",
-                "created_at": datetime.now().isoformat(),
-            }
-        )
-        self.repo.insert_positions(trade_date, "paper", pos_rows)
+        # 分别 try：快照失败不阻塞持仓写表
+        try:
+            self.repo.insert_snapshot(
+                {
+                    "trade_date": trade_date,
+                    "total_value": p.total_value,
+                    "cash": p.cash,
+                    "market_value": sum(
+                        pos.market_value for pos in p.positions.values()
+                    ),
+                    "daily_pnl": p.total_value - self._get_today_open_value(),
+                    "total_pnl": p.total_pnl,
+                    "drawdown": round(total_drawdown, 2),
+                    "position_count": len(p.positions),
+                    "sector_exposure": "{}",
+                    "account": "paper",
+                    "created_at": datetime.now().isoformat(),
+                }
+            )
+        except Exception as e:
+            logger.warning(f"快照落库失败: {e}")
+
+        try:
+            self.repo.insert_positions(trade_date, "paper", pos_rows)
+        except Exception as e:
+            logger.warning(f"持仓落库失败: {e}")
 
     def _record_order(
         self,

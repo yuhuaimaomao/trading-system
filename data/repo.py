@@ -351,7 +351,7 @@ class TradeRepository:
         with self._conn() as conn:
             cols = ", ".join(snap_dict.keys())
             placeholders = ", ".join(["?" for _ in snap_dict])
-            sql = f"INSERT INTO trade_portfolio_snapshots ({cols}) VALUES ({placeholders})"
+            sql = f"INSERT OR REPLACE INTO trade_portfolio_snapshots ({cols}) VALUES ({placeholders})"
             conn.execute(sql, vals)
             conn.commit()
 
@@ -478,12 +478,8 @@ class TradeRepository:
         return [dict(r) for r in rows]
 
     def insert_positions(self, trade_date: str, account: str, positions: list[dict]):
-        """批量保存持仓明细（按日按账户覆盖）。"""
+        """批量保存持仓明细（按 stock_code 覆盖，不删已卖出记录）。"""
         with self._conn() as conn:
-            conn.execute(
-                "DELETE FROM trade_portfolio_positions WHERE trade_date=? AND account=?",
-                (trade_date, account),
-            )
             for p in positions:
                 p["trade_date"] = trade_date
                 p["account"] = account
@@ -493,7 +489,7 @@ class TradeRepository:
                 placeholders = ", ".join(["?" for _ in p])
                 vals = [_round_val(v) for v in p.values()]
                 conn.execute(
-                    f"INSERT INTO trade_portfolio_positions ({cols}) VALUES ({placeholders})",
+                    f"INSERT OR REPLACE INTO trade_portfolio_positions ({cols}) VALUES ({placeholders})",
                     vals,
                 )
             conn.commit()
@@ -691,21 +687,35 @@ class TradeRepository:
 
     # ======================== 盯盘自审计 CRUD ========================
 
-    def insert_decision_log(self, trade_date: str, ts: str, decision_type: str,
-                            stock_code: str | None, decision_data: dict) -> int:
+    def insert_decision_log(
+        self,
+        trade_date: str,
+        ts: str,
+        decision_type: str,
+        stock_code: str | None,
+        decision_data: dict,
+    ) -> int:
         import json
+
         with self._conn() as conn:
             cursor = conn.execute(
                 """INSERT INTO watcher_decision_log
                    (trade_date, ts, decision_type, stock_code, decision_data)
                    VALUES (?, ?, ?, ?, ?)""",
-                (trade_date, ts, decision_type, stock_code,
-                 json.dumps(decision_data, ensure_ascii=False)),
+                (
+                    trade_date,
+                    ts,
+                    decision_type,
+                    stock_code,
+                    json.dumps(decision_data, ensure_ascii=False),
+                ),
             )
             conn.commit()
             return cursor.lastrowid
 
-    def get_decision_logs(self, trade_date: str, decision_type: str = None) -> list[dict]:
+    def get_decision_logs(
+        self, trade_date: str, decision_type: str = None
+    ) -> list[dict]:
         where = ["trade_date=?"]
         params = [trade_date]
         if decision_type:
@@ -714,19 +724,31 @@ class TradeRepository:
         sql = f"SELECT * FROM watcher_decision_log WHERE {' AND '.join(where)} ORDER BY ts"
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
-        cols = ["id", "trade_date", "ts", "decision_type", "stock_code",
-                "decision_data", "created_at"]
+        cols = [
+            "id",
+            "trade_date",
+            "ts",
+            "decision_type",
+            "stock_code",
+            "decision_data",
+            "created_at",
+        ]
         return [dict(zip(cols, row)) for row in rows]
 
     def insert_audit_finding(self, finding: dict) -> int:
         import json
+
         with self._conn() as conn:
             cols = ", ".join(finding.keys())
             placeholders = ", ".join(["?" for _ in finding])
             vals = []
             for k in finding:
                 v = finding[k]
-                vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+                vals.append(
+                    json.dumps(v, ensure_ascii=False)
+                    if isinstance(v, (dict, list))
+                    else v
+                )
             sql = f"INSERT INTO audit_findings ({cols}) VALUES ({placeholders})"
             cursor = conn.execute(sql, vals)
             conn.commit()
@@ -738,14 +760,29 @@ class TradeRepository:
                    WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END"""
         with self._conn() as conn:
             rows = conn.execute(sql, (trade_date,)).fetchall()
-        cols = ["id", "trade_date", "finding_type", "severity", "stock_code",
-                "decision_log_ids", "pattern_desc", "evidence", "created_at"]
+        cols = [
+            "id",
+            "trade_date",
+            "finding_type",
+            "severity",
+            "stock_code",
+            "decision_log_ids",
+            "pattern_desc",
+            "evidence",
+            "created_at",
+        ]
         return [dict(zip(cols, row)) for row in rows]
 
-    def upsert_watcher_lesson(self, lesson_type: str, lesson_key: str,
-                              lesson_content: str, trigger_conditions: dict = None,
-                              trade_date: str = None) -> int:
+    def upsert_watcher_lesson(
+        self,
+        lesson_type: str,
+        lesson_key: str,
+        lesson_content: str,
+        trigger_conditions: dict = None,
+        trade_date: str = None,
+    ) -> int:
         import json
+
         with self._conn() as conn:
             existing = conn.execute(
                 "SELECT id, occurrence_count FROM watcher_lessons WHERE lesson_type=? AND lesson_key=?",
@@ -764,9 +801,16 @@ class TradeRepository:
                     """INSERT INTO watcher_lessons
                        (lesson_type, lesson_key, lesson_content, trigger_conditions, first_date, last_date)
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (lesson_type, lesson_key, lesson_content,
-                     json.dumps(trigger_conditions, ensure_ascii=False) if trigger_conditions else None,
-                     trade_date, trade_date),
+                    (
+                        lesson_type,
+                        lesson_key,
+                        lesson_content,
+                        json.dumps(trigger_conditions, ensure_ascii=False)
+                        if trigger_conditions
+                        else None,
+                        trade_date,
+                        trade_date,
+                    ),
                 )
                 conn.commit()
                 return cursor.lastrowid
@@ -780,20 +824,34 @@ class TradeRepository:
         sql = f"SELECT * FROM watcher_lessons WHERE {' AND '.join(where)} ORDER BY occurrence_count DESC"
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
-        cols = ["id", "lesson_type", "lesson_key", "lesson_content",
-                "trigger_conditions", "occurrence_count", "first_date",
-                "last_date", "is_active", "created_at"]
+        cols = [
+            "id",
+            "lesson_type",
+            "lesson_key",
+            "lesson_content",
+            "trigger_conditions",
+            "occurrence_count",
+            "first_date",
+            "last_date",
+            "is_active",
+            "created_at",
+        ]
         return [dict(zip(cols, row)) for row in rows]
 
     def insert_watcher_improvement(self, imp: dict) -> int:
         import json
+
         with self._conn() as conn:
             cols = ", ".join(imp.keys())
             placeholders = ", ".join(["?" for _ in imp])
             vals = []
             for k in imp:
                 v = imp[k]
-                vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+                vals.append(
+                    json.dumps(v, ensure_ascii=False)
+                    if isinstance(v, (dict, list))
+                    else v
+                )
             sql = f"INSERT INTO watcher_improvements ({cols}) VALUES ({placeholders})"
             cursor = conn.execute(sql, vals)
             conn.commit()
@@ -803,13 +861,26 @@ class TradeRepository:
         sql = "SELECT * FROM watcher_improvements WHERE status='pending' ORDER BY id"
         with self._conn() as conn:
             rows = conn.execute(sql).fetchall()
-        cols = ["id", "trade_date", "improvement_type", "target_module",
-                "target_param", "suggested_change", "code_diff", "rationale",
-                "evidence_ids", "status", "applied_date", "effectiveness_check", "created_at"]
+        cols = [
+            "id",
+            "trade_date",
+            "improvement_type",
+            "target_module",
+            "target_param",
+            "suggested_change",
+            "code_diff",
+            "rationale",
+            "evidence_ids",
+            "status",
+            "applied_date",
+            "effectiveness_check",
+            "created_at",
+        ]
         return [dict(zip(cols, row)) for row in rows]
 
-    def update_watcher_improvement_status(self, imp_id: int, status: str,
-                                          applied_date: str = None):
+    def update_watcher_improvement_status(
+        self, imp_id: int, status: str, applied_date: str = None
+    ):
         with self._conn() as conn:
             conn.execute(
                 "UPDATE watcher_improvements SET status=?, applied_date=? WHERE id=?",
