@@ -41,8 +41,8 @@ class TestPortfolio:
         assert "000001" in p.positions
         pos = p.positions["000001"]
         assert pos.volume == 1000
-        # avg_cost 含佣金: (15000 + 12.75) / 1000 = 15.01275
-        assert pos.avg_cost == pytest.approx(15.01275)
+        # avg_cost 含佣金: (15000 + 12.75) / 1000 = 15.01275 → round(4) = 15.0128
+        assert pos.avg_cost == pytest.approx(15.0128)
         assert p.cash == 200000 - 15000 - 12.75
 
     def test_open_position_insufficient_cash(self):

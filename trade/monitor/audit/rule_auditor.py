@@ -371,15 +371,12 @@ class RuleAuditor:
                     ),
                 }
 
-            # 2. 查后续走势（优先 market_snapshots，fallback 持仓表收盘价）
-            from_ts = datetime.fromisoformat(ts)
-            to_ts = from_ts + timedelta(minutes=30)
-            from_str = str(from_ts.timestamp())
-            to_str = str(to_ts.timestamp())
+            # 2. 查后续走势（使用全天剩余数据而非固定30分钟窗口）
+            from_ts_val = from_ts.timestamp()
             conn2 = sqlite3.connect(self.db_path)
             snaps = conn2.execute(
-                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? AND CAST(ts AS REAL)<=? ORDER BY ts",
-                (trade_date, code, from_ts.timestamp(), to_ts.timestamp()),
+                "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? ORDER BY ts",
+                (trade_date, code, from_ts_val),
             ).fetchall()
             conn2.close()
 
@@ -394,13 +391,50 @@ class RuleAuditor:
 
             prices = [s[0] for s in snaps]
             post_low, post_high = min(prices), max(prices)
+            post_close = prices[-1]  # 收盘价（或当日最后价格）
+
             rebound_pct = (
                 (post_high - trigger_price) / trigger_price * 100
                 if trigger_price
                 else 0
             )
+            rebound_vs_cost = (
+                (post_high - data.get("avg_cost", 0)) / data["avg_cost"] * 100
+                if data.get("avg_cost", 0)
+                else 0
+            )
 
-            if rebound_pct > 2:
+            # —— 卖飞检测：止损后反弹超过成本价 ——
+            if fill and rebound_vs_cost > 1:
+                findings.append(
+                    {
+                        "trade_date": trade_date,
+                        "finding_type": "stop_too_tight",
+                        "severity": "P0",
+                        "stock_code": code,
+                        "decision_log_ids": json.dumps([log["id"]]),
+                        "pattern_desc": (
+                            f"{code} 止损卖出后反弹超成本 "
+                            f"(触发价{trigger_price:.2f}→最高{post_high:.2f}，"
+                            f"超过成本{data.get('avg_cost', 0):.2f} +{rebound_vs_cost:+.1f}%)，"
+                            f"止损太紧/被开盘恐慌扫出"
+                        ),
+                        "evidence": json.dumps(
+                            {
+                                "trigger_price": trigger_price,
+                                "avg_cost": data.get("avg_cost", 0),
+                                "post_low": post_low,
+                                "post_high": post_high,
+                                "post_close": post_close,
+                                "rebound_pct": round(rebound_pct, 2),
+                                "rebound_vs_cost_pct": round(rebound_vs_cost, 2),
+                                **fill_info,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+            elif rebound_pct > 2:
                 findings.append(
                     {
                         "trade_date": trade_date,
@@ -414,6 +448,7 @@ class RuleAuditor:
                                 "trigger_price": trigger_price,
                                 "post_low": post_low,
                                 "post_high": post_high,
+                                "post_close": post_close,
                                 "rebound_pct": round(rebound_pct, 2),
                                 **fill_info,
                             },
@@ -421,7 +456,7 @@ class RuleAuditor:
                         ),
                     }
                 )
-            elif post_low < trigger_price * 0.97:
+            elif post_close < trigger_price * 0.97:
                 drop = abs((post_low - trigger_price) / trigger_price * 100)
                 findings.append(
                     {

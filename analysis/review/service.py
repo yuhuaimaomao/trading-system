@@ -433,9 +433,9 @@ class ReviewService:
             # 判断 AI 分析是否成功
             ai_success = bool(stock_pool) and not analysis.startswith("AI 分析失败")
 
-            # 推送消息
+            # 推送消息（AI 失败只发私聊不发群）
             logger.info("\n【阶段 4/4】消息推送")
-            self.send(analysis)
+            self.send(analysis, group=ai_success)
 
             # 记录复盘推荐的股票到追踪表（AI 成功后才有的数据）
             if stock_pool:

@@ -280,36 +280,32 @@ class ProxyBaseCollector(ProxyRequester):
 
         # 从缓存读取总页数（如果有）
         total_pages = self.cache_data.get("total_pages", 0)
+        completed_pages = self.cache_data.get("completed_pages", 0)
+        failed_pages = self.cache_data.get("failed_pages", [])
+
         if total_pages > 0:
             self.logger.info(f"总页数：{total_pages} (缓存)")
 
-        # 使用 while True 循环，第 1 页后根据 total 确定总页数
-        page = 1
-        while True:
-            self.logger.info("=" * 60)
-            self.logger.info(f"采集第 {page} 页")
-            self.logger.info("=" * 60)
+        # 恢复场景：先重试失败页（不等到主循环结束后），再继续未采集页
+        if failed_pages and completed_pages > 0:
+            self.logger.info(
+                f"🔄 恢复模式：先重试 {len(failed_pages)} 个失败页 {failed_pages}"
+            )
+            for fp in failed_pages[:]:
+                self._retry_single_page(fp)
 
-            # 检查是否已采集完所有页（在尝试采集前检查）
+        # 从已采集页+1开始，不重复采第1页
+        page = max(1, self.cache_data.get("completed_pages", 0) + 1)
+        while True:
+            # 检查是否已采集完所有页
+            total_pages = self.cache_data.get("total_pages", 0)
             if total_pages > 0 and page > total_pages:
                 self.logger.info(f"✅ 已采集完所有{total_pages}页")
                 break
 
-            # 检查是否已采集（从缓存跳过）
-            if page <= self.cache_data.get("completed_pages", 0):
-                self.logger.info(f"✅ 第 {page} 页已采集，跳过")
-                # 如果已采集完所有页，停止
-                if total_pages > 0 and page >= total_pages:
-                    self.logger.info(f"✅ 已采集完所有{total_pages}页")
-                    break
-                page += 1
-                continue
-
-            # 检查是否是失败页（从缓存跳过失败页）
-            if page in self.cache_data.get("failed_pages", []):
-                self.logger.info(f"⚠️ 第 {page} 页是失败页，跳过（第 2 轮重试时处理）")
-                page += 1
-                continue
+            self.logger.info("=" * 60)
+            self.logger.info(f"采集第 {page} 页")
+            self.logger.info("=" * 60)
 
             if not current_proxy:
                 self.logger.info("步骤 1: 获取代理 IP")
@@ -558,21 +554,17 @@ class ProxyBaseCollector(ProxyRequester):
                         f"实际采集={collected}，以末页为准"
                     )
                     self.cache_data["total"] = last_page_total
-                elif not getattr(self, "_integrity_rerun", False):
-                    self.logger.warning("整轮重跑一次...")
-                    self._integrity_rerun = True
-                    self.cache_data["data"] = []
-                    self.cache_data["completed_pages"] = 0
-                    self.cache_data["failed_pages"] = []
-                    self.cache_data["status"] = "incomplete"
-                    self.cache_data.pop("last_page_total", None)
-                    self._save_cache()
-                    return self.fetch_all(max_retries=max_retries)
                 else:
-                    self.logger.warning(
-                        f"重跑后数据仍不完整：count={collected} != total={expected}，跳过，等待手工重跑"
-                    )
-                    success = False
+                    # 不全量重跑，只针对差异重试失败页
+                    self._handle_integrity_gap(expected, collected, total_pages)
+                    # 重试后重新校验
+                    collected = len(self.cache_data.get("data", []))
+                    if collected != expected:
+                        diff = abs(expected - collected)
+                        self.logger.warning(
+                            f"完整性修复后仍不完整：count={collected} != total={expected}（差{diff}条），"
+                            f"保留已采集数据，等待手工检查"
+                        )
 
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
@@ -605,6 +597,77 @@ class ProxyBaseCollector(ProxyRequester):
         else:
             self.logger.error("❌ 采集失败")
             return None
+
+    def _handle_integrity_gap(self, expected: int, collected: int, total_pages: int):
+        """数据完整性缺口修复 — 只重试失败页，不全量重跑"""
+        failed_pages = self.cache_data.get("failed_pages", [])
+        diff = expected - collected
+
+        self.logger.warning(
+            f"完整性缺口：期望{expected}条，实际{collected}条，差{diff}条，"
+            f"失败页={failed_pages or '无'}"
+        )
+
+        if failed_pages:
+            # 有明确失败页 → 只重试这些页
+            self.logger.info(f"对 {len(failed_pages)} 个失败页做第3轮重试...")
+            for page in failed_pages[:]:
+                self._retry_single_page(page)
+        else:
+            # 没有记录失败页但数据量不对 → 可能是中间页返回空但没被标记为失败
+            # 根据 diff 估算缺失页数，逐页检查是否有数据空洞
+            missing_pages_estimate = max(1, (diff + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+            self.logger.info(
+                f"无失败页记录，估计缺失{missing_pages_estimate}页，"
+                f"扫描已采集页找空洞..."
+            )
+            self._retry_missing_gaps(total_pages, expected, collected)
+
+    def _retry_single_page(self, page: int):
+        """重试单个页面，成功则追加数据并从 failed_pages 移除"""
+        self.logger.info(f"针对第{page}页补充重试...")
+        proxy = self._get_proxy()
+        if not proxy:
+            self.logger.error(f"第{page}页补充重试：获取代理失败")
+            return
+
+        page_data = self._fetch_page(page, proxy)
+        if not page_data:
+            self.logger.error(f"第{page}页补充重试：请求失败")
+            return
+
+        data_section = page_data.get("data") or {}
+        diff_list = data_section.get("diff") or page_data.get("result", {}).get("data", [])
+
+        if diff_list:
+            self.cache_data["data"].extend(diff_list)
+            if page in self.cache_data.get("failed_pages", []):
+                self.cache_data["failed_pages"].remove(page)
+            # 更新 completed_pages，防止主循环重复采集该页
+            self.cache_data["completed_pages"] = max(
+                self.cache_data.get("completed_pages", 0), page
+            )
+            self.cache_data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._save_cache()
+            self.logger.info(f"✅ 第{page}页补充重试成功：+{len(diff_list)}条")
+        else:
+            self.logger.warning(f"第{page}页补充重试返回空数据")
+
+    def _retry_missing_gaps(self, total_pages: int, expected: int, collected: int):
+        """扫描页范围，找出未采集的页码并重试"""
+        if total_pages <= 0:
+            return
+
+        for page in range(1, total_pages + 1):
+            if page in self.cache_data.get("failed_pages", []):
+                continue  # 已在上一步处理
+
+            # 检查是否已完成：completed_pages >= page 说明该页应该已采过
+            if page <= self.cache_data.get("completed_pages", 0):
+                continue
+
+            # 该页未被采集过 → 重试
+            self._retry_single_page(page)
 
     def _safe_float(self, value, default=0.0):
         """

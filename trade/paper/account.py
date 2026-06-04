@@ -179,7 +179,7 @@ class PaperAccount:
         )
         return BuyResult(success=True, volume=volume, cost=cost, commission=commission)
 
-    def sell(self, code: str, price: float, reason: str = "") -> SellResult:
+    def sell(self, code: str, price: float, reason: str = "", signal_id: int = None) -> SellResult:
         """执行卖出：T+1 检查、加现金、删持仓、写订单、发通知。"""
         pos = self._portfolio.positions.get(code)
         if not pos:
@@ -201,6 +201,30 @@ class PaperAccount:
             max(amount * COMMISSION_RATE, MIN_COMMISSION) + amount * STAMP_TAX_RATE
         )
 
+        # 在删除持仓前，先用卖出价更新并单独落库，确保当日持仓表记录最终状态
+        pos.update_price(price)
+        self.repo.insert_positions(
+            self._trade_date,
+            "paper",
+            [
+                {
+                    "stock_code": code,
+                    "stock_name": stock_name,
+                    "volume": volume,
+                    "avg_cost": avg_cost,
+                    "current_price": price,
+                    "market_value": price * volume,
+                    "pnl": pos.pnl,
+                    "pnl_pct": pos.pnl_pct,
+                    "pre_close": pos.pre_close,
+                    "daily_pnl": 0,
+                    "holding_days": pos.holding_days,
+                    "entry_date": pos.entry_date,
+                    "locked_volume": pos.locked_volume,
+                }
+            ],
+        )
+
         self._portfolio.close_position(code, price, reason, commission=commission)
         self._record_order(
             code,
@@ -210,6 +234,7 @@ class PaperAccount:
             price,
             reason,
             commission=commission,
+            signal_id=signal_id,
         )
 
         pnl = (price - avg_cost) * volume - commission
@@ -353,6 +378,8 @@ class PaperAccount:
                     pnl_pct=row.get("pnl_pct", 0),
                     entry_date=row.get("entry_date", trade_date),
                     locked_volume=row.get("locked_volume", 0),
+                    holding_days=row.get("holding_days", 0) or 0,
+                    pre_close=row.get("pre_close", 0) or 0,
                 )
                 logger.info(
                     f"恢复持仓: {code} {row.get('stock_name', '')} "
@@ -449,7 +476,7 @@ class PaperAccount:
             lines.append(
                 f"  {code} {pos.stock_name} {pos.volume}股 "
                 f"成本{pos.avg_cost:.2f} 现价{pos.current_price:.2f} "
-                f"盈亏{pos.pnl:+.0f}({pos.pnl_pct:+.1f}%)"
+                f"盈亏{pos.pnl:+.0f}({pos.pnl_pct * 100:+.1f}%)"
             )
         return lines
 
@@ -493,7 +520,7 @@ class PaperAccount:
             name = pos.stock_name or self._lookup_name(code)
 
             # 昨收（隔夜持仓需要）
-            pre_close = getattr(pos, "pre_close", 0) or 0
+            pre_close = pos.pre_close
             if pre_close <= 0:
                 pre_close = self._get_pre_close(code)
                 pos.pre_close = pre_close
@@ -522,7 +549,7 @@ class PaperAccount:
                     "pnl_pct": pos.pnl_pct,
                     "pre_close": pre_close,
                     "daily_pnl": 0,  # 当日盈亏用统一公式算，不逐只存
-                    "holding_days": getattr(pos, "holding_days", 0) or 0,
+                    "holding_days": pos.holding_days,
                     "entry_date": pos.entry_date,
                     "locked_volume": getattr(pos, "locked_volume", 0),
                 }

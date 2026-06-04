@@ -1489,9 +1489,13 @@ class ReviewAnalyzer:
 
         called_tools = set()
         round_num = 0
+        MAX_FC_ROUNDS = 10  # 防止死循环
 
         while True:
             round_num += 1
+            if round_num > MAX_FC_ROUNDS:
+                _fc_log(f"  ⚠️ 已达最大轮次 {MAX_FC_ROUNDS}，强制终止")
+                break
             tools = TOOLS_DEFINITION
             tool_choice = "auto"
             _fc_log(
@@ -1832,6 +1836,64 @@ class AIAnalyzer:
                 "AI_MODEL 未配置，请在 .env 中设置，例: AI_MODEL=deepseek-v4-pro"
             )
 
+    # 可重试的瞬态错误
+    _RETRYABLE_EXCEPTIONS = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+    )
+    _MAX_API_RETRIES = 2  # 最多 2 次（1次原始 + 1次重试）
+    _API_RETRY_BACKOFF = 5  # 秒，指数退避基数
+
+    def _api_post_with_retry(
+        self,
+        endpoint: str,
+        payload: dict,
+        headers: dict,
+        timeout: int = 600,
+        connect_timeout: int = 30,
+    ) -> requests.Response:
+        """带自动重试的 API 请求（处理连接断开、超时、5xx）。
+
+        timeout: 读超时（秒），默认 600
+        connect_timeout: 连接超时（秒），默认 30
+        """
+        import time as time_mod
+
+        # 使用 (connect, read) 元组，连接超时短，避免 TCP 握手阶段卡死
+        _timeout = (connect_timeout, timeout)
+
+        last_error = None
+        for attempt in range(1, self._MAX_API_RETRIES + 1):
+            try:
+                response = self.session.post(
+                    endpoint, json=payload, headers=headers, timeout=_timeout
+                )
+                # 5xx 服务端错误 → 可重试
+                if response.status_code >= 500:
+                    raise requests.exceptions.HTTPError(
+                        f"服务端错误 {response.status_code}: {response.text[:200]}",
+                        response=response,
+                    )
+                response.raise_for_status()
+                return response
+            except requests.exceptions.HTTPError as e:
+                # 4xx 客户端错误 → 不重试
+                if e.response is not None and 400 <= e.response.status_code < 500:
+                    raise
+                last_error = e
+            except self._RETRYABLE_EXCEPTIONS as e:
+                last_error = e
+
+            if attempt < self._MAX_API_RETRIES:
+                delay = self._API_RETRY_BACKOFF * (2 ** (attempt - 1))
+                self.logger.warning(
+                    f"API 请求失败（第{attempt}/{self._MAX_API_RETRIES}次）: {last_error}，"
+                    f"{delay}秒后重试..."
+                )
+                time_mod.sleep(delay)
+
+        raise last_error
+
     def _call_ai(
         self,
         prompt: str,
@@ -1869,10 +1931,7 @@ class AIAnalyzer:
             self.logger.info(
                 f"开始调用 AI API（模型：{self.model}，Provider：{self._provider}，超时：600 秒）..."
             )
-            response = self.session.post(
-                endpoint, json=payload, headers=headers, timeout=600
-            )
-            response.raise_for_status()
+            response = self._api_post_with_retry(endpoint, payload, headers)
 
             self.logger.info(f"AI API 响应成功（状态码：{response.status_code}）")
             result = response.json()
@@ -1948,10 +2007,10 @@ class AIAnalyzer:
             self.logger.info(
                 f"调用 AI（支持工具，消息数：{len(messages)}，tool_choice={tool_choice}）..."
             )
-            response = self.session.post(
-                endpoint, json=payload, headers=headers, timeout=600
+            # FC 单轮超时 180s（2次重试 + 5s退避 ≈ 最坏 6.5min），连接超时 15s
+            response = self._api_post_with_retry(
+                endpoint, payload, headers, timeout=180, connect_timeout=15
             )
-            response.raise_for_status()
 
             result = response.json()
 

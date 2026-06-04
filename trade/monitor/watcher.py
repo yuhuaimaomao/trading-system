@@ -198,6 +198,9 @@ class Watcher(
         # 日线因子缓存（全天不变）
         self._daily_factor_cache: dict[str, dict] = {}
 
+        # 个股价格追踪（最近10分钟，用于止跌确认）
+        self._recent_prices: dict[str, list[tuple[float, float]]] = {}  # {code: [(ts, price), ...]}
+
         # Collector TCP 客户端
         self._collector_client = None
         self._last_index_quote: dict | None = None  # collector 推送的最新指数行情
@@ -988,6 +991,7 @@ class Watcher(
             logger.warning(f"QMT 行情获取失败: {e}")
             return {}
 
+        now_ts = time.time()
         prices: dict[str, float] = {}
         for code in stock_codes:
             item = quotes.get(code)
@@ -998,7 +1002,19 @@ class Watcher(
                 if price is None:
                     price = item.get("price")
                 if price is not None:
-                    prices[code] = float(price)
+                    price_f = float(price)
+                    prices[code] = price_f
+                    # 追踪最近10分钟价格（用于止跌确认）
+                    if price_f > 0:
+                        if code not in self._recent_prices:
+                            self._recent_prices[code] = []
+                        hist = self._recent_prices[code]
+                        # 去重：价格未变化不重复记录
+                        if not hist or hist[-1][1] != price_f:
+                            hist.append((now_ts, price_f))
+                        # 只保留最近10分钟
+                        cutoff = now_ts - 600
+                        self._recent_prices[code] = [(t, p) for t, p in hist if t > cutoff]
 
                 # 涨跌停价
                 pre_close = item.get("preClose") or item.get("pre_close") or 0
@@ -1608,8 +1624,9 @@ class Watcher(
         sell_pos = self.paper_account.positions.get(sell_code)
         sell_price = sell_pos.current_price if sell_pos else (buy_cand.get("price", 0))
 
+        sell_meta = self._pos_meta.get(sell_code, {})
         sell_result = self.paper_account.sell(
-            sell_code, sell_price, f"AI异步换仓→{buy_code}"
+            sell_code, sell_price, f"AI异步换仓→{buy_code}", signal_id=sell_meta.get("signal_id")
         )
         if sell_result.success:
             self._pos_meta.pop(sell_code, None)
@@ -1761,18 +1778,18 @@ class Watcher(
                 )
 
         if alerts:
-            # 全局冷却：至少 20 轮不重复推
+            # 全局冷却：至少 40 轮不重复推（~7分钟），防止尾盘消息轰炸
             last_scan = getattr(self, "_last_sector_alert_scan", 0)
-            if self._scan_count - last_scan < 20:
+            if self._scan_count - last_scan < 40:
                 return
             if not hasattr(self, "_sector_alerted"):
                 self._sector_alerted: dict[str, int] = {}
-            # 每个板块独立去重：至少 60 轮才重复告警
+            # 每个板块独立去重：至少 90 轮（~15分钟）才重复告警
             fresh = []
             for a in alerts:
                 key = a[:12]  # 板块名前几位
                 last = self._sector_alerted.get(key, 0)
-                if self._scan_count - last > 60:
+                if self._scan_count - last > 90:
                     self._sector_alerted[key] = self._scan_count
                     fresh.append(a)
             if not fresh:

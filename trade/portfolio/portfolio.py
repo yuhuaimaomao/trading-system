@@ -19,6 +19,13 @@ class Position:
     pnl_pct: float = 0.0
     entry_date: str = ""  # 买入日期
     locked_volume: int = 0  # T+1 锁定的股数（当日买入部分）
+    holding_days: int = 0  # 已持有交易日数
+    pre_close: float = 0.0  # 昨收价
+    # 风控规则字段（RiskEngine.check_positions 使用，实际止损/止盈由盯盘 _pos_meta 维护）
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
+    trailing_stop: float = 0.0
+    highest_price: float = 0.0
 
     @property
     def available_volume(self) -> int:
@@ -190,9 +197,8 @@ class Portfolio:
             new_total_cost = price * volume + commission
             old.volume += volume
             old.avg_cost = round(
-                (old_total_cost + new_total_cost) / old.volume, 2
-                if old.volume > 0
-                else price
+                (old_total_cost + new_total_cost) / old.volume if old.volume > 0 else price,
+                4
             )
             old.market_value = old.volume * price
             old.current_price = price
@@ -200,7 +206,7 @@ class Portfolio:
             # entry_date 保持最早的
         else:
             actual_avg_cost = round(
-                (price * volume + commission) / volume, 2
+                (price * volume + commission) / volume, 4
             ) if volume > 0 else price
             pos = Position(
                 stock_code=stock_code,
@@ -209,6 +215,8 @@ class Portfolio:
                 avg_cost=actual_avg_cost,
                 current_price=price,
                 market_value=price * volume,
+                pnl=(price - actual_avg_cost) * volume,
+                pnl_pct=(price - actual_avg_cost) / actual_avg_cost if actual_avg_cost > 0 else 0,
                 entry_date=entry_date,
                 locked_volume=volume,  # 当日买入，全部 T+1 锁定
             )

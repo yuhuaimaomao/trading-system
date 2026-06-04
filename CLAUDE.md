@@ -781,6 +781,10 @@ calc_atr(highs, lows, closes, period=14)
 - 电报 AI 结构化：`TelegraphCollector._ai_structure_batch()` 的 pending 查询必须带 trade_date 过滤
 - **CLS API 迁移 (2026-05-28)**：财联社废弃了 `/nodeapi/telegraphList`（返回 404），新端点为 `/api/cache?name=telegraph&rn=20&lastTime=<ts>`，数据格式不变（`data.roll_data`）。注意 `/api/cache` 返回 Brotli 压缩，已修改 `telegraph_collector.py` 的 `Accept-Encoding` 去掉 `br`
 - **天启代理整点劣化 (2026-05-28)**：18:00 cron review 时行业/概念/个股三个代理采集器页1全部失败，8-10 分钟后手动重跑正常。根因是天启代理在整点附近返回劣质 IP。`review/service.py` 已加代理采集器失败后等 60s 重试一次的逻辑
+- **开盘恐慌扫止损 (2026-06-03)**：开盘 5 分钟内触发的止损大概率是集合竞价延续的恐慌波动，不是真实的市场方向。已加开盘缓冲期（300s），期间亏损 < 5% 的止损跳过。`position_risk.py:_check_positions()`
+- **死猫跳/弱反弹必须在有大跌后才判 (2026-06-03)**：市场单边上涨/横盘时不应该出现"死猫跳"预判。`market_state.py` dead_cat/dead_bounce 已增加前置条件（日内跌幅 > 0.5%）。
+- **单边下跌必须宽度交叉验证 (2026-06-03)**：涨多跌少时不能判单边下跌。`market_state.py:_classify_market_pattern()` one_sided 分支已增加 `down/total < 55%` 过滤。
+- **审计 post_low 窗口 (2026-06-03)**：之前用固定 30 分钟窗口分析止损后的走势，会遗漏全天级别的反弹。已改为全天窗口，并新增 `stop_too_tight` (P0) 发现类型——止损后反弹超过成本价。
 - `sector_hot_history` 2026-05-19 前 rank 全为 0（旧版不写 rank），filter 已加 `rank > 0`
 - 复盘 Prompt 交叉验证：第六节选股对应第四节主线/次线，第七节趋势票须来自当日热点板块
 - `agent-browser` 在 cron 环境 PATH 不可用，`cls_digest_collector.py` 已加 fallback
@@ -832,6 +836,9 @@ calc_atr(highs, lows, closes, period=14)
 - **已持仓股票不推送买入信号（2026-06-02）**：`_check_buy_candidates()` 循环入口处检查 `code in self._bought_watch`，已持仓直接 `continue`，不再推送买入信号
 - **同价格不反复推送（2026-06-02）**：`alert_state` 去重增强：除了检查 bool 标记，还比较当前价格与上次推送价格，变化 < 0.5% 时跳过。低于买入区和买入区内两个路径均已覆盖。防止 Watcher 重启后 `alert_state` 被清空导致相同价格重复推送
 - **`insert_snapshot` UNIQUE 约束 bug（2026-06-02 修复）**：`trade_portfolio_snapshots` 表有 `UNIQUE(trade_date, account)` 约束，但 `insert_snapshot()` 用的是 `INSERT` 而非 `INSERT OR REPLACE`。第二次买卖后 `_persist_state()` → `insert_snapshot()` 抛 `IntegrityError`，导致后面的 `insert_positions()` 永远不执行，`trade_portfolio_positions` 表数据停留在初始状态。修复：① `INSERT` → `INSERT OR REPLACE`；② `_persist_state()` 内 `insert_snapshot` 和 `insert_positions` 各自 try/except 隔离；③ `buy()`/`sell()` 内 notify 和 `_persist_state()` 各自 try/except 保护
+- **`_data_ready_at` 类型混用 Bug（2026-06-04 修复）**：`watcher.py` 中 `self._data_ready_at = time.time()`（float），但 `position_risk.py` 的 `_check_stale_positions` 用 `now - _data_ready_at`（`now` 是 `datetime.now()`）。datetime 减 float 报 `TypeError`。修复：统一用 `time.time()` 做时间差计算
+- **`_do_evaluate_swaps` 缺少 self 参数（2026-06-04 修复）**：`_do_evaluate_swaps` 是模块级函数但签名含 `self`（重度使用 self），`_evaluate_swaps` 调用时没传 self，导致 `missing 1 required positional argument: 'candidates'`。修复：调用处加 `self` 为第一位置参数
+- **DashScope AI API 403（2026-06-04）**：dashscope 余额耗尽导致上午 10:03~10:25 所有 AI 调用失败。充值后验证恢复
 
 ## 测试
 

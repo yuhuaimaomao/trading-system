@@ -229,6 +229,8 @@ SCENARIO_SIGNALS = {
         "label": "弱反弹 → 可能死猫跳",
         "direction": "bearish",
         "confirm": [
+            # 前置条件：必须有大跌（从日内高点跌幅>0.5%）才有死猫跳
+            ("前期大跌", lambda m: m.bounce_from_low > 0.5),
             ("弱势反弹", lambda m: m.bounce_quality == "weak"),
             (
                 "量缩反弹",
@@ -252,6 +254,8 @@ SCENARIO_SIGNALS = {
                 "日内明显上涨",
                 lambda m: m.ema12_pos == "above" and m.breadth_trend == "improving",
             ),
+            # 无前置大跌 → 何来死猫跳
+            ("无前置大跌", lambda m: m.bounce_from_low < 0.15),
         ],
         "threshold": 0.35,
         "pre_action": "不要追反弹，等确认",
@@ -683,24 +687,48 @@ class MarketStateMixin:
             if recovery > 0.002 and mid_start > mid_low * 1.003:
                 if pos_in_range > 0.5 and cur > ema12:
                     return "v_reversal"
-                if pos_in_range <= 0.5:  # 未过50%分位 = 弱势反弹
+                # dead_cat 前置条件：日内必须有显著下跌（从高点跌幅 > 0.5%）
+                # 无大跌则无所谓"死猫跳"
+                drop_from_hi = (hi - mid_low) / hi if hi > 0 else 0
+                if pos_in_range <= 0.5 and drop_from_hi > 0.005:  # 未过50%分位 + 确实大跌过
                     return "dead_cat"
 
         # ━━ 单边下跌 ━━
         if ema12 > 0 and cur < ema12 and short_chg < 0:
-            if n >= 2 * medium_n:
-                medium_prev_px = px[-2 * medium_n : -medium_n]
-                avg_medium_prev = (
-                    sum(medium_prev_px) / len(medium_prev_px)
-                    if medium_prev_px
-                    else avg_medium
-                )
-                if avg_medium < avg_medium_prev:
-                    decline = (avg_medium_prev - avg_medium) / avg_medium_prev
-                    if decline > 0.005:
-                        return "one_sided"
-            elif avg_medium < ema12 and short_chg < -0.003:
-                return "one_sided"
+            # 宽度交叉验证：涨多跌少不可能是单边下跌
+            breadth = self._compute_breadth()
+            if breadth:
+                up, down = breadth.get("up", 0), breadth.get("down", 0)
+                total = up + down
+                if total > 0 and down / total < 0.55:
+                    pass  # 涨多跌少，跳过单边下跌判断
+                elif n >= 2 * medium_n:
+                    medium_prev_px = px[-2 * medium_n : -medium_n]
+                    avg_medium_prev = (
+                        sum(medium_prev_px) / len(medium_prev_px)
+                        if medium_prev_px
+                        else avg_medium
+                    )
+                    if avg_medium < avg_medium_prev:
+                        decline = (avg_medium_prev - avg_medium) / avg_medium_prev
+                        if decline > 0.005:
+                            return "one_sided"
+                elif avg_medium < ema12 and short_chg < -0.003:
+                    return "one_sided"
+            else:
+                if n >= 2 * medium_n:
+                    medium_prev_px = px[-2 * medium_n : -medium_n]
+                    avg_medium_prev = (
+                        sum(medium_prev_px) / len(medium_prev_px)
+                        if medium_prev_px
+                        else avg_medium
+                    )
+                    if avg_medium < avg_medium_prev:
+                        decline = (avg_medium_prev - avg_medium) / avg_medium_prev
+                        if decline > 0.005:
+                            return "one_sided"
+                elif avg_medium < ema12 and short_chg < -0.003:
+                    return "one_sided"
 
         # ━━ 倒V/A型 ━━
         if range_pct > 0.01 and pos_in_range < 0.3 and short_chg < -0.002:

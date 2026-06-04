@@ -83,7 +83,7 @@ def compute_portfolio():
         total_mv += mv
         total_cost += cost * vol
         pnl = (close - cost) * vol
-        pnl_pct = (close - cost) / cost * 100
+        pnl_pct = (close - cost) / cost  # 小数，与 Position.update_price 一致
 
         # 日内回撤（当日买入用日内最高≈收盘价）
         positions.append(
@@ -308,13 +308,13 @@ def main():
     for p in positions:
         emoji = (
             "✅"
-            if p["pnl_pct"] > 3
-            else ("🟢" if p["pnl_pct"] > 0 else ("🟡" if p["pnl_pct"] > -3 else "🔴"))
+            if p["pnl_pct"] > 0.03
+            else ("🟢" if p["pnl_pct"] > 0 else ("🟡" if p["pnl_pct"] > -0.03 else "🔴"))
         )
         print(
             f"   {emoji} {p['code']} {p['name']}  "
             f"收盘 {p['close']:.2f}  成本 {p['cost']:.2f}  "
-            f"盈亏 {p['pnl']:+,.0f} ({p['pnl_pct']:+.2f}%)"
+            f"盈亏 {p['pnl']:+,.0f} ({p['pnl_pct'] * 100:+.2f}%)"
         )
 
     print()

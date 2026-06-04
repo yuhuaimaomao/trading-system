@@ -183,9 +183,9 @@ _IMPROVEMENT_COLS = frozenset(
 
 
 def _round_val(v):
-    """浮点数统一保留 3 位小数。"""
+    """浮点数统一保留 4 位小数。"""
     if isinstance(v, float):
-        return round(v, 3)
+        return round(v, 4)
     return v
 
 

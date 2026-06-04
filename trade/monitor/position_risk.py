@@ -170,9 +170,67 @@ class PositionRiskMixin:
                 )
                 if triggered:
                     key = f"{code}:sl"
-                    extra = ""
+                    loss_pct = -pnl_pct  # pnl_pct = (price-cost)/cost，正值=盈利
+
+                    # ━━ 深跌判断：亏损超 7%，不立即止损，等下午反弹机会 ━━
+                    if loss_pct > 7 and not is_today_buy:
+                        deep_state = meta.get("_deep_loss", {})
+                        now_ts = time.time()
+                        hour = datetime.now().hour
+                        minute = datetime.now().minute
+                        afternoon = hour >= 14 or (hour == 13 and minute >= 30)
+
+                        if not afternoon:
+                            # 上午/午休：不卖，等下午
+                            if not deep_state:
+                                deep_state = {
+                                    "entry_price": price,
+                                    "lowest": price,
+                                    "start_scan": self._scan_count,
+                                }
+                                meta["_deep_loss"] = deep_state
+                                logger.info(
+                                    f"深跌等待 [{code}] 亏损{loss_pct:.1f}%>7% "
+                                    f"现价{price:.2f} 等14:00反弹机会"
+                                )
+                                self._alert(
+                                    f"🔄 深跌等待反弹 — {code} {pos.stock_name}\n"
+                                    f"   现价: {price:.2f}  亏损: {-loss_pct:+.1f}%\n"
+                                    f"   止损触发但跌幅已深，等14:00评估反弹\n"
+                                    f"   板块:{trend}"
+                                )
+                            elif price < deep_state.get("lowest", price):
+                                deep_state["lowest"] = price
+                            continue
+                        else:
+                            # 14:00 后：根据反弹情况决定
+                            lowest = deep_state.get("lowest", price)
+                            rebound = (price - lowest) / lowest * 100 if lowest > 0 else 0
+
+                            if rebound >= 3:
+                                # 已从最低反弹 3%+ → 继续等更好的卖点
+                                if self._scan_count - deep_state.get("last_alert_scan", 0) >= 30:
+                                    deep_state["last_alert_scan"] = self._scan_count
+                                    self._alert(
+                                        f"↗️ 深跌反弹中 — {code} {pos.stock_name}\n"
+                                        f"   现价: {price:.2f}  亏损: {-loss_pct:+.1f}%\n"
+                                        f"   从低点反弹: +{rebound:.1f}%  继续持有等卖点"
+                                    )
+                                continue
+                            elif rebound >= 1:
+                                # 小反弹：尾盘14:45+就卖，否则再等
+                                if hour < 14 or (hour == 14 and minute < 45):
+                                    continue
+                                extra = "深跌弱反弹，尾盘止损"
+                            else:
+                                extra = "深跌无反弹，尾盘止损"
+                    # ━━ 正常止损 ━━
+
+                    _extra = ""
                     if sl_tighten < 1.0:
-                        extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
+                        _extra = f"大盘{risk_level}→止损收紧至{effective_sl:.2f}"
+                    if extra:
+                        _extra = extra if not _extra else f"{_extra}; {extra}"
                     try:
                         self._log_stop_trigger(
                             stock_code=code,
@@ -196,7 +254,7 @@ class PositionRiskMixin:
                         pos.avg_cost,
                         trend,
                         limit_down,
-                        extra=extra,
+                        extra=_extra,
                     )
                     continue
 

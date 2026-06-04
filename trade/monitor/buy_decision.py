@@ -5,6 +5,7 @@ Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 
 import logging
 import sqlite3
+import time
 
 from system.config import settings
 
@@ -859,7 +860,16 @@ class BuyDecisionMixin:
                 warn_reasons.append(f"布林带宽({bb_w:.0f})，波动剧烈")
                 size_mul *= 0.85 if sector_strong else 0.8
 
-        # 9. 汇总
+        # 9. 价格走势：是否在止跌
+        price_action, price_action_desc = self._get_recent_price_action(code)
+        if price_action == "declining":
+            reject_reasons.append(f"10分钟内{price_action_desc}，等待止跌再买")
+        elif price_action == "reversing":
+            size_mul = min(1.0, size_mul * 1.15)  # 确认反弹，放宽
+        elif price_action == "stabilizing":
+            pass  # 横盘不加不减，由其他维度决定
+
+        # 10. 汇总
         if reject_reasons:
             return False, "; ".join(reject_reasons), 0
         if warn_reasons:
@@ -928,6 +938,62 @@ class BuyDecisionMixin:
             return None
         except Exception:
             return None
+
+    def _get_recent_price_action(self, code: str) -> tuple[str, str]:
+        """分析最近10分钟价格走势。返回 (action, description)。
+
+        action: "declining"  — 持续创新低，下跌趋势未止
+                "stabilizing" — 窄幅横盘，跌势放缓
+                "reversing"   — 出现低点抬高/反弹
+                "no_data"     — 数据不足
+        """
+        prices = getattr(self, "_recent_prices", {}).get(code, [])
+        if len(prices) < 6:  # 至少 6 个数据点（约2分钟）
+            return "no_data", "价格数据不足"
+
+        now = time.time()
+        # 分两段：前5分钟 vs 后5分钟
+        mid = now - 300
+        first_half = [(t, p) for t, p in prices if t <= mid]
+        second_half = [(t, p) for t, p in prices if t > mid]
+
+        if len(first_half) < 3 or len(second_half) < 3:
+            # 数据不够分段，看整体趋势
+            first_price = prices[0][1]
+            last_price = prices[-1][1]
+            pct = (last_price - first_price) / first_price * 100
+            if pct < -2:
+                return "declining", f"10分钟跌{pct:.1f}%"
+            elif pct < -0.5:
+                return "stabilizing", f"10分钟缓跌{pct:.1f}%"
+            else:
+                return "stabilizing", f"10分钟横盘{pct:+.1f}%"
+
+        first_prices = [p for _, p in first_half]
+        second_prices = [p for _, p in second_half]
+
+        first_low = min(first_prices)
+        second_low = min(second_prices)
+        first_high = max(first_prices)
+        second_high = max(second_prices)
+        first_avg = sum(first_prices) / len(first_prices)
+        second_avg = sum(second_prices) / len(second_prices)
+
+        # 后5分钟最低价 < 前5分钟最低价 → 还在创新低
+        if second_low < first_low * 0.995:
+            drop_pct = (second_low - first_high) / first_high * 100
+            return "declining", f"持续创新低({drop_pct:.1f}%)"
+
+        # 后5分钟振幅 < 1% → 横盘止跌
+        second_range = (second_high - second_low) / second_low * 100 if second_low > 0 else 0
+        if second_range < 1.0:
+            return "stabilizing", f"横盘止跌(振幅{second_range:.1f}%)"
+
+        # 后5分钟均价 > 前5分钟均价 → 反弹
+        if second_avg > first_avg * 1.005:
+            return "reversing", f"低点抬高+{((second_avg-first_avg)/first_avg*100):.1f}%"
+
+        return "stabilizing", f"波动收敛(振幅{second_range:.1f}%)"
 
     def _evaluate_below_zone(
         self, code: str, price: float, buy_min: float, buy_max: float
@@ -1147,6 +1213,16 @@ class BuyDecisionMixin:
                     score += 1
                 elif m5_dif < m5_dea:
                     score -= 1
+
+        # ━━━ 9. 价格走势：是否止跌企稳 ━━━
+        price_action, price_action_desc = self._get_recent_price_action(code)
+        if price_action == "declining":
+            return "watching", f"10分钟内{price_action_desc}，等待止跌", None
+        elif price_action == "reversing":
+            score += 5  # 确认反弹，大幅加分
+        elif price_action == "stabilizing":
+            score += 3  # 横盘止跌，小幅加分
+        # no_data 不加分不扣分
 
         # ━━━ 汇总判断 ━━━
         if score >= 6:
@@ -1436,6 +1512,24 @@ class BuyDecisionMixin:
 
             # ━━━ 低于买入区 ━━━
             if below_zone and not in_zone:
+                below_pct = (buy_min - price) / buy_min * 100
+
+                # 信号类候选（盘前生成）：价格低于买入区 0.5%+ 视为 zone 失效
+                if source == "signal" and below_pct > 0.5:
+                    logger.info(
+                        f"买入决策 [{code} {name}] 放弃 信号买入区失效 "
+                        f"低于{buy_min:.2f} {below_pct:.1f}%"
+                    )
+                    alert_state[c["alert_key"]] = (price, True)
+                    self._alert(
+                        f"❌ {tag}信号放弃 — {code} {name}\n"
+                        f"   现价: {price:.2f}  买入区: {buy_min:.2f}~{buy_max:.2f}\n"
+                        f"   → 价格低于买入区 {below_pct:.1f}%，zone 已失效"
+                    )
+                    if on_abandon:
+                        on_abandon()
+                    continue
+
                 # 去重：已推送且价格变化 < 0.5% 则跳过
                 prev_state = alert_state.get(c["alert_key"])
                 if prev_state is not None and prev_state[1]:
@@ -1796,12 +1890,16 @@ class BuyDecisionMixin:
         if size_mul <= 0:
             return
 
-        # 价格区间校验：成交价低于买入区下沿超 1% 则拒绝
-        if price < buy_min * 0.99:
+        # 价格区间校验：成交价低于买入区下沿超 2% 则拒绝
+        if price < buy_min * 0.98:
             logger.warning(
                 f"买入拒绝 [{code} {name}] 价格{price:.2f}低于买入区下沿{buy_min:.2f}"
-                f" ({(buy_min - price) / buy_min * 100:.1f}%)，疑似信号异常"
+                f" ({(buy_min - price) / buy_min * 100:.1f}%)，zone 失效"
             )
+            try:
+                self.repo.update_signal_status(signal_id, "expired")
+            except Exception:
+                pass
             return
 
         # 大盘 stop_mult 调整止损宽度

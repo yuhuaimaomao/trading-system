@@ -15,6 +15,13 @@ WATCHER_AUDIT_SYSTEM = """你是一个量化交易系统的盯盘审计 AI。
 - 改进建议必须定位到具体模块（market_state/buy_decision/position_risk/sector_heat）
 - param_tune 类改进（调阈值/系数）可标记 auto_applicable=true，rule 类改进需人工审核
 
+**特别注意 — 止损审计：**
+- stop_too_tight (P0): 止损后股价反弹超过成本价 → 止损太紧/被开盘恐慌扫出
+- stop_early (P1): 止损后反弹但未超成本 → 可能过早
+- stop_late (P1): 止损后继续深跌 → 止损太宽
+- 当同时存在 stop_too_tight 和 stop_late 时，优先分析 stop_too_tight 的根因
+- 开盘5分钟内的止损需要特别关注——这往往是开盘恐慌而非真正的止损需求
+
 **输出格式：** 严格 JSON，用 ```json 包裹。
 {
   "causal_chains": [
