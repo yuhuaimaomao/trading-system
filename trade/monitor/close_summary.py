@@ -254,30 +254,29 @@ class CloseSummaryMixin:
         today_trades = self.repo.get_orders_by_date(self._trade_date, account="paper")
         filled = [t for t in today_trades if t.get("order_status") == "filled"]
 
-        # 预加载：所有参与过今日交易的历史买入订单（用于计算已平仓的实际成本）
+        # 预加载：从昨日持仓表取已平仓股票的成本（避免跨轮次 FIFO 计算）
         all_traded_codes = set(t["stock_code"] for t in filled)
         all_traded_codes.update(p.positions.keys())
-        historical_buys: dict[str, list[dict]] = {c: [] for c in all_traded_codes}
+        prev_cost: dict[str, float] = {}
         try:
             conn = sqlite3.connect(self.db_path)
-            for code in all_traded_codes:
-                rows = conn.execute(
-                    """SELECT filled_price, filled_volume, filled_amount, commission
-                       FROM trade_orders
-                       WHERE stock_code=? AND account='paper'
-                         AND order_type='buy' AND order_status='filled'
-                       ORDER BY id""",
-                    (code,),
-                ).fetchall()
-                historical_buys[code] = [
-                    {
-                        "filled_price": r[0],
-                        "filled_volume": r[1],
-                        "filled_amount": r[2],
-                        "commission": r[3] or 0,
-                    }
-                    for r in rows
-                ]
+            prev_date = conn.execute(
+                """SELECT trade_date FROM trade_portfolio_positions
+                   WHERE trade_date < ? AND account='paper'
+                   ORDER BY trade_date DESC LIMIT 1""",
+                (self._trade_date,),
+            ).fetchone()
+            if prev_date:
+                for code in all_traded_codes:
+                    if code in p.positions:
+                        continue
+                    row = conn.execute(
+                        """SELECT avg_cost FROM trade_portfolio_positions
+                           WHERE trade_date=? AND account=? AND stock_code=?""",
+                        (prev_date[0], "paper", code),
+                    ).fetchone()
+                    if row and row[0]:
+                        prev_cost[code] = float(row[0])
             conn.close()
         except Exception:
             pass
@@ -328,20 +327,17 @@ class CloseSummaryMixin:
                     avg_cost = s["cost"]
                     cost_basis = held_cost
                 else:
-                    # 已平仓：用今日买入 + 历史买入计算成本
-                    all_buys = s["buys"] + historical_buys.get(code, [])
-                    total_buy_vol = sum(b["filled_volume"] for b in all_buys)
-                    total_buy_amt = sum(
-                        b["filled_amount"] + (b.get("commission") or 0)
-                        for b in all_buys
-                    )
-                    total_stock_pnl = (
-                        sell_total - total_buy_amt
-                        if sell_vol > 0 and total_buy_vol > 0
-                        else 0
-                    )
-                    avg_cost = total_buy_amt / total_buy_vol if total_buy_vol > 0 else 0
-                    cost_basis = total_buy_amt if total_buy_amt > 0 else 1
+                    # 已平仓：用昨日持仓成本 vs 今日卖出均价
+                    if sell_vol > 0:
+                        sell_avg = sell_total / sell_vol
+                        cost = prev_cost.get(code, sell_avg)
+                        total_stock_pnl = (sell_avg - cost) * sell_vol
+                        avg_cost = cost
+                        cost_basis = cost * sell_vol if cost > 0 else 1
+                    else:
+                        total_stock_pnl = 0
+                        avg_cost = 0
+                        cost_basis = 1
 
                 # 日内涨跌
                 if s["is_held"] and s["vol"] > 0:
