@@ -377,24 +377,6 @@ class CloseSummaryMixin:
                     f"{pos_str}"
                 )
 
-        # ── 今日成交明细 ──
-        if filled:
-            lines.append("")
-            lines.append(f"   📝 今日成交 {len(filled)} 笔")
-            for t in filled:
-                otype = "买入" if t["order_type"] == "buy" else "卖出"
-                code = t["stock_code"]
-                t_name = (
-                    p.positions[code].stock_name
-                    if code in p.positions
-                    else self._resolve_name(code)
-                )
-                lines.append(
-                    f"   📝 {otype} {code} {t_name}  "
-                    f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
-                    f"金额: {t['filled_amount']:,.0f}"
-                )
-
         return "\n".join(lines)
 
     # ---- 实盘持仓汇总 ----
@@ -489,12 +471,10 @@ def _derive_real_positions(db_path: str) -> list[dict]:
 
 
 def _pnl_emoji(pnl_pct: float) -> str:
-    """盈亏对应的表情符号。"""
-    if pnl_pct > 0.03:
-        return "✅"
-    elif pnl_pct > 0:
-        return "🟢"
-    elif pnl_pct > -0.03:
-        return "🟡"
-    else:
+    """盈亏对应的表情符号。红涨绿跌，A股惯例。"""
+    if pnl_pct > 0.005:
         return "🔴"
+    elif pnl_pct < -0.005:
+        return "🟢"
+    else:
+        return "🟡"
