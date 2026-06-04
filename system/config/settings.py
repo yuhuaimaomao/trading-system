@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # 加载 .env 文件
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 # ===== 路径 =====
 DATABASE_PATH = os.environ.get(
@@ -136,7 +136,7 @@ MARKET_BREADTH_BULL = 3000  # 普涨: 上涨家数 > 3000
 MARKET_BREADTH_DIVIDE = 1500  # 分化: 上涨 1500~3000
 MARKET_BREADTH_BEAR = 800  # 普跌/恐慌: 上涨 < 800
 MARKET_BREADTH_BOUNCE = 2000  # 连跌修复: 恐慌后首日涨家数 > 2000
-REGIME_STABLE_SCANS = 5  # 新 regime 需连续 N 轮一致才确认切换（~5分钟）
+REGIME_STABLE_SCANS = 8  # 新 regime 需连续 N 轮一致才确认切换（~8分钟）
 REGIME_JITTER_WINDOW = 5  # 5 分钟内切换超过 REGIME_JITTER_MAX 次触发告警
 REGIME_JITTER_MAX = 3
 BREADTH_DOWN_UP_RATIO = 3.0  # 下跌/上涨 > 此值且指数跌时暂停新开仓
@@ -151,7 +151,7 @@ DYNAMIC_SECTOR_DISCOVERY_ENABLED = (
     os.environ.get("DYNAMIC_SECTOR_DISCOVERY_ENABLED", "true").lower() == "true"
 )
 DYNAMIC_SECTOR_HEAT_THRESHOLD = int(
-    os.environ.get("DYNAMIC_SECTOR_HEAT_THRESHOLD", "4")
+    os.environ.get("DYNAMIC_SECTOR_HEAT_THRESHOLD", "3")
 )
 DYNAMIC_SECTOR_MAX_CANDIDATES = int(
     os.environ.get("DYNAMIC_SECTOR_MAX_CANDIDATES", "10")

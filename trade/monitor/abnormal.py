@@ -281,6 +281,7 @@ class AbnormalMonitorMixin:
         )
         try:
             swapped = _do_evaluate_swaps(
+                self,
                 candidates,
                 market_context=ctx,
                 price_info=price_info,

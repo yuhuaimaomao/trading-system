@@ -5,6 +5,7 @@ Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性.
 
 import logging
 import sqlite3
+import time
 from datetime import datetime
 from datetime import time as dt_time
 
@@ -18,11 +19,24 @@ logger = logging.getLogger(__name__)
 class PositionRiskMixin:
     """持仓风控：止损止盈、移动止损、回撤止损、被套/补仓分类."""
 
+    # 开盘缓冲：开盘后 N 秒内不触发止损（防止开盘恐慌扫止损）
+    OPENING_BUFFER_SECONDS = 300
+
+    def _minutes_since_open(self) -> float:
+        from datetime import date
+
+        morning = datetime.combine(date.today(), dt_time(9, 30))
+        return (datetime.now() - morning).total_seconds() / 60
+
     def _check_positions(self, prices: dict[str, float]):
         # 大盘 + 板块环境，用于动态调整止损止盈触发条件
         regime = getattr(self, "_regime", None)
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
         pattern = getattr(regime, "pattern", "normal") if regime else "normal"
+
+        # 开盘缓冲期内跳过止损止盈执行（价格序列不稳定，容易恐慌扫止损）
+        seconds_since_open = self._minutes_since_open() * 60
+        in_opening_buffer = seconds_since_open < self.OPENING_BUFFER_SECONDS
 
         # ── 日内熔断：日亏损 > 3%，所有浮亏仓位立即平仓 ──
         pa = self.paper_account
@@ -139,6 +153,15 @@ class PositionRiskMixin:
                     logger.info(
                         f"持仓风控 [{code} {pos.stock_name}] T+1锁定 跳过止损止盈 "
                         f"价格{price:.2f} 成本{pos.avg_cost:.2f} 盈亏{pnl_pct:+.1f}%"
+                    )
+            elif in_opening_buffer and pnl_pct > -5:
+                # 开盘缓冲期：T+1前持仓跳过止损（防止开盘恐慌扫止损）
+                # 仅当浮亏不超 -5% 时跳过 — 真正的暴跌不止损更危险
+                if self._scan_count % 5 == 0:
+                    logger.info(
+                        f"持仓风控 [{code} {pos.stock_name}] 开盘缓冲 跳过止损 "
+                        f"价格{price:.2f} 盈亏{pnl_pct:+.1f}% "
+                        f"距开盘{seconds_since_open:.0f}s"
                     )
             else:
                 # ── 止损：大盘/板块弱时收紧触发线 ──
@@ -375,7 +398,7 @@ class PositionRiskMixin:
                     else 999
                 )
                 morning_passed = (
-                    now - getattr(self, "_data_ready_at", 0)
+                    time.time() - getattr(self, "_data_ready_at", 0)
                 ) > 1800  # 数据就绪 > 30 分钟
                 if morning_passed and abs(pnl) < 0.03:
                     triggers.append("跨日无进展")
@@ -525,11 +548,20 @@ class PositionRiskMixin:
     def _evaluate_sell_context(self, code: str, stype: str, trend: str) -> str:
         """评估卖出时的市场/板块上下文，返回 'normal' / 'hold' / 'urgent'。
 
-        - hold: 大盘V反/低开高走，止损可能卖在最低点，暂缓
+        - hold: 大盘V反/低开高走/开盘恐慌，止损可能卖在最低点，暂缓
         - urgent: 板块加速下行，立即卖出不要犹豫
         """
         regime = getattr(self, "_regime", None)
         pattern = getattr(regime, "pattern", "normal") if regime else "normal"
+
+        # 开盘缓冲期 + 大盘跌幅 < 1% → 开盘恐慌，暂缓止损
+        seconds_since_open = self._minutes_since_open() * 60
+        if stype == "止损" and seconds_since_open < self.OPENING_BUFFER_SECONDS:
+            idx = self._get_index_quote()
+            if idx:
+                chg = idx.get("change_pct", 0) or 0
+                if abs(chg) < 0.01:  # 大盘跌幅 < 1%，非系统性风险
+                    return "hold"
 
         # V反/低开高走 → 止损可能卖在地板，暂缓（止盈不受影响）
         if stype in ("止损",) and pattern in ("v_reversal", "gap_down_recover"):
@@ -627,7 +659,10 @@ class PositionRiskMixin:
         }
 
         # 模拟盘直接执行（实盘等用户确认）
-        result = self.paper_account.sell(code, price, stype)
+        meta = self._pos_meta.get(code, {})
+        result = self.paper_account.sell(
+            code, price, stype, signal_id=meta.get("signal_id")
+        )
         if result.success:
             self._pos_meta.pop(code, None)
             self._bought_watch.pop(code, None)  # 卖出成功才清理盯盘
@@ -660,8 +695,12 @@ class PositionRiskMixin:
                     self._alert(
                         f"🔓 跌停开板 — {code} {rem['name']}\n   现价: {cur_price:.2f}  自动执行卖出"
                     )
+                    meta = self._pos_meta.get(code, {})
                     result = self.paper_account.sell(
-                        code, cur_price, f"跌停开板({rem['type']})"
+                        code,
+                        cur_price,
+                        f"跌停开板({rem['type']})",
+                        signal_id=meta.get("signal_id"),
                     )
                     if result.success:
                         self._pos_meta.pop(code, None)

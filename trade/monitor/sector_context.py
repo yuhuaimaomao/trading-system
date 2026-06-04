@@ -858,7 +858,24 @@ class SectorContextMixin:
                 )
 
         hot.sort(key=lambda x: -x["score"])
-        return hot[:5]
+        top = hot[:5]
+        if not top and self._sector_stats:
+            # 有板块数据但无过阈值板块 → 输出最高分板块供诊断
+            best = max(
+                (
+                    (n, s)
+                    for n, s in self._sector_stats.items()
+                    if len(s.get("trend_history", [])) >= 3
+                ),
+                key=lambda x: abs(x[1].get("change_pct", 0)),
+                default=None,
+            )
+            if best:
+                logger.info(
+                    f"动态板块发现: 无板块过阈值(需≥{settings.DYNAMIC_SECTOR_HEAT_THRESHOLD}) "
+                    f"涨幅最大: {best[0]} {best[1].get('change_pct', 0):+.1f}%"
+                )
+        return top
 
     def _detect_cooling_sectors(self) -> list[str]:
         """检测从热转冷的板块（用于换仓轮出）。
