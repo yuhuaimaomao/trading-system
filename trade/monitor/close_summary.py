@@ -74,13 +74,18 @@ class CloseSummaryMixin:
         self.paper_account._trade_date = self._trade_date
         self.paper_account._persist_state()
 
-        # 把持仓+快照复制到明天，确保明天重启时能读到
-        from datetime import datetime as _dt
-        from datetime import timedelta
+        # 把持仓+快照复制到下一交易日，确保下次启动时能读到
+        from system.config.trading_calendar import get_next_trading_day
 
-        next_date = (
-            _dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)
-        ).strftime("%Y-%m-%d")
+        next_date = get_next_trading_day(self._trade_date)
+        if not next_date:
+            from datetime import datetime as _dt
+            from datetime import timedelta
+
+            next_date = (
+                _dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+            logger.warning(f"交易日历不可用，回退到自然日+1: {next_date}")
         try:
             conn = sqlite3.connect(self.db_path)
             # 快照
@@ -111,8 +116,9 @@ class CloseSummaryMixin:
             for code, pos in self.paper_account.positions.items():
                 conn.execute(
                     """INSERT OR REPLACE INTO trade_portfolio_positions
-                    (trade_date, account, stock_code, stock_name, volume, avg_cost, current_price,
-                     market_value, pnl, pnl_pct, pre_close, daily_pnl, holding_days, entry_date, locked_volume, created_at)
+                    (trade_date, account, stock_code, stock_name, volume, avg_cost,
+                     current_price, market_value, pnl, pnl_pct, pre_close, daily_pnl,
+                     holding_days, entry_date, locked_volume, created_at)
                     VALUES (?, 'paper', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
                     (
                         next_date,
@@ -218,77 +224,175 @@ class CloseSummaryMixin:
     # ---- 模拟盘持仓汇总 ----
 
     def _build_paper_summary(self) -> str:
-        """生成模拟盘持仓汇总消息。所有金额从订单表+QMT实时算，不依赖内存状态。"""
+        """生成模拟盘收盘报告。持仓 + 已平仓合并展示，一目了然。"""
         p = self.paper_account
 
-        # 现金从账户读取（买卖时实时更新+落库，重启从快照恢复）
         cash = p.cash
-
-        # 持仓市值 + 回撤
-        drawdown = 0.0
-        total_mv = 0.0
-        pos_list = []
-        for code, pos in p.positions.items():
-            close = pos.current_price
-            cost = pos.avg_cost
-            vol = pos.volume
-            mv = close * vol
-            total_mv += mv
-            day_high = getattr(pos, "day_high", 0) or close
-            dd = (day_high - close) * vol
-            if dd > 0:
-                drawdown += dd
-            is_today = pos.entry_date == self._trade_date
-            daily_per_stock = (close - cost) * vol if is_today else 0
-            pos_list.append(
-                (
-                    code,
-                    pos.stock_name,
-                    close,
-                    cost,
-                    pos.pnl_pct,
-                    is_today,
-                    daily_per_stock,
-                )
-            )
-
+        total_mv = sum(pos.current_price * pos.volume for pos in p.positions.values())
         total_value = cash + total_mv
         total_pnl = total_value - p.initial_cash
         total_pnl_pct = total_pnl / p.initial_cash * 100
         position_ratio = total_mv / total_value * 100 if total_value > 0 else 0
-
-        # 当日盈亏 = 当前总资产 - 今日开盘总资产
         daily_pnl = total_value - self._get_today_open_value()
+        daily_pnl_pct = daily_pnl / max(self._get_today_open_value(), 1) * 100
 
         lines = [
             f"📊 收盘持仓报告  {self._trade_date}",
             "   ─────────────────────────",
-            f"   总资产: {total_value:,.0f}  现金: {cash:,.0f}  总盈亏: {total_pnl:+,.0f} ({total_pnl_pct:+.2f}%)",
-            f"   持仓: {len(p.positions)}/{settings.MAX_POSITIONS}  仓位: {position_ratio:.0f}%  当日盈亏: {daily_pnl:+,.0f}  回撤: {drawdown:,.0f}",
+            (
+                f"   总资产: {total_value:,.0f}  现金: {cash:,.0f}  "
+                f"持仓: {len(p.positions)}/{settings.MAX_POSITIONS}  "
+                f"仓位: {position_ratio:.0f}%"
+            ),
+            (
+                f"   总盈亏: {total_pnl:+,.0f} ({total_pnl_pct:+.2f}%)  "
+                f"当日盈亏: {daily_pnl:+,.0f} ({daily_pnl_pct:+.2f}%)"
+            ),
         ]
 
-        if pos_list:
-            lines.append("")
-            for code, name, close, cost, pnl_pct, is_today, daily in pos_list:
-                emoji = _pnl_emoji(pnl_pct)
-                tag = f"当日 {daily:+,.0f}" if is_today else ""
-                lines.append(
-                    f"   {emoji} {code} {name}  收盘 {close:.2f}  "
-                    f"成本 {cost:.2f}  盈亏 {pnl_pct:+.2f}%  {tag}"
-                )
-        else:
-            lines.append("")
-            lines.append("   📦 空仓")
-
+        # ── 今日交易 ── 合并持仓 + 已平仓
         today_trades = self.repo.get_orders_by_date(self._trade_date, account="paper")
         filled = [t for t in today_trades if t.get("order_status") == "filled"]
+
+        # 预加载：所有参与过今日交易的历史买入订单（用于计算已平仓的实际成本）
+        all_traded_codes = set(t["stock_code"] for t in filled)
+        all_traded_codes.update(p.positions.keys())
+        historical_buys: dict[str, list[dict]] = {c: [] for c in all_traded_codes}
+        try:
+            conn = sqlite3.connect(self.db_path)
+            for code in all_traded_codes:
+                rows = conn.execute(
+                    """SELECT filled_price, filled_volume, filled_amount, commission
+                       FROM trade_orders
+                       WHERE stock_code=? AND account='paper'
+                         AND order_type='buy' AND order_status='filled'
+                       ORDER BY id""",
+                    (code,),
+                ).fetchall()
+                historical_buys[code] = [
+                    {
+                        "filled_price": r[0],
+                        "filled_volume": r[1],
+                        "filled_amount": r[2],
+                        "commission": r[3] or 0,
+                    }
+                    for r in rows
+                ]
+            conn.close()
+        except Exception:
+            pass
+
+        # 收集今日涉及的所有股票
+        stocks: dict[str, dict] = {}  # code → {name, buys, sells, is_held}
+        for code, pos in p.positions.items():
+            stocks[code] = {
+                "name": pos.stock_name or self._resolve_name(code),
+                "buys": [],
+                "sells": [],
+                "is_held": True,
+                "close": pos.current_price,
+                "cost": pos.avg_cost,
+                "vol": pos.volume,
+            }
+        for t in filled:
+            code = t["stock_code"]
+            if code not in stocks:
+                stocks[code] = {
+                    "name": self._resolve_name(code),
+                    "buys": [],
+                    "sells": [],
+                    "is_held": False,
+                    "close": t["filled_price"],
+                    "cost": 0,
+                    "vol": 0,
+                }
+            if t["order_type"] == "buy":
+                stocks[code]["buys"].append(t)
+            else:
+                stocks[code]["sells"].append(t)
+
+        if stocks:
+            lines.append("")
+            lines.append("   ── 今日交易 ──")
+            for code, s in stocks.items():
+                # 计算总盈亏
+                sell_total = sum(
+                    r["filled_amount"] - (r.get("commission") or 0) for r in s["sells"]
+                )
+                sell_vol = sum(r["filled_volume"] for r in s["sells"])
+
+                if s["is_held"]:
+                    held_cost = s["cost"] * s["vol"]
+                    held_mv = s["close"] * s["vol"]
+                    total_stock_pnl = held_mv - held_cost
+                    avg_cost = s["cost"]
+                    cost_basis = held_cost
+                else:
+                    # 已平仓：用今日买入 + 历史买入计算成本
+                    all_buys = s["buys"] + historical_buys.get(code, [])
+                    total_buy_vol = sum(b["filled_volume"] for b in all_buys)
+                    total_buy_amt = sum(
+                        b["filled_amount"] + (b.get("commission") or 0)
+                        for b in all_buys
+                    )
+                    total_stock_pnl = (
+                        sell_total - total_buy_amt
+                        if sell_vol > 0 and total_buy_vol > 0
+                        else 0
+                    )
+                    avg_cost = total_buy_amt / total_buy_vol if total_buy_vol > 0 else 0
+                    cost_basis = total_buy_amt if total_buy_amt > 0 else 1
+
+                # 日内涨跌
+                if s["is_held"] and s["vol"] > 0:
+                    day_pnl = (s["close"] - avg_cost) * s["vol"] if avg_cost > 0 else 0
+                elif not s["is_held"] and sell_vol > 0:
+                    day_pnl = total_stock_pnl
+                else:
+                    day_pnl = 0
+
+                # PnL 百分比
+                if cost_basis <= 0:
+                    cost_basis = 1
+                stock_pnl_pct = total_stock_pnl / cost_basis * 100
+                day_pnl_pct = day_pnl / cost_basis * 100
+
+                # 方向箭头
+                if stock_pnl_pct > 0.5:
+                    arrow = "↑"
+                elif stock_pnl_pct < -0.5:
+                    arrow = "↓"
+                else:
+                    arrow = "→"
+
+                emoji = _pnl_emoji(stock_pnl_pct / 100)
+
+                # 仓位占比（仅持仓）
+                if s["is_held"] and s["vol"] > 0 and total_value > 0:
+                    pos_pct = (s["close"] * s["vol"]) / total_value * 100
+                    pos_str = f" | {pos_pct:.0f}%"
+                else:
+                    pos_str = ""
+
+                lines.append(
+                    f"   {emoji}{arrow} {code} {s['name']} "
+                    f"| {day_pnl:+,.0f}({day_pnl_pct:+.1f}%) "
+                    f"| {total_stock_pnl:+,.0f}({stock_pnl_pct:+.1f}%)"
+                    f"{pos_str}"
+                )
+
+        # ── 今日成交明细 ──
         if filled:
             lines.append("")
             lines.append(f"   📝 今日成交 {len(filled)} 笔")
             for t in filled:
                 otype = "买入" if t["order_type"] == "buy" else "卖出"
                 code = t["stock_code"]
-                t_name = p.positions[code].stock_name if code in p.positions else code
+                t_name = (
+                    p.positions[code].stock_name
+                    if code in p.positions
+                    else self._resolve_name(code)
+                )
                 lines.append(
                     f"   📝 {otype} {code} {t_name}  "
                     f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
@@ -336,7 +440,11 @@ class CloseSummaryMixin:
             for t in filled:
                 otype = "买入" if t["order_type"] == "buy" else "卖出"
                 code = t["stock_code"]
-                t_name = p.positions[code].stock_name if code in p.positions else code
+                t_name = (
+                    self.paper_account.positions[code].stock_name
+                    if code in self.paper_account.positions
+                    else code
+                )
                 lines.append(
                     f"   📝 {otype} {code} {t_name}  "
                     f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
