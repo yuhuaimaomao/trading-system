@@ -201,6 +201,14 @@ class Watcher(
         # 个股价格追踪（最近10分钟，用于止跌确认）
         self._recent_prices: dict[str, list[tuple[float, float]]] = {}  # {code: [(ts, price), ...]}
 
+        # 全市场快照价格追踪（用于回踩机会扫描，覆盖所有5000+只）
+        self._snapshot_price_history: dict[str, list[tuple[float, float]]] = {}
+        # {code: [(ts, price), ...]}  每次 _handle_collector_market 更新
+
+        # 回踩机会发现状态
+        self._pullback_scan_count: int = 0
+        self._pullback_alerted_today: set[str] = set()  # 已推送过的股票（防重复）
+
         # Collector TCP 客户端
         self._collector_client = None
         self._last_index_quote: dict | None = None  # collector 推送的最新指数行情
@@ -600,6 +608,15 @@ class Watcher(
                     self._check_buy_candidates(dynamic, self._regime)
         except Exception as e:
             logger.warning(f"动态板块发现异常: {e}", exc_info=True)
+
+        # 盘中回踩机会发现（每 N 轮，走完整买入管线）
+        try:
+            if self._data_ready and self._scan_count % settings.PULLBACK_SCAN_INTERVAL == 0:
+                opps = self._scan_pullback_opportunities(prices)
+                if opps:
+                    self._check_buy_candidates(opps, self._regime)
+        except Exception as e:
+            logger.warning(f"回踩机会扫描异常: {e}", exc_info=True)
 
         try:
             self._check_sl_reminders()
@@ -1341,6 +1358,25 @@ class Watcher(
                 "total": up + down + flat,
             }
 
+            # 全市场价格追踪（用于回踩机会发现的止跌判断）
+            now_ts = time.time()
+            cutoff = now_ts - 600
+            for code, item in self._market_snapshot.items():
+                try:
+                    price_f = float(item.get("price", 0))
+                except (ValueError, TypeError):
+                    continue
+                if price_f <= 0:
+                    continue
+                if code not in self._snapshot_price_history:
+                    self._snapshot_price_history[code] = []
+                hist = self._snapshot_price_history[code]
+                if not hist or hist[-1][1] != price_f:
+                    hist.append((now_ts, price_f))
+                self._snapshot_price_history[code] = [
+                    (t, p) for t, p in hist if t > cutoff
+                ]
+
             self._update_sector_trends()
             if not self._data_ready and self._sector_stats:
                 was_previously_ready = self._data_ready_at > 0
@@ -1390,6 +1426,12 @@ class Watcher(
             logger.info(
                 f"从DB恢复市场快照: {len(self._market_snapshot)}只 ts={latest_ts}"
             )
+            # 盘中重启：给回踩扫描器播种初始价格点，避免等10分钟才有数据
+            now_ts = time.time()
+            for code, item in self._market_snapshot.items():
+                p = item.get("price", 0)
+                if p and float(p) > 0:
+                    self._snapshot_price_history[code] = [(now_ts, float(p))]
         except Exception as e:
             logger.warning(f"从DB恢复市场快照失败: {e}")
 

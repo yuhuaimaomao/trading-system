@@ -2130,10 +2130,12 @@ class BuyDecisionMixin:
     def _generate_hot_sector_candidates(self, prices: dict[str, float]) -> list[dict]:
         """盘中动态发现：为热门板块中的领涨股生成买入候选。
 
-        用 _detect_hot_sectors() 找热点板块，查 stock_basic 找板块内股票，
-        生成动态买入区间后喂入 _check_buy_candidates 统一管线。
+        用 _detect_hot_sectors() 找热点板块，遍历 _market_snapshot 实时数据
+        找板块内股票，生成动态买入区间后喂入 _check_buy_candidates 统一管线。
         """
         if not settings.DYNAMIC_SECTOR_DISCOVERY_ENABLED:
+            return []
+        if not self._market_snapshot:
             return []
 
         hot_sectors = self._detect_hot_sectors()
@@ -2154,44 +2156,45 @@ class BuyDecisionMixin:
         self._ensure_industry_cache()
 
         candidates = []
-        for sector in hot_sectors[:3]:  # 只取热度前 3 的板块
+        for sector in hot_sectors[:5]:  # 取热度前 5 的板块
             sname = sector["name"]
-            try:
-                conn = sqlite3.connect(self.db_path)
-                latest_date = conn.execute(
-                    "SELECT MAX(trade_date) FROM stock_basic"
-                ).fetchone()[0]
-                rows = conn.execute(
-                    """SELECT stock_code, stock_name, price, change_pct
-                       FROM stock_basic WHERE trade_date=? AND industry=?
-                         AND price > 10 AND change_pct > -3
-                       ORDER BY change_pct DESC LIMIT ?""",
-                    (latest_date, sname, settings.DYNAMIC_SECTOR_MAX_CANDIDATES),
-                ).fetchall()
-                conn.close()
-            except Exception:
-                continue
 
-            for code, name, last_price, day_chg in rows:
+            # 从实时 _market_snapshot 中找该板块股票（替代 stock_basic DB 查询）
+            sector_stocks = []
+            for code, item in self._market_snapshot.items():
                 if code in existing:
                     continue
-                price_f = float(last_price or 0)
-                if price_f <= 0:
+                if self._industry_cache.get(code, "") != sname:
                     continue
+                try:
+                    price_f = float(item.get("price", 0))
+                    chg = float(item.get("changePct", 0))
+                except (ValueError, TypeError):
+                    continue
+                if price_f <= 10:
+                    continue
+                if chg < -3:
+                    continue
+                sector_stocks.append((code, price_f, chg))
 
+            # 按涨跌幅降序，取 top N
+            sector_stocks.sort(key=lambda x: -x[2])
+            sector_stocks = sector_stocks[: settings.DYNAMIC_SECTOR_MAX_CANDIDATES]
+
+            for code, price_f, day_chg in sector_stocks:
                 # 动态买入区：板块越强，区间越窄（越有追击价值）
                 zone_pct = max(1.5, 3.0 - sector["score"] * 0.3)
                 buy_min = round(price_f * (1 - zone_pct / 100), 2)
                 buy_max = round(
                     price_f * (1 + zone_pct / 100) * 0.5, 2
-                )  # 上方空间给一半
+                )
                 sl = round(price_f * 0.94, 2)
                 tp = round(price_f * (1.08 + sector["score"] * 0.01), 2)
 
                 candidates.append(
                     {
                         "code": code,
-                        "name": name or self._resolve_name(code),
+                        "name": self._resolve_name(code),
                         "price": price_f,
                         "buy_min": buy_min,
                         "buy_max": buy_max,
@@ -2207,7 +2210,194 @@ class BuyDecisionMixin:
 
         if candidates:
             names = ", ".join(f"{c['code']} {c['name']}" for c in candidates[:6])
-            logger.info(f"动态板块发现: {len(candidates)}只候选 ({names})")
+            logger.info(f"动态板块发现(实时): {len(candidates)}只候选 ({names})")
         return candidates
+
+    def _scan_pullback_opportunities(self, prices: dict[str, float]) -> list[dict]:
+        """盘中回踩机会发现：在强势板块中找正在回踩且止跌企稳的个股。
+
+        遍历 _market_snapshot 全市场数据，筛选：
+          1. 板块日内涨幅 > 0.5%（强势）
+          2. 个股涨幅 -4% ~ +1%（回踩区）
+          3. 10分钟价格走势出现止跌（非持续下跌）
+        返回候选列表，喂入 _check_buy_candidates 统一管线。
+        """
+        if not settings.PULLBACK_SCAN_ENABLED:
+            return []
+        if not self._market_snapshot or not self._sector_stats:
+            return []
+
+        # ━ 1. 找出强势板块 ━
+        strong_sectors: list[dict] = []
+        for name, stats in self._sector_stats.items():
+            chg = stats.get("change_pct", 0)
+            if chg > settings.PULLBACK_SECTOR_MIN_CHANGE:
+                history = stats.get("trend_history", [])
+                if len(history) >= 3:
+                    strong_sectors.append({
+                        "name": name,
+                        "change_pct": chg,
+                        "continuity": stats.get("continuity", 0),
+                    })
+
+        if not strong_sectors:
+            return []
+
+        strong_sectors.sort(key=lambda x: -x["change_pct"])
+        sector_names = {s["name"] for s in strong_sectors[:5]}
+
+        # ━ 2. 去重排除 ━
+        excluded = set(self.paper_account.positions.keys())
+        excluded.update(
+            self._recently_sold.keys() if hasattr(self, "_recently_sold") else []
+        )
+        try:
+            for s in self.repo.get_pending_signals(account="paper"):
+                excluded.add(s.get("stock_code", ""))
+        except Exception:
+            pass
+        # 已推送过的当日不再重复
+        excluded.update(getattr(self, "_pullback_alerted_today", set()))
+
+        self._ensure_industry_cache()
+
+        # ━ 3. 扫描全市场快照 ━
+        opportunities = []
+        for code, item in self._market_snapshot.items():
+            if code in excluded:
+                continue
+            industry = self._industry_cache.get(code, "")
+            if not industry or industry not in sector_names:
+                continue
+
+            try:
+                chg = float(item.get("changePct", 0))
+                price_f = float(item.get("price", 0))
+            except (ValueError, TypeError):
+                continue
+
+            # 回踩区：-4% ~ +1%
+            if not (-4 < chg < 1):
+                continue
+            if price_f < settings.PULLBACK_PRICE_MIN:
+                continue
+
+            # 涨跌停过滤
+            limit_info = self._limit_cache.get(code, {})
+            limit_up = limit_info.get("limit_up", 0)
+            limit_down = limit_info.get("limit_down", 0)
+            if limit_up > 0 and price_f >= limit_up * 0.99:
+                continue
+            if limit_down > 0 and price_f <= limit_down * 1.01:
+                continue
+
+            # 10分钟止跌检查
+            is_stable, _ = self._check_snapshot_stabilization(code)
+            if not is_stable:
+                continue
+
+            sec = next((s for s in strong_sectors if s["name"] == industry), None)
+            if not sec:
+                continue
+
+            pullback_depth = sec["change_pct"] - chg
+
+            opportunities.append({
+                "code": code,
+                "name": self._resolve_name(code),
+                "price": price_f,
+                "change_pct": chg,
+                "sector": industry,
+                "sector_change": sec["change_pct"],
+                "sector_continuity": sec["continuity"],
+                "pullback_depth": pullback_depth,
+            })
+
+        if not opportunities:
+            return []
+
+        # ━ 4. 评分排序：回踩深+板块强 → 优先 ━
+        def _score(op):
+            return op["pullback_depth"] * 2 + op["sector_continuity"] * 0.5
+
+        opportunities.sort(key=lambda o: -_score(o))
+        top = opportunities[:6]  # 最多 6 只候选
+
+        # ━ 5. 生成买入候选（与信号候选同格式，喂入 _check_buy_candidates） ━
+        candidates = []
+        for op in top:
+            price_f = op["price"]
+            zone_pct = max(1.5, 3.0 - op["pullback_depth"] * 0.2)
+            buy_min = round(price_f * (1 - zone_pct / 100), 2)
+            buy_max = round(price_f * (1 + zone_pct / 100) * 0.5, 2)
+            sl = round(price_f * 0.93, 2)
+            tp = round(price_f * 1.08, 2)
+
+            candidates.append({
+                "code": op["code"],
+                "name": op["name"],
+                "price": price_f,
+                "buy_min": buy_min,
+                "buy_max": buy_max,
+                "sl": sl,
+                "tp": tp,
+                "score": 60 + int(op["pullback_depth"] * 5),
+                "trend": self._get_sector_trend(op["code"]),
+                "source": "pullback_scan",
+                "alert_key": f"pb:{op['code']}",
+                "signal_id": None,
+            })
+            self._pullback_alerted_today.add(op["code"])
+
+        if candidates:
+            names = ", ".join(
+                f"{c['code']} {c['name']}(回踩{c.get('pullback_depth', c['score']-60)/5:.1f}%)"
+                for c in candidates[:4]
+            )
+            logger.info(f"回踩机会发现: {len(candidates)}只 {names}")
+
+        return candidates
+
+    def _check_snapshot_stabilization(self, code: str) -> tuple[bool, str]:
+        """分析全市场快照中某只股票近10分钟价格是否止跌企稳。"""
+        hist = getattr(self, "_snapshot_price_history", {}).get(code, [])
+        if len(hist) < 4:
+            return False, "数据不足"
+
+        prices = [p for _, p in hist]
+        first_p = prices[0]
+        last_p = prices[-1]
+        min_p = min(prices)
+
+        # 一票否决：持续下跌（每个点都比前一个低）
+        if all(prices[i] < prices[i - 1] for i in range(1, len(prices))):
+            return False, "持续下跌中"
+
+        # 一票否决：加速下跌
+        mid = len(prices) // 2
+        if len(prices) >= 6:
+            first_slope = (prices[mid - 1] - prices[0]) / prices[0] * 100
+            second_slope = (prices[-1] - prices[mid]) / prices[mid] * 100
+            if second_slope < first_slope - 0.3:
+                return False, "跌势加速"
+
+        # 止跌信号 A：最近 3 点走平或回升
+        recent = prices[-min(3, len(prices)):]
+        recent_chg = (recent[-1] - recent[0]) / recent[0] * 100 if recent[0] > 0 else 0
+        if recent_chg >= -0.3:
+            return True, f"走平{recent_chg:+.2f}%"
+
+        # 止跌信号 B：从低点反弹
+        if min_p > 0 and min_p < prices[-2]:
+            bounce = (last_p - min_p) / min_p * 100
+            if bounce > 0.5:
+                return True, f"反弹{bounce:+.1f}%"
+
+        # 止跌信号 C：窄幅横盘
+        recent_range = (max(recent) - min(recent)) / last_p * 100 if last_p > 0 else 0
+        if recent_range < 0.5:
+            return True, f"窄幅横盘{recent_range:.1f}%"
+
+        return False, f"整体跌{(last_p - first_p) / first_p * 100:+.1f}%"
 
     # ======================== 第二层：板块热度 ========================

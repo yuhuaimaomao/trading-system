@@ -164,6 +164,20 @@ SECTOR_ROTATION_COOLDOWN_SCANS = int(
     os.environ.get("SECTOR_ROTATION_COOLDOWN_SCANS", "30")
 )
 
+# ===== Phase 4: 盘中回踩机会发现 =====
+PULLBACK_SCAN_ENABLED = (
+    os.environ.get("PULLBACK_SCAN_ENABLED", "true").lower() == "true"
+)
+PULLBACK_SCAN_INTERVAL = int(
+    os.environ.get("PULLBACK_SCAN_INTERVAL", "12")  # 每12轮约12分钟
+)
+PULLBACK_SECTOR_MIN_CHANGE = float(
+    os.environ.get("PULLBACK_SECTOR_MIN_CHANGE", "0.5")  # 板块涨幅>0.5%
+)
+PULLBACK_PRICE_MIN = float(
+    os.environ.get("PULLBACK_PRICE_MIN", "10.0")  # 最低价格过滤
+)
+
 # ===== 工具/缓存 =====
 DNS_CACHE_TTL = 600  # DNS 绕过缓存 TTL（秒）
 NAME_RESOLVE_CACHE_SIZE = 512  # 股票名称→代码 LRU 缓存上限
