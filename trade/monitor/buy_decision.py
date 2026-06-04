@@ -985,13 +985,18 @@ class BuyDecisionMixin:
             return "declining", f"持续创新低({drop_pct:.1f}%)"
 
         # 后5分钟振幅 < 1% → 横盘止跌
-        second_range = (second_high - second_low) / second_low * 100 if second_low > 0 else 0
+        second_range = (
+            (second_high - second_low) / second_low * 100 if second_low > 0 else 0
+        )
         if second_range < 1.0:
             return "stabilizing", f"横盘止跌(振幅{second_range:.1f}%)"
 
         # 后5分钟均价 > 前5分钟均价 → 反弹
         if second_avg > first_avg * 1.005:
-            return "reversing", f"低点抬高+{((second_avg-first_avg)/first_avg*100):.1f}%"
+            return (
+                "reversing",
+                f"低点抬高+{((second_avg - first_avg) / first_avg * 100):.1f}%",
+            )
 
         return "stabilizing", f"波动收敛(振幅{second_range:.1f}%)"
 
@@ -2185,9 +2190,7 @@ class BuyDecisionMixin:
                 # 动态买入区：板块越强，区间越窄（越有追击价值）
                 zone_pct = max(1.5, 3.0 - sector["score"] * 0.3)
                 buy_min = round(price_f * (1 - zone_pct / 100), 2)
-                buy_max = round(
-                    price_f * (1 + zone_pct / 100) * 0.5, 2
-                )
+                buy_max = round(price_f * (1 + zone_pct / 100) * 0.5, 2)
                 sl = round(price_f * 0.94, 2)
                 tp = round(price_f * (1.08 + sector["score"] * 0.01), 2)
 
@@ -2234,11 +2237,13 @@ class BuyDecisionMixin:
             if chg > settings.PULLBACK_SECTOR_MIN_CHANGE:
                 history = stats.get("trend_history", [])
                 if len(history) >= 3:
-                    strong_sectors.append({
-                        "name": name,
-                        "change_pct": chg,
-                        "continuity": stats.get("continuity", 0),
-                    })
+                    strong_sectors.append(
+                        {
+                            "name": name,
+                            "change_pct": chg,
+                            "continuity": stats.get("continuity", 0),
+                        }
+                    )
 
         if not strong_sectors:
             return []
@@ -2276,8 +2281,8 @@ class BuyDecisionMixin:
             except (ValueError, TypeError):
                 continue
 
-            # 回踩区：-4% ~ +1%
-            if not (-4 < chg < 1):
+            # 回踩区：-4% ~ 0%（只选绿的，红的说明已开始反弹或一直在涨）
+            if not (-4 < chg <= 0):
                 continue
             if price_f < settings.PULLBACK_PRICE_MIN:
                 continue
@@ -2302,16 +2307,18 @@ class BuyDecisionMixin:
 
             pullback_depth = sec["change_pct"] - chg
 
-            opportunities.append({
-                "code": code,
-                "name": self._resolve_name(code),
-                "price": price_f,
-                "change_pct": chg,
-                "sector": industry,
-                "sector_change": sec["change_pct"],
-                "sector_continuity": sec["continuity"],
-                "pullback_depth": pullback_depth,
-            })
+            opportunities.append(
+                {
+                    "code": code,
+                    "name": self._resolve_name(code),
+                    "price": price_f,
+                    "change_pct": chg,
+                    "sector": industry,
+                    "sector_change": sec["change_pct"],
+                    "sector_continuity": sec["continuity"],
+                    "pullback_depth": pullback_depth,
+                }
+            )
 
         if not opportunities:
             return []
@@ -2333,25 +2340,27 @@ class BuyDecisionMixin:
             sl = round(price_f * 0.93, 2)
             tp = round(price_f * 1.08, 2)
 
-            candidates.append({
-                "code": op["code"],
-                "name": op["name"],
-                "price": price_f,
-                "buy_min": buy_min,
-                "buy_max": buy_max,
-                "sl": sl,
-                "tp": tp,
-                "score": 60 + int(op["pullback_depth"] * 5),
-                "trend": self._get_sector_trend(op["code"]),
-                "source": "pullback_scan",
-                "alert_key": f"pb:{op['code']}",
-                "signal_id": None,
-            })
+            candidates.append(
+                {
+                    "code": op["code"],
+                    "name": op["name"],
+                    "price": price_f,
+                    "buy_min": buy_min,
+                    "buy_max": buy_max,
+                    "sl": sl,
+                    "tp": tp,
+                    "score": 60 + int(op["pullback_depth"] * 5),
+                    "trend": self._get_sector_trend(op["code"]),
+                    "source": "pullback_scan",
+                    "alert_key": f"pb:{op['code']}",
+                    "signal_id": None,
+                }
+            )
             self._pullback_alerted_today.add(op["code"])
 
         if candidates:
             names = ", ".join(
-                f"{c['code']} {c['name']}(回踩{c.get('pullback_depth', c['score']-60)/5:.1f}%)"
+                f"{c['code']} {c['name']}(回踩{c.get('pullback_depth', c['score'] - 60) / 5:.1f}%)"
                 for c in candidates[:4]
             )
             logger.info(f"回踩机会发现: {len(candidates)}只 {names}")
@@ -2382,7 +2391,7 @@ class BuyDecisionMixin:
                 return False, "跌势加速"
 
         # 止跌信号 A：最近 3 点走平或回升
-        recent = prices[-min(3, len(prices)):]
+        recent = prices[-min(3, len(prices)) :]
         recent_chg = (recent[-1] - recent[0]) / recent[0] * 100 if recent[0] > 0 else 0
         if recent_chg >= -0.3:
             return True, f"走平{recent_chg:+.2f}%"

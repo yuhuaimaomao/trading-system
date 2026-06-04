@@ -156,12 +156,14 @@ class CloseSummaryMixin:
         except Exception as e:
             logger.warning(f"模拟盘收盘报告生成失败: {e}")
 
-        try:
-            real_msg = self._build_real_summary()
-            if real_msg:
-                self._alert_private(real_msg)
-        except Exception as e:
-            logger.warning(f"实盘收盘报告生成失败: {e}")
+        # 实盘持仓报告（实盘未启用时跳过推送）
+        if settings.REAL_TRADE_ENABLED:
+            try:
+                real_msg = self._build_real_summary()
+                if real_msg:
+                    self._alert_private(real_msg)
+            except Exception as e:
+                logger.warning(f"实盘收盘报告生成失败: {e}")
 
         # 收盘后自动审计
         self._run_post_close_audit()

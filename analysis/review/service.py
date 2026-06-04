@@ -93,8 +93,8 @@ class ReviewService:
                     logger.info(f"  ✅ {name}完成，耗时 {time.time() - t0:.1f}秒")
                     return result
                 if attempt == 1:
-                    logger.warning(f"  ⚠️ {name}第1次失败，等120s后重试...")
-                    time.sleep(120)
+                    logger.warning(f"  ⚠️ {name}第1次失败，等10s后重试...")
+                    time.sleep(10)
             logger.error(f"  ❌ {name}重试后仍失败，跳过")
             return result
 

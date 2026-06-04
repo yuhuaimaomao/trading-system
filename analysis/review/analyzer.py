@@ -1490,93 +1490,108 @@ class ReviewAnalyzer:
         called_tools = set()
         round_num = 0
         MAX_FC_ROUNDS = 10  # 防止死循环
+        content = ""  # 确保 finally 块可访问
 
-        while True:
-            round_num += 1
-            if round_num > MAX_FC_ROUNDS:
-                _fc_log(f"  ⚠️ 已达最大轮次 {MAX_FC_ROUNDS}，强制终止")
-                break
-            tools = TOOLS_DEFINITION
-            tool_choice = "auto"
-            _fc_log(
-                f"\n第 {round_num} 轮（全部 {len(all_tool_names)} 个工具，tool_choice=auto）"
-            )
-
-            response = self.ai._call_ai_with_tools(
-                messages, tools=tools, tool_choice=tool_choice
-            )
-
-            content = response.get("content", "")
-            tool_calls = response.get("tool_calls", [])
-
-            if content:
-                preview = content[:200].replace("\n", "\\n")
-                _fc_log(f"  AI 文本回复: {len(content)}字 → {preview}...")
-
-            if tool_calls:
-                _fc_log(f"  工具调用: {len(tool_calls)} 个")
-                for tc in tool_calls:
-                    fn = tc.get("function", {}) if isinstance(tc, dict) else tc.function
-                    fn_name = fn.get("name", "?")
-                    fn_args = fn.get("arguments", "{}")
-                    called_tools.add(fn_name)
-                    _fc_log(f"    → {fn_name}({fn_args})")
-
-                assistant_msg = {"role": "assistant", "content": content or ""}
-                assistant_msg["tool_calls"] = tool_calls
-                messages.append(assistant_msg)
-
-                tool_messages = fc_engine.process_tool_calls(tool_calls)
-                for tm in tool_messages:
-                    result_str = str(tm.get("content", ""))
-                    if len(result_str) > 500:
-                        result_str = result_str[:500] + f"...(共{len(result_str)}字)"
-                    _fc_log(f"    ← 返回: {result_str}")
-
-                messages.extend(tool_messages)
-                continue
-
-            # --- 无工具调用：判断是否为最终回复 ---
-            if not content:
-                _fc_log("  ⚠️ AI 未返回内容也未调用工具，重试")
-                continue
-
-            # 检查报告标记
-            is_report = "【复盘分析" in content or "<<<STOCKS>>>" in content
-
-            if is_report:
-                missing = [t for t in MANDATORY_TOOLS if t not in called_tools]
-                if missing:
-                    _fc_log(f"  ⚠️ 检测到报告内容，但必修工具未调用: {missing}")
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": f"请先调用以下必修工具获取数据，再生成报告：{', '.join(missing)}。不要在工具调用前输出报告正文。",
-                        }
-                    )
-                    continue
-                # 全部必修工具已调用，接受报告
-                _fc_log(f"  ✅ 所有必修工具已调用 ({len(called_tools)} 个)，报告完成")
-                break
-
-            # 不是报告、也没调工具，可能是中间回复，推回继续
-            _fc_log("  AI 返回中间回复，继续等待工具调用")
-            messages.append({"role": "assistant", "content": content})
-            continue
-
-        _fc_log(f"\n共 {round_num} 轮，已调用工具: {', '.join(sorted(called_tools))}")
-        _fc_log(f"报告: {len(content)}字" if content else "⚠️ 未生成报告")
-        _fc_log("=" * 60)
-
-        # 写日志文件
         try:
-            with open(fc_log_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(fc_lines))
-            self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
-        except Exception as e:
-            self.logger.warning(f"保存 FC 日志失败: {e}")
+            while True:
+                round_num += 1
+                if round_num > MAX_FC_ROUNDS:
+                    _fc_log(f"  ⚠️ 已达最大轮次 {MAX_FC_ROUNDS}，强制终止")
+                    break
+                tools = TOOLS_DEFINITION
+                tool_choice = "auto"
+                mandatory_done = set(MANDATORY_TOOLS).issubset(called_tools)
+                fc_timeout = 600 if mandatory_done else 180
+                _fc_log(
+                    f"\n第 {round_num} 轮（全部 {len(all_tool_names)} 个工具，tool_choice=auto，超时{fc_timeout}s）"
+                )
 
-        return content
+                response = self.ai._call_ai_with_tools(
+                    messages, tools=tools, tool_choice=tool_choice, timeout=fc_timeout
+                )
+
+                content = response.get("content", "")
+                tool_calls = response.get("tool_calls", [])
+
+                if content:
+                    preview = content[:200].replace("\n", "\\n")
+                    _fc_log(f"  AI 文本回复: {len(content)}字 → {preview}...")
+
+                if tool_calls:
+                    _fc_log(f"  工具调用: {len(tool_calls)} 个")
+                    for tc in tool_calls:
+                        fn = (
+                            tc.get("function", {})
+                            if isinstance(tc, dict)
+                            else tc.function
+                        )
+                        fn_name = fn.get("name", "?")
+                        fn_args = fn.get("arguments", "{}")
+                        called_tools.add(fn_name)
+                        _fc_log(f"    → {fn_name}({fn_args})")
+
+                    assistant_msg = {"role": "assistant", "content": content or ""}
+                    assistant_msg["tool_calls"] = tool_calls
+                    messages.append(assistant_msg)
+
+                    tool_messages = fc_engine.process_tool_calls(tool_calls)
+                    for tm in tool_messages:
+                        result_str = str(tm.get("content", ""))
+                        if len(result_str) > 500:
+                            result_str = (
+                                result_str[:500] + f"...(共{len(result_str)}字)"
+                            )
+                        _fc_log(f"    ← 返回: {result_str}")
+
+                    messages.extend(tool_messages)
+                    continue
+
+                # --- 无工具调用：判断是否为最终回复 ---
+                if not content:
+                    _fc_log("  ⚠️ AI 未返回内容也未调用工具，重试")
+                    continue
+
+                # 检查报告标记
+                is_report = "【复盘分析" in content or "<<<STOCKS>>>" in content
+
+                if is_report:
+                    missing = [t for t in MANDATORY_TOOLS if t not in called_tools]
+                    if missing:
+                        _fc_log(f"  ⚠️ 检测到报告内容，但必修工具未调用: {missing}")
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"请先调用以下必修工具获取数据，再生成报告：{', '.join(missing)}。不要在工具调用前输出报告正文。",
+                            }
+                        )
+                        continue
+                    # 全部必修工具已调用，接受报告
+                    _fc_log(
+                        f"  ✅ 所有必修工具已调用 ({len(called_tools)} 个)，报告完成"
+                    )
+                    break
+
+                # 不是报告、也没调工具，可能是中间回复，推回继续
+                _fc_log("  AI 返回中间回复，继续等待工具调用")
+                messages.append({"role": "assistant", "content": content})
+                continue
+
+            _fc_log(
+                f"\n共 {round_num} 轮，已调用工具: {', '.join(sorted(called_tools))}"
+            )
+            _fc_log(f"报告: {len(content)}字" if content else "⚠️ 未生成报告")
+            _fc_log("=" * 60)
+
+            return content
+
+        finally:
+            # 无论成功还是异常，FC 日志都要落盘
+            try:
+                with open(fc_log_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(fc_lines))
+                self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
+            except Exception as e:
+                self.logger.warning(f"保存 FC 日志失败: {e}")
 
     # 电报类别黑名单：与 A 股选股无关的类别
     TELEGRAPH_SKIP_CATEGORIES = {"期货市场情报", "原油市场动态", "环球市场情报"}
@@ -1963,6 +1978,7 @@ class AIAnalyzer:
         max_tokens: Optional[int] = None,
         tools: List[Dict] = None,
         tool_choice: str = "auto",
+        timeout: int = 180,
     ) -> Dict:
         """
         调用 AI（支持工具调用）
@@ -1972,6 +1988,7 @@ class AIAnalyzer:
             max_tokens: 最大输出 token 数（默认 2000）
             tools: 自定义工具列表，默认使用 TOOLS_DEFINITION
             tool_choice: 工具选择策略，'auto'/'required'/'none' 或指定工具
+            timeout: 读超时秒数，工具调用轮默认 180s，最终报告轮应给更长
 
         Returns:
             {
@@ -2005,11 +2022,10 @@ class AIAnalyzer:
                 payload["max_tokens"] = max_tokens
 
             self.logger.info(
-                f"调用 AI（支持工具，消息数：{len(messages)}，tool_choice={tool_choice}）..."
+                f"调用 AI（支持工具，消息数：{len(messages)}，tool_choice={tool_choice}，超时：{timeout}s）..."
             )
-            # FC 单轮超时 180s（2次重试 + 5s退避 ≈ 最坏 6.5min），连接超时 15s
             response = self._api_post_with_retry(
-                endpoint, payload, headers, timeout=180, connect_timeout=15
+                endpoint, payload, headers, timeout=timeout, connect_timeout=15
             )
 
             result = response.json()

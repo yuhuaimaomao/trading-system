@@ -205,11 +205,17 @@ class PositionRiskMixin:
                         else:
                             # 14:00 后：根据反弹情况决定
                             lowest = deep_state.get("lowest", price)
-                            rebound = (price - lowest) / lowest * 100 if lowest > 0 else 0
+                            rebound = (
+                                (price - lowest) / lowest * 100 if lowest > 0 else 0
+                            )
 
                             if rebound >= 3:
                                 # 已从最低反弹 3%+ → 继续等更好的卖点
-                                if self._scan_count - deep_state.get("last_alert_scan", 0) >= 30:
+                                if (
+                                    self._scan_count
+                                    - deep_state.get("last_alert_scan", 0)
+                                    >= 30
+                                ):
                                     deep_state["last_alert_scan"] = self._scan_count
                                     self._alert(
                                         f"↗️ 深跌反弹中 — {code} {pos.stock_name}\n"
@@ -696,13 +702,14 @@ class PositionRiskMixin:
             f"   📋 模拟盘已卖出"
         )
 
-        # 私聊：实盘确认请求
-        self._alert_private(
-            f"{emoji} {stype}触发 — 实盘待确认\n"
-            f"   {code} {name}  现价: {price:.2f}  触发: {trigger:.2f}  {pnl_label}: {chg:+.1f}%\n"
-            f"   ✏️ 已执行回复「成交 {code}」\n"
-            f"   ⏳ 暂时不卖回复「再等 5 {code}」"
-        )
+        # 私聊：实盘确认请求（实盘未启用时跳过推送）
+        if settings.REAL_TRADE_ENABLED:
+            self._alert_private(
+                f"{emoji} {stype}触发 — 实盘待确认\n"
+                f"   {code} {name}  现价: {price:.2f}  触发: {trigger:.2f}  {pnl_label}: {chg:+.1f}%\n"
+                f"   ✏️ 已执行回复「成交 {code}」\n"
+                f"   ⏳ 暂时不卖回复「再等 5 {code}」"
+            )
 
         # 加入提醒队列（5分钟后未确认则再推）
         self._sl_reminders[key] = {
@@ -786,12 +793,14 @@ class PositionRiskMixin:
                 stype = rem["type"]
                 price = rem["price"]
                 trigger = rem["trigger"]
-                self._alert_private(
-                    f"⏰ 第{push_count + 1}次提醒 — {code} {name}  {stype}\n"
-                    f"   触发价: {trigger:.2f}  已过 {elapsed / 60:.0f} 分钟未确认\n"
-                    f"   ✏️ 已执行回复「成交 {code}」\n"
-                    f"   ⏳ 延迟回复「再等 5 {code}」"
-                )
+                # 实盘未启用时跳过提醒推送
+                if settings.REAL_TRADE_ENABLED:
+                    self._alert_private(
+                        f"⏰ 第{push_count + 1}次提醒 — {code} {name}  {stype}\n"
+                        f"   触发价: {trigger:.2f}  已过 {elapsed / 60:.0f} 分钟未确认\n"
+                        f"   ✏️ 已执行回复「成交 {code}」\n"
+                        f"   ⏳ 延迟回复「再等 5 {code}」"
+                    )
 
     def handle_sl_command(self, text: str) -> str:
         """处理用户对止损提醒的回复.
