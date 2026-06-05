@@ -464,82 +464,38 @@ class BuyDecisionMixin:
     def _evaluate_buy_decision(
         self, code: str, price: float, buy_min: float, buy_max: float
     ) -> tuple[bool, str, float]:
-        """多维买入决策评估。返回 (allowed, reason, size_multiplier)。
+        """委托至 trade.decision.buy.evaluate_buy。"""
+        from trade.decision.buy import BuyEvalInput, evaluate_buy
 
-        不只看买入区，综合板块、均线、布林带、是否接飞刀等因素。
-        """
-        reject_reasons = []
-        warn_reasons = []
-        size_mul = 1.0
-
-        # 1. 板块趋势（行业 + 概念）
-        sector_reject_pct = getattr(settings, "SECTOR_REJECT_PCT", -1.0)
-        sector_chg = self._get_sector_change(code)
         trend = self._get_sector_trend(code)
-        decline = self._get_sector_decline(code)
-        recovery_risk = self._get_sector_recovery_risk(code)
-        if not trend or "数据不足" in trend or "数据积累中" in trend:
-            reject_reasons.append(f"板块数据不足，开盘初期暂不买入{trend}")
-            size_mul = 0.0
-        elif sector_chg is not None and sector_chg <= sector_reject_pct:
-            reject_reasons.append(f"板块跌幅 {sector_chg:+.1f}%，拒绝买入")
-            size_mul = 0.0
-        elif decline is not None and decline >= 1.5:
-            reject_reasons.append(f"板块冲高回落 {decline:+.1f}%，拒绝追入")
-            size_mul = 0.0
-        elif recovery_risk is not None:
-            reject_reasons.append(
-                f"板块从日内低点反弹 {recovery_risk:+.1f}%，疑似死猫跳不追"
-            )
-            size_mul = 0.0
-        elif "持续走弱" in trend:
-            reject_reasons.append(f"板块持续走弱，不买入{trend}")
-            size_mul = 0.0
-        elif "走弱" in trend:
-            warn_reasons.append(f"板块偏弱{trend}")
-            size_mul *= 0.5
-        elif "持续走强" in trend:
-            size_mul = min(1.0, size_mul * 1.2)
+        industry = getattr(self, "_industry_cache", {}).get(code, "")
+        ai_bias = ""
+        ai_size_mult = 1.0
+        if industry and industry in self._morning_sector_bias:
+            b = self._morning_sector_bias[industry]
+            ai_bias = b.get("bias", "")
+            ai_size_mult = b.get("size_mult", 1.0)
 
-        # 1b. 概念板块趋势（叠加判断）
-        concept_score, concept_reason = self._get_concept_trend_score(code)
-        if concept_score <= -2:
-            reject_reasons.append(f"多数概念板块走弱{concept_reason}")
-            size_mul = 0.0
-        elif concept_score < 0:
-            warn_reasons.append(f"概念板块偏弱{concept_reason}")
-            size_mul *= 0.6
-
-        # 板块强度标记（后续技术指标评估放宽阈值）
         sector_strong = trend and ("持续走强" in trend or "走强" in trend)
-        sector_very_strong = sector_strong and (sector_chg or 0) > 1.5
+        sector_chg_val = self._get_sector_change(code)
+        sector_very_strong = sector_strong and (sector_chg_val or 0) > 1.5
+        if ai_bias == "focus":
+            sector_very_strong = True
 
-        # 早盘 AI 板块倾向：focus → 强制 sector_very_strong；avoid → 追加判断
-        stock_industry = self._industry_cache.get(code, "")
-        if stock_industry and stock_industry in self._morning_sector_bias:
-            bias = self._morning_sector_bias[stock_industry]
-            if bias["bias"] == "focus":
-                sector_very_strong = True  # 强制放宽技术指标阈值
-                size_mul = min(1.0, size_mul * bias.get("size_mult", 1.0))
-            elif bias["bias"] == "avoid":
-                if "持续走弱" in trend:
-                    reject_reasons.append(f"AI回避+板块持续走弱: {stock_industry}")
-                    size_mul = 0.0
-                else:
-                    size_mul *= bias.get("size_mult", 0.5)
-                    warn_reasons.append(f"AI建议回避{stock_industry}")
+        concept_score, concept_reason = self._get_concept_trend_score(code)
+        intra = self._get_intraday_indicators(code)
+        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
+        big_ratio, big_reason = self._get_big_order_direction(code)
+        inst = self._get_instrument_info(code)
+        df = self._get_context_factors(code, price)
+        price_action, price_action_desc = self._get_recent_price_action(code)
 
-        # 2. 买入区位置
-        zone_range = buy_max - buy_min if buy_max > buy_min else 1
-        zone_pos = (price - buy_min) / zone_range
-        if zone_pos >= 0.85:
-            reject_reasons.append(f"买入区顶部({zone_pos:.0%})，不追高")
-        elif zone_pos >= 0.65:
-            warn_reasons.append(f"买入区偏上({zone_pos:.0%})")
-            size_mul *= 0.7
-
-        # 3. 均线 & 布林带
+        # 日线布林/均线（从 DB）
+        daily_bb_upper = daily_bb_mid = daily_bb_lower = 0.0
+        daily_bb_pct_b = None
+        daily_ma5 = daily_ma10 = daily_ma20 = 0.0
         try:
+            import sqlite3
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
                 """SELECT bb_upper, bb_mid, bb_lower, bb_pct_b, ma5, ma10, ma20
@@ -548,253 +504,66 @@ class BuyDecisionMixin:
                 (code,),
             ).fetchone()
             conn.close()
-
             if row:
-                bb_upper, bb_mid, bb_lower, pct_b, ma5, ma10, ma20 = row
-
-                # 布林 %B：极高=超买有回调风险。强板块放宽
-                b_reject = 95 if sector_very_strong else 90
-                b_warn = 85 if sector_very_strong else 75
-                if pct_b is not None and pct_b >= b_reject:
-                    reject_reasons.append(f"布林带超买(%B={pct_b:.0f})，回调风险高")
-                elif pct_b is not None and pct_b >= b_warn:
-                    warn_reasons.append(f"布林带偏上(%B={pct_b:.0f})")
-                    size_mul *= 0.8
-                elif pct_b is not None and pct_b <= 15:
-                    # 超卖区域，可能是反弹机会
-                    pass  # 不拒绝，下轨附近是好的买点
-
-                # 均线：判断是否接飞刀（价格在所有均线之下且均线空头排列）
-                if ma5 and ma10 and ma20 and ma5 > 0 and ma10 > 0 and ma20 > 0:
-                    below_all = price < ma5 and price < ma10 and price < ma20
-                    bearish_alignment = ma5 < ma10 < ma20  # 空头排列
-                    if below_all and bearish_alignment:
-                        reject_reasons.append("均线空头排列+价格破位，疑似接飞刀")
-                    elif below_all:
-                        warn_reasons.append("价格低于所有均线，趋势偏弱")
-                        size_mul *= 0.7
-                    elif price > ma5 and ma5 > ma10:
-                        # 多头排列+站上MA5，顺势
-                        pass
-
-                # 回踩关键支撑 → 加分项
-                near_support = False
-                if bb_lower and abs(price - bb_lower) / bb_lower < 0.03:
-                    near_support = True
-                if ma20 and abs(price - ma20) / ma20 < 0.03:
-                    near_support = True
-                if near_support and not reject_reasons:
-                    # 在支撑位附近买入，安全性较高
-                    size_mul = min(1.0, size_mul * 1.2)
+                daily_bb_upper, daily_bb_mid, daily_bb_lower, daily_bb_pct_b, daily_ma5, daily_ma10, daily_ma20 = row
         except Exception:
             pass
 
-        # 3b. 日线级指标（KDJ/RSI — 从 stock_indicators 读昨日收盘数据）
+        # 日线 KDJ/RSI
+        daily_rsi6 = daily_rsi12 = None
+        daily_kdj_k = daily_kdj_d = daily_kdj_j = None
         try:
             conn = sqlite3.connect(self.db_path)
             daily = conn.execute(
-                """SELECT rsi6, rsi12, kdj_k, kdj_d, kdj_j, ma5, ma10, ma20
+                """SELECT rsi6, rsi12, kdj_k, kdj_d, kdj_j
                    FROM stock_indicators WHERE stock_code=? AND ma5 > 0
                    ORDER BY trade_date DESC LIMIT 1""",
                 (code,),
             ).fetchone()
             conn.close()
             if daily:
-                d_rsi6, d_rsi12, d_k, d_d, d_j, d_ma5, d_ma10, d_ma20 = daily
-                if d_j is not None and d_j > 100:
-                    reject_reasons.append(f"日线KDJ极度超买(J={d_j:.0f})")
-                elif d_j is not None and d_j > 85:
-                    warn_reasons.append(f"日线KDJ超买(J={d_j:.0f})")
-                    size_mul *= 0.6
-                if d_rsi6 is not None and d_rsi6 >= 80:
-                    reject_reasons.append(f"日线RSI6超买({d_rsi6:.0f})，不宜追高")
-                elif d_rsi6 is not None and d_rsi6 >= 70:
-                    warn_reasons.append(f"日线RSI6偏高({d_rsi6:.0f})")
-                    size_mul *= 0.7
+                daily_rsi6, daily_rsi12, daily_kdj_k, daily_kdj_d, daily_kdj_j = daily
         except Exception:
             pass
 
-        # 4. 日内分钟级指标（RSI/MACD/KDJ/价格vs均线）
-        intra = self._get_intraday_indicators(code)
-
-        if intra["available"]:
-            # RSI
-            r6, r12 = intra["rsi6"], intra["rsi12"]
-            if r6 >= 85:
-                reject_reasons.append(f"日内RSI6极度超买({r6:.0f})，追高风险极大")
-            elif r6 >= 75:
-                warn_reasons.append(f"日内RSI6超买({r6:.0f})")
-                size_mul *= 0.7 if not sector_strong else 0.85
-            elif r6 <= 20:
-                size_mul = min(1.0, size_mul * 1.1)
-
-            # MACD — 强板块放宽阈值
-            macd_reject_bar = -0.8 if sector_very_strong else -0.5
-            macd_warn_bar = -0.3 if sector_very_strong else -0.1
-            if (
-                intra["macd_direction"] == "bearish"
-                and intra["macd_bar"] < macd_reject_bar
-            ):
-                reject_reasons.append("日内MACD强烈空头，下跌动能未衰竭")
-            elif (
-                intra["macd_direction"] == "bearish"
-                and intra["macd_bar"] < macd_warn_bar
-            ):
-                warn_reasons.append(f"日内MACD空头(bar={intra['macd_bar']:.2f})")
-                size_mul *= 0.8 if not sector_strong else 0.9
-            elif intra["macd_direction"] == "bullish" and intra["macd_bar"] > 0.2:
-                size_mul = min(1.0, size_mul * 1.1)
-
-            # KDJ
-            j = intra["kdj_j"]
-            k, d = intra["kdj_k"], intra["kdj_d"]
-            if j > 100:
-                reject_reasons.append(f"日内KDJ极度超买(J={j:.0f})")
-            elif j > 85:
-                warn_reasons.append(f"日内KDJ超买(J={j:.0f})")
-                size_mul *= 0.7 if not sector_strong else 0.85
-            elif j < 0:
-                size_mul = min(1.0, size_mul * 1.1)
-
-            # KDJ 死叉 — J<0(深度超卖)时 K<D 是正常现象，不惩罚
-            if k < d and j < 50 and j >= 0:
-                warn_reasons.append("日内KDJ死叉")
-                size_mul *= 0.85 if not sector_strong else 0.95
-
-            # 价格 vs 日内MA5
-            vs_ma5 = intra["price_vs_ma5"]
-            if vs_ma5 < -3:
-                reject_reasons.append(
-                    f"价格远离日内MA5({vs_ma5:+.1f}%)，短期急跌接飞刀"
-                )
-            elif vs_ma5 < -1.5:
-                warn_reasons.append(f"价格低于日内MA5({vs_ma5:+.1f}%)")
-
-        # 5. 五档盘口买卖力量
-        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
-        if ob_ratio <= 0.3 and ob_reason:
-            reject_reasons.append(f"盘口卖盘沉重(买盘{ob_ratio:.0%})")
-        elif ob_ratio <= 0.42 and ob_reason:
-            warn_reasons.append(f"盘口卖压偏大(买盘{ob_ratio:.0%})")
-            size_mul *= 0.85
-        elif ob_ratio >= 0.7:
-            size_mul = min(1.0, size_mul * 1.1)
-
-        # 6. 大单流向
-        big_ratio, big_reason = self._get_big_order_direction(code)
-        if big_ratio <= 0.35 and big_reason:
-            reject_reasons.append(big_reason)
-        elif big_ratio <= 0.45 and big_reason:
-            warn_reasons.append(big_reason)
-            size_mul *= 0.8
-        elif big_ratio >= 0.65 and big_reason:
-            size_mul = min(1.0, size_mul * 1.1)
-
-        # 7. 涨跌停空间
-        inst = self._get_instrument_info(code)
-        up_stop = inst.get("up_stop", 0)
-        down_stop = inst.get("down_stop", 0)
-        if up_stop > 0 and price > 0:
-            room_pct = (up_stop - price) / price * 100
-            if room_pct < 2:
-                reject_reasons.append(f"距涨停仅{room_pct:.1f}%，追板风险极高")
-            elif room_pct < 4:
-                warn_reasons.append(f"距涨停{room_pct:.1f}%，上行空间有限")
-                size_mul *= 0.8
-        if down_stop > 0 and price > 0:
-            risk_pct = (price - down_stop) / price * 100
-            if risk_pct > 15:
-                reject_reasons.append(f"距跌停{risk_pct:.0f}%，下方风险空间过大")
-
-        # 8. 昨日趋势背景 + 今日实时因子
-        df = self._get_context_factors(code, price)
-        if df["available"]:
-            # 昨日主力资金（有延续性，作为背景参考）
-            mf_ratio = df["yesterday_mf_ratio"]
-            if mf_ratio > 5:
-                size_mul = min(1.0, size_mul * 1.1)
-            elif mf_ratio < -5:
-                reject_reasons.append(f"昨日主力大幅流出({mf_ratio:.1f}%)，今日承压")
-            elif mf_ratio < -2:
-                warn_reasons.append(f"昨日主力流出({mf_ratio:.1f}%)")
-                size_mul *= 0.85
-
-            # 昨日 MA5 斜率：趋势方向
-            ma5_ang = df["ma5_angle"]
-            if ma5_ang < -2:
-                reject_reasons.append(f"MA5加速下行(角{ma5_ang:.1f})，趋势向空")
-            elif ma5_ang < 0:
-                warn_reasons.append(f"MA5拐头向下(角{ma5_ang:.1f})")
-                size_mul *= 0.85
-
-            # 今日日内位置（QMT实时）
-            day_pos = df.get("day_position")
-            if day_pos is not None:
-                if day_pos < 0.15 and ma5_ang > 1:
-                    size_mul = min(1.0, size_mul * 1.1)  # 日低+趋势向上
-                elif day_pos > 0.9:
-                    warn_reasons.append("价格接近日内高点")
-                    size_mul *= 0.85
-
-            # 昨日 MACD：中期趋势背景
-            dm_dif = df["daily_macd_dif"]
-            dm_dea = df["daily_macd_dea"]
-            dm_bar = df["daily_macd_bar"]
-            if dm_dif < dm_dea and dm_bar < -0.3:
-                warn_reasons.append("日线MACD空头")
-                size_mul *= 0.85
-            elif dm_dif > dm_dea and dm_bar > 0.2:
-                size_mul = min(1.0, size_mul * 1.05)
-
-            # 昨日 KDJ
-            dk_j = df["daily_kdj_j"]
-            if dk_j > 100:
-                reject_reasons.append(f"日线KDJ极度超买(J={dk_j:.0f})")
-            elif dk_j > 85:
-                warn_reasons.append(f"日线KDJ超买(J={dk_j:.0f})")
-                size_mul *= 0.8
-            elif dk_j < 0:
-                size_mul = min(1.0, size_mul * 1.1)
-
-            # 昨日 BBI 多空线
-            bbi = df["bbi_daily"]
-            if bbi > 0 and price < bbi * 0.95:
-                warn_reasons.append("价格低于BBI多空线")
-                size_mul *= 0.85
-
-            # 今日 5分钟周期 MACD（实时）
-            if "m5_macd_dif" in df:
-                m5_dif = df["m5_macd_dif"]
-                m5_dea = df["m5_macd_dea"]
-                m5_bar = df["m5_macd_bar"]
-                if m5_dif < m5_dea and m5_bar < -0.2:
-                    warn_reasons.append("5min MACD空头")
-                    size_mul *= 0.85
-                elif m5_dif > m5_dea and m5_bar > 0.1:
-                    size_mul = min(1.0, size_mul * 1.05)
-
-            # 昨日布林带宽：波动率背景。强板块中高波动正常
-            bb_w = df["bb_width"]
-            bb_warn = 70 if sector_very_strong else 40
-            if bb_w > bb_warn:
-                warn_reasons.append(f"布林带宽({bb_w:.0f})，波动剧烈")
-                size_mul *= 0.85 if sector_strong else 0.8
-
-        # 9. 价格走势：是否在止跌
-        price_action, price_action_desc = self._get_recent_price_action(code)
-        if price_action == "declining":
-            reject_reasons.append(f"10分钟内{price_action_desc}，等待止跌再买")
-        elif price_action == "reversing":
-            size_mul = min(1.0, size_mul * 1.15)  # 确认反弹，放宽
-        elif price_action == "stabilizing":
-            pass  # 横盘不加不减，由其他维度决定
-
-        # 10. 汇总
-        if reject_reasons:
-            return False, "; ".join(reject_reasons), 0
-        if warn_reasons:
-            return True, "; ".join(warn_reasons), max(0.5, size_mul)
-        return True, "条件符合", size_mul
+        ctx = BuyEvalInput(
+            code=code, price=price, buy_min=buy_min, buy_max=buy_max,
+            sector_trend=trend, sector_chg=sector_chg_val,
+            sector_decline=self._get_sector_decline(code),
+            sector_recovery_risk=self._get_sector_recovery_risk(code),
+            concept_score=concept_score, concept_reason=concept_reason,
+            daily_bb_upper=daily_bb_upper or 0, daily_bb_mid=daily_bb_mid or 0,
+            daily_bb_lower=daily_bb_lower or 0, daily_bb_pct_b=daily_bb_pct_b,
+            daily_ma5=daily_ma5 or 0, daily_ma10=daily_ma10 or 0, daily_ma20=daily_ma20 or 0,
+            daily_rsi6=daily_rsi6, daily_rsi12=daily_rsi12,
+            daily_kdj_k=daily_kdj_k, daily_kdj_d=daily_kdj_d, daily_kdj_j=daily_kdj_j,
+            intra_available=intra.get("available", False),
+            intra_rsi6=intra.get("rsi6", 50), intra_rsi12=intra.get("rsi12", 50),
+            intra_macd_direction=intra.get("macd_direction", ""),
+            intra_macd_bar=intra.get("macd_bar", 0),
+            intra_kdj_k=intra.get("kdj_k", 50), intra_kdj_d=intra.get("kdj_d", 50),
+            intra_kdj_j=intra.get("kdj_j", 50),
+            intra_price_vs_ma5=intra.get("price_vs_ma5", 0),
+            ob_ratio=ob_ratio, ob_reason=ob_reason,
+            big_ratio=big_ratio, big_reason=big_reason,
+            up_stop=inst.get("up_stop", 0), down_stop=inst.get("down_stop", 0),
+            yesterday_mf_ratio=df.get("yesterday_mf_ratio", 0),
+            ma5_angle=df.get("ma5_angle", 0),
+            day_position=df.get("day_position"),
+            daily_macd_dif=df.get("daily_macd_dif", 0),
+            daily_macd_dea=df.get("daily_macd_dea", 0),
+            daily_macd_bar=df.get("daily_macd_bar", 0),
+            daily_kdj_j_daily=df.get("daily_kdj_j", 50),
+            bbi_daily=df.get("bbi_daily", 0),
+            m5_macd_dif=df.get("m5_macd_dif"),
+            m5_macd_dea=df.get("m5_macd_dea"),
+            m5_macd_bar=df.get("m5_macd_bar"),
+            bb_width=df.get("bb_width", 0),
+            price_action=price_action, price_action_desc=price_action_desc,
+            sector_strong=sector_strong, sector_very_strong=sector_very_strong,
+            ai_bias=ai_bias, ai_size_mult=ai_size_mult,
+        )
+        return evaluate_buy(ctx)
 
     def _get_sector_change(self, code: str) -> float | None:
         """返回股票所属行业的平均涨跌幅，数据不足返回 None。"""
