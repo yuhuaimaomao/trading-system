@@ -118,173 +118,7 @@ class MarketOutlook:
     last_alert_scan: int = 0
 
 
-# ━━━━━━━━ 情景信号定义：每个情景的加分/扣分条件 ━━━━━━━━
-
-SCENARIO_SIGNALS = {
-    "developing_downtrend": {
-        "label": "正在形成下跌结构",
-        "direction": "bearish",
-        "confirm": [
-            ("price < EMA12", lambda m: m.ema12_pos == "below"),
-            ("短期下跌", lambda m: m.price_velocity < -0.03),
-            ("宽度恶化", lambda m: m.breadth_trend == "deteriorating"),
-            ("下降高点", lambda m: m.lower_highs),
-        ],
-        "reject": [
-            ("价格 > EMA12", lambda m: m.ema12_pos == "above"),
-            ("宽度改善", lambda m: m.breadth_trend == "improving"),
-        ],
-        "threshold": 0.40,
-        "pre_action": "收紧止损，暂停新买入",
-    },
-    "accelerating_down": {
-        "label": "下跌加速 → 可能恐慌",
-        "direction": "bearish",
-        "confirm": [
-            ("加速下跌", lambda m: m.price_accel < -0.02),
-            (
-                "放量下跌",
-                lambda m: m.vol_pulse == "expanding" and m.vol_price_confirm == "yes",
-            ),
-            ("宽度恶化", lambda m: m.breadth_pct < 0.35),
-            ("振幅扩大", lambda m: m.range_expanding),
-            ("价格在低位", lambda m: m.ema12_pos == "below"),
-        ],
-        "reject": [
-            ("反弹质量强", lambda m: m.bounce_quality == "strong"),
-            ("宽度改善", lambda m: m.breadth_trend == "improving"),
-        ],
-        "threshold": 0.35,
-        "pre_action": "阻止所有买入，建议减仓",
-    },
-    "developing_uptrend": {
-        "label": "正在形成上涨结构",
-        "direction": "bullish",
-        "confirm": [
-            ("价格 > EMA12", lambda m: m.ema12_pos == "above"),
-            ("短期上涨", lambda m: m.price_velocity > 0.03),
-            ("宽度改善", lambda m: m.breadth_trend == "improving"),
-            ("上升低点", lambda m: m.higher_lows),
-            ("创新高", lambda m: m.higher_highs),
-        ],
-        "reject": [
-            ("价格 < EMA12", lambda m: m.ema12_pos == "below"),
-            ("宽度恶化", lambda m: m.breadth_trend == "deteriorating"),
-        ],
-        "threshold": 0.40,
-        "pre_action": "正常买入，回调入场",
-    },
-    "accelerating_up": {
-        "label": "上涨加速 → 可能冲顶",
-        "direction": "bullish",
-        "confirm": [
-            ("加速上涨", lambda m: m.price_accel > 0.02),
-            ("价格在高位", lambda m: m.ema12_pos == "above"),
-            ("RSI超买", lambda m: m.rsi_signal in ("overbought",)),
-            ("振幅扩大", lambda m: m.range_expanding),
-        ],
-        "reject": [
-            ("量价背离", lambda m: m.vol_price_confirm == "no"),
-            ("跌破EMA12", lambda m: m.ema12_just_crossed == "crossed_down"),
-        ],
-        "threshold": 0.30,
-        "pre_action": "追高风险大，收紧止损，控制仓位",
-    },
-    "potential_reversal_up": {
-        "label": "底部迹象 → 可能反转",
-        "direction": "bullish",
-        "confirm": [
-            ("超卖反弹", lambda m: m.bounce_from_low > 0.2),
-            ("RSI底背离", lambda m: m.rsi_signal == "divergence_up"),
-            ("从低点反弹", lambda m: m.bounce_quality in ("strong",)),
-            ("宽度改善", lambda m: m.breadth_trend == "improving"),
-        ],
-        "reject": [
-            ("反弹失败", lambda m: m.bounce_quality == "failed"),
-            ("继续新低", lambda m: m.price_velocity < -0.05),
-        ],
-        "threshold": 0.30,
-        "pre_action": "关注反转确认，准备试探仓位",
-    },
-    "potential_reversal_down": {
-        "label": "顶部迹象 → 可能反转",
-        "direction": "bearish",
-        "confirm": [
-            ("RSI顶背离", lambda m: m.rsi_signal == "divergence_down"),
-            ("测试阻力", lambda m: m.testing_resistance),
-            ("量价背离", lambda m: m.vol_price_confirm == "no"),
-            ("宽度恶化", lambda m: m.breadth_trend == "deteriorating"),
-        ],
-        "reject": [
-            ("突破阻力", lambda m: m.bounce_quality == "strong"),
-            (
-                "量价确认",
-                lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.03,
-            ),
-        ],
-        "threshold": 0.30,
-        "pre_action": "减仓观望，不宜追高",
-    },
-    "dead_bounce": {
-        "label": "弱反弹 → 可能死猫跳",
-        "direction": "bearish",
-        "confirm": [
-            # 前置条件：必须有大跌（从日内高点跌幅>0.5%）才有死猫跳
-            ("前期大跌", lambda m: m.bounce_from_low > 0.5),
-            ("弱势反弹", lambda m: m.bounce_quality == "weak"),
-            (
-                "量缩反弹",
-                lambda m: m.vol_pulse == "contracting" and m.price_velocity < 0.02,
-            ),
-            ("价格 < EMA12", lambda m: m.ema12_pos == "below"),
-            ("宽度恶化", lambda m: m.breadth_trend == "deteriorating"),
-        ],
-        "reject": [
-            (
-                "放量突破",
-                lambda m: m.vol_price_confirm == "yes" and m.price_velocity > 0.05,
-            ),
-            ("站上EMA12", lambda m: m.ema12_just_crossed == "crossed_up"),
-            (
-                "持续在EMA12上方",
-                lambda m: m.ema12_pos == "above" and m.price_velocity > 0.02,
-            ),
-            ("创新高趋势", lambda m: m.higher_highs),
-            (
-                "日内明显上涨",
-                lambda m: m.ema12_pos == "above" and m.breadth_trend == "improving",
-            ),
-            # 无前置大跌 → 何来死猫跳
-            ("无前置大跌", lambda m: m.bounce_from_low < 0.15),
-        ],
-        "threshold": 0.35,
-        "pre_action": "不要追反弹，等确认",
-    },
-    "normal_stable": {
-        "label": "横盘稳定",
-        "direction": "neutral",
-        "confirm": [
-            ("振幅收缩", lambda m: m.range_contracting),
-            ("宽度均衡", lambda m: 0.4 < m.breadth_pct < 0.6),
-            ("速率平稳", lambda m: abs(m.price_velocity) < 0.02),
-        ],
-        "reject": [
-            ("方向性突破", lambda m: abs(m.price_velocity) > 0.06),
-            ("振幅扩大", lambda m: m.range_expanding),
-        ],
-        "threshold": 0.50,
-        "pre_action": "正常交易，标准入场",
-    },
-}
-
-# 概率阈值 → 行动级别
-PROBABILITY_URGENCY = [
-    (0.70, "critical", "高概率情景，立即执行预设行动"),
-    (0.55, "act", "概率偏高，提前调整策略"),
-    (0.35, "watch", "需要关注，做好准备"),
-    (0.00, "none", "概率较低，保持观察"),
-]
-
+from trade.scenario.signals import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 # ━━━━━━━━ 模式→Regime 基础映射 ━━━━━━━━
 
@@ -1088,22 +922,13 @@ class MarketStateMixin:
     # ━━━━━━━━ 情景预测引擎（预测 → 关卡 → 预设行动）━━━━━━━━━
 
     def _init_scenario_state(self):
-        """初始化情景引擎状态变量（在 Watcher.__init__ 中调用）。"""
-        self._scenario_probs: dict[str, float] = {
-            "normal_stable": 0.50,
-            "developing_uptrend": 0.10,
-            "developing_downtrend": 0.10,
-            "accelerating_down": 0.05,
-            "accelerating_up": 0.05,
-            "potential_reversal_up": 0.05,
-            "potential_reversal_down": 0.05,
-            "dead_bounce": 0.10,
-        }
-        self._scenario_scan_count: int = 0
-        self._scenario_last_alert_scan: int = -100  # 首次可告警
+        """初始化情景引擎。"""
+        from trade.scenario.engine import ScenarioEngine
+
+        self._scenario_engine = ScenarioEngine()
         self._scenario_prev_velocity: float = 0.0
-        self._scenario_recent_lows: list[float] = []  # 近期低点
-        self._scenario_recent_highs: list[float] = []  # 近期高点
+        self._scenario_recent_lows: list[float] = []
+        self._scenario_recent_highs: list[float] = []
         self._scenario_prev_breadth: float = 0.5
         self._scenario_prev_vol: float = 0.0
         self._scenario_prev_outlook: MarketOutlook | None = None
@@ -1327,142 +1152,14 @@ class MarketStateMixin:
         return support[:3], resistance[:3]
 
     def _update_scenario_engine(self, micro: MicroSignals) -> MarketOutlook:
-        """根据微观信号更新情景概率分布 — 状态机核心。"""
-        self._scenario_scan_count += 1
-
-        # 计算每个情景的原始得分
-        scores = {}
-        for name, cfg in SCENARIO_SIGNALS.items():
-            score = 0.0
-            # 确认信号加分
-            for _, cond in cfg["confirm"]:
-                try:
-                    if cond(micro):
-                        score += 0.15
-                except Exception:
-                    pass
-            # 否定信号扣分
-            for _, cond in cfg["reject"]:
-                try:
-                    if cond(micro):
-                        score -= 0.25
-                except Exception:
-                    pass
-            scores[name] = score
-
-        # 从上一轮概率做贝叶斯式更新
-        prev_probs = getattr(self, "_scenario_probs", {})
-        if not prev_probs:
-            self._init_scenario_state()
-            prev_probs = self._scenario_probs
-
-        raw = {}
-        for name in SCENARIO_SIGNALS:
-            prev = prev_probs.get(name, 0.10)
-            # 新概率 = 旧概率 × 信号调整 + 回归均值
-            signal_adj = 1.0 + scores[name]  # 0.85~1.15 range
-            raw[name] = prev * max(0.5, min(1.5, signal_adj))
-
-        # 归一化
-        total = sum(raw.values())
-        if total > 0:
-            for name in raw:
-                raw[name] /= total
-
-        # 时间衰减：归一化后，无确认信号的场景向基准 0.10 靠近
-        for name, cfg in SCENARIO_SIGNALS.items():
-            has_confirm = any(cond(micro) for _, cond in cfg["confirm"])
-            if not has_confirm:
-                raw[name] = raw[name] * 0.92 + 0.10 * 0.08
-
-        # 衰减后再次归一化
-        total = sum(raw.values())
-        if total > 0:
-            for name in raw:
-                raw[name] /= total
-
-        self._scenario_probs = raw
-
-        # 找出主情景和备选
-        sorted_scenarios = sorted(raw.items(), key=lambda x: x[1], reverse=True)
-        primary_name, primary_prob = sorted_scenarios[0]
-
-        def build_scenario(name, prob):
-            cfg = SCENARIO_SIGNALS[name]
-            signals = [label for label, cond in cfg["confirm"] if cond(micro)]
-            conf = "high" if prob > 0.50 else "medium" if prob > 0.25 else "low"
-            return MarketScenario(
-                name=name,
-                label=cfg["label"],
-                probability=prob,
-                confidence=conf,
-                direction=cfg["direction"],
-                confirm_at=None,
-                invalidate_at=None,
-                signals=signals,
-                pre_action=cfg["pre_action"] if prob >= cfg["threshold"] else "",
-            )
-
-        primary = build_scenario(primary_name, primary_prob)
-        alternatives = [
-            build_scenario(name, prob)
-            for name, prob in sorted_scenarios[1:4]
-            if prob > 0.10
-        ]
-
-        # 关键关卡
+        """委托至 ScenarioEngine.update()。"""
         support, resistance = self._compute_key_levels()
-
-        # 如果主情景有明确方向，设置确认/否定关卡
-        if primary.direction == "bearish":
-            # 下跌情景：否定关卡 = 最近阻力，确认关卡 = 最近支撑下破
-            if resistance:
-                primary.invalidate_at = resistance[0]
-            if support:
-                primary.confirm_at = support[0]
-        elif primary.direction == "bullish":
-            if resistance:
-                primary.confirm_at = resistance[0]
-            if support:
-                primary.invalidate_at = support[0]
-
-        # 紧急程度
-        urgency = "none"
-        urgency_reason = ""
-        for threshold, level, reason in PROBABILITY_URGENCY:
-            if primary_prob >= threshold:
-                urgency = level
-                urgency_reason = reason
-                break
-
-        bias = primary.direction
-
-        # 一句话总结
-        parts = [f"主情景: {primary.label} ({primary_prob:.0%})"]
-        if primary.pre_action:
-            parts.append(f"→ {primary.pre_action}")
-        if primary.confirm_at:
-            parts.append(f"确认: {primary.confirm_at:.2f}")
-        if primary.invalidate_at:
-            parts.append(f"否定: {primary.invalidate_at:.2f}")
-
-        outlook = MarketOutlook(
-            primary=primary,
-            alternatives=alternatives,
-            key_support=support,
-            key_resistance=resistance,
-            bias=bias,
-            urgency=urgency,
-            summary=" | ".join(parts),
-            last_alert_scan=self._scenario_last_alert_scan,
-        )
-
-        return outlook
+        return self._scenario_engine.update(micro, support, resistance)
 
     def _push_scenario_alert(self, outlook: MarketOutlook):
         """情景预判告警：只在概率变化显著或主情景切换时推送。"""
         prev = self._scenario_prev_outlook
-        scan = self._scenario_scan_count
+        scan = self._scenario_engine.scan_count
 
         # 首次不告警，但记住当前状态供下次比较
         if prev is None:
@@ -1508,7 +1205,7 @@ class MarketStateMixin:
                 reason = f"接近支撑 {nearest_support:.2f}"
 
         # 去重：至少间隔 20 轮
-        if should_alert and scan - self._scenario_last_alert_scan < 20:
+        if should_alert and scan - self._scenario_engine.last_alert_scan < 20:
             should_alert = False
 
         # 每轮更新 prev_outlook（用于概率变化对比），告警去重用单独的 last_alert_scan
@@ -1517,7 +1214,7 @@ class MarketStateMixin:
         if not should_alert:
             return
 
-        self._scenario_last_alert_scan = scan
+        self._scenario_engine.last_alert_scan = scan
 
         # 构建消息
         alt_parts = []
@@ -1717,7 +1414,7 @@ class MarketStateMixin:
         # 追踪成交额（累计值每次不同，两处追加不影响正确性）
 
         # —— 情景预测引擎（先于模式分类，提供前瞻性判断）——
-        if not hasattr(self, "_scenario_probs"):
+        if not hasattr(self, "_scenario_engine"):
             self._init_scenario_state()
         micro = self._detect_micro_signals()
         outlook = self._update_scenario_engine(micro)

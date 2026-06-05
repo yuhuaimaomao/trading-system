@@ -964,8 +964,8 @@ class Watcher(
             sector_trends=sector_trends,
             index_technicals=index_tech,
             market_env=market_env,
-            scenario_probs=getattr(self, "_scenario_probs", {}) or {},
-            scenario_scan_count=getattr(self, "_scenario_scan_count", 0),
+            scenario_probs=getattr(self, "_scenario_engine", None) and self._scenario_engine.probs or {},
+            scenario_scan_count=getattr(self, "_scenario_engine", None) and self._scenario_engine.scan_count or 0,
         )
         self._prev_scan_count = self._scan_count
 
