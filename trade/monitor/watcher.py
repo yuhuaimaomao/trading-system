@@ -25,7 +25,8 @@ from trade.monitor.buy_decision import BuyDecisionMixin
 from trade.monitor.close_summary import CloseSummaryMixin
 from trade.monitor.closing import ClosingDecisionMixin
 from trade.monitor.intraday_scout import IntradayScoutMixin
-from trade.monitor.market_state import MarketRegime, MarketStateMixin
+from trade.monitor.market_state import MarketStateMixin
+from trade.monitor.state import MarketRegime
 from trade.monitor.position_risk import PositionRiskMixin
 from trade.monitor.sector_context import SectorContextMixin
 from trade.monitor.sector_resonance import (

@@ -1,13 +1,90 @@
-"""盯盘运行时状态 — 所有跨模块共享的状态集中定义。
-
-每个字段对应 watcher.__init__ 中的一个 self._xxx 变量。
-重构中逐步将 self._xxx 访问改为 self.state.xxx，使函数签名显式化。
-"""
+"""盯盘运行时状态 — 所有跨模块共享的状态和 dataclass 集中定义。"""
 
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from trade.monitor.market_state import MarketRegime
+
+# ━━━━━━━━ 共享 Dataclasses ━━━━━━━━
+
+
+@dataclass
+class MarketRegime:
+    """DETECT→ASSESS→DECIDE 结果。"""
+
+    pattern: str = "normal"
+    risk_level: str = "safe"
+    risk_bias: str = "neutral"
+    confidence: str = "medium"
+    opportunity: str = "trend_follow"
+    allow_buy: bool = True
+    position_mult: float = 1.0
+    entry_rule: str = "standard"
+    stop_mult: float = 1.0
+    urgent_action: str = ""
+    alert_level: str = "info"
+    alert_msg: str = ""
+    session_phase: str = "morning"
+    gap_direction: str = ""
+    breadth_healthy: bool = True
+    ma20_above: bool = True
+    multi_day_downtrend: bool = False
+
+
+@dataclass
+class MicroSignals:
+    """每轮扫描的微观信号 — 情景引擎的输入层。"""
+
+    price_velocity: float = 0.0
+    price_accel: float = 0.0
+    ema12_pos: str = "on"
+    ema12_just_crossed: str = ""
+    vol_pulse: str = "normal"
+    vol_price_confirm: str = "yes"
+    breadth_pct: float = 0.5
+    breadth_trend: str = "stable"
+    higher_highs: bool = False
+    bounce_from_low: float = 0.0
+    bounce_quality: str = ""
+    lower_highs: bool = False
+    higher_lows: bool = False
+    rsi_signal: str = ""
+    testing_support: bool = False
+    testing_resistance: bool = False
+    range_expanding: bool = False
+    range_contracting: bool = False
+
+
+@dataclass
+class MarketScenario:
+    """单个情景。"""
+
+    name: str
+    label: str
+    probability: float = 0.0
+    confidence: str = "low"
+    direction: str = "neutral"
+    confirm_at: float | None = None
+    invalidate_at: float | None = None
+    signals: list = None
+    pre_action: str = ""
+
+    def __post_init__(self):
+        if self.signals is None:
+            self.signals = []
+
+
+@dataclass
+class MarketOutlook:
+    """情景分布 + 关键关卡 + 行动建议。"""
+
+    primary: MarketScenario
+    alternatives: list
+    key_support: list
+    key_resistance: list
+    bias: str = "neutral"
+    urgency: str = "none"
+    summary: str = ""
+    last_alert_scan: int = 0
 
 
 @dataclass

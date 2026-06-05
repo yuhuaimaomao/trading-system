@@ -3,7 +3,7 @@
 独立于 Watcher state，可被任意模块实例化使用。
 """
 
-from trade.monitor.market_state import MarketOutlook, MarketScenario, MicroSignals
+from trade.monitor.state import MarketOutlook, MarketScenario, MicroSignals
 from trade.scenario.signals import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 
