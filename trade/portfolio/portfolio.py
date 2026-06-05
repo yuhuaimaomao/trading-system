@@ -26,6 +26,7 @@ class Position:
     take_profit: float = 0.0
     trailing_stop: float = 0.0
     highest_price: float = 0.0
+    day_high: float = 0.0  # 日内最高价（用于回撤计算）
 
     @property
     def available_volume(self) -> int:
@@ -39,6 +40,8 @@ class Position:
         self.pnl_pct = (
             (price - self.avg_cost) / self.avg_cost if self.avg_cost > 0 else 0.0
         )
+        if price > self.day_high:
+            self.day_high = price
 
 
 @dataclass

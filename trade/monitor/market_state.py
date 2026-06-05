@@ -463,6 +463,7 @@ class MarketStateMixin:
         ma20=0, ma60=0, outlook=None,
     ) -> MarketRegime:
         """委托至 trade.decision.regime.assess_regime。"""
+        from trade.decision.regime import assess_regime
         from trade.detect.market_pattern import _session_phase
 
         breadth = getattr(self, "_market_breadth", {}) or self._compute_breadth()
@@ -997,7 +998,7 @@ class MarketStateMixin:
         # 追踪成交额（累计值每次不同，两处追加不影响正确性）
 
         # —— 情景预测引擎（先于模式分类，提供前瞻性判断）——
-        if not hasattr(self, "_scenario_engine"):
+        if getattr(self, "_scenario_engine", None) is None:
             self._init_scenario_state()
         micro = self._detect_micro_signals()
         outlook = self._update_scenario_engine(micro)

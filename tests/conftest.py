@@ -93,6 +93,8 @@ def _init_test_db(path: str):
             market_value REAL,
             pnl REAL,
             pnl_pct REAL,
+            pre_close REAL DEFAULT 0,
+            daily_pnl REAL DEFAULT 0,
             entry_date TEXT DEFAULT '',
             locked_volume INTEGER DEFAULT 0,
             stop_loss REAL,
