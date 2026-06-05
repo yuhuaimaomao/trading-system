@@ -4,7 +4,7 @@
 AI 角色：动量交易分析师，判断突破有效性和追入风险。
 """
 
-from trade.monitor.prompts.schemas import PromptTemplate
+from trade.scenario.templates.schemas import PromptTemplate
 
 BREAKOUT_TEMPLATE = PromptTemplate(
     scenario="breakout",
