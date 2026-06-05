@@ -644,249 +644,99 @@ class BuyDecisionMixin:
     def _evaluate_below_zone(
         self, code: str, price: float, buy_min: float, buy_max: float
     ) -> tuple[str, str, float | None]:
-        """价格低于买入区时的综合判断。返回 (action, reason, size_mul|None)。
+        """委托至 trade.decision.buy.evaluate_below_zone。"""
+        from trade.decision.buy import BuyEvalInput, evaluate_below_zone
 
-        action: "opportunity" — 回调买入机会，可以下单
-                "watching"   — 继续观察，不下单但保留信号
-                "abandon"    — 破位放弃，标记信号过期
-        """
-        zone_range = buy_max - buy_min if buy_max > buy_min else 1
-        below_pct = (buy_min - price) / buy_min * 100  # 低于买入区下沿的百分比
-
-        score = 0  # 正=偏向机会，负=偏向放弃
-
-        # ━━━ 1. 偏离幅度 ━━━
-        if below_pct <= 2:
-            score += 2  # 微幅偏离，接近买入区
-        elif below_pct <= 4:
-            score += 0  # 中等偏离
-        elif below_pct <= 7:
-            score -= 2  # 较大偏离
-        else:
-            score -= 5  # 大幅偏离，买入区很可能已失效
-
-        # ━━━ 2. 距离关键支撑 ━━━
+        # 支撑位检测（DB查询）
+        near_support = False
+        near_ma60 = False
         try:
+            import sqlite3
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
-                """SELECT bb_lower, bb_mid, ma20, ma60
-                   FROM stock_indicators WHERE stock_code=? AND bb_mid > 0
+                """SELECT bb_lower, ma20, ma60 FROM stock_indicators
+                   WHERE stock_code=? AND bb_mid > 0
                    ORDER BY trade_date DESC LIMIT 1""",
                 (code,),
             ).fetchone()
             conn.close()
-
             if row:
-                bb_lower, bb_mid, ma20, ma60 = row
-                near_support = False
-                support_name = ""
-
+                bb_lower, ma20, ma60 = row
                 if bb_lower and abs(price - bb_lower) / bb_lower < 0.02:
                     near_support = True
-                    support_name = "布林下轨"
                 elif ma20 and abs(price - ma20) / ma20 < 0.02:
                     near_support = True
-                    support_name = "MA20"
                 elif ma60 and abs(price - ma60) / ma60 < 0.03:
                     near_support = True
-                    support_name = "MA60"
-
-                if near_support:
-                    score += 4  # 在关键支撑附近止跌，反弹概率高
-                elif ma20 and price > ma20:
-                    score += 1  # 还在 MA20 上方，趋势没坏
-                elif ma60 and price < ma60:
-                    score -= 3  # 跌破 MA60，中期趋势转弱
+                if ma60 and price < ma60:
+                    near_ma60 = True
         except Exception:
             pass
 
-        # ━━━ 3. 日内指标：是否出现止跌信号 ━━━
-        intra = self._get_intraday_indicators(code)
-        if intra["available"]:
-            r6 = intra["rsi6"]
-            j = intra["kdj_j"]
-            k, d = intra["kdj_k"], intra["kdj_d"]
-
-            if r6 <= 25:
-                score += 3  # RSI 超卖，卖方力量衰竭
-            elif r6 <= 35:
-                score += 1
-            elif r6 >= 70:
-                score -= 1  # 还没超卖就低于买入区？可能刚开始跌
-
-            if j < 0:
-                score += 2  # KDJ 极度超卖
-            if k > d and j < 20:
-                score += 2  # KDJ 低位金叉，反弹启动
-
-            if intra["macd_direction"] == "bullish":
-                score += 1
-            elif intra["macd_direction"] == "bearish" and intra["macd_bar"] < -0.3:
-                score -= 2
-
-            vs_ma5 = intra["price_vs_ma5"]
-            if vs_ma5 < -5:
-                score -= 3  # 急跌中，不要接飞刀
-            elif vs_ma5 < -2:
-                score -= 1
-
-        # ━━━ 4. 大单方向：有没有主力在接 ━━━
-        big_ratio, big_reason = self._get_big_order_direction(code)
-        if big_reason:
-            if big_ratio >= 0.6:
-                score += 3  # 大单在买，有资金承接
-            elif big_ratio <= 0.4:
-                score -= 3  # 大单在卖，主力出货
-
-        # ━━━ 5. 盘口支撑 ━━━
-        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
-        if ob_ratio >= 0.65:
-            score += 2  # 买盘厚实，有支撑
-        elif ob_ratio <= 0.35:
-            score -= 2  # 卖盘压力大
-
-        # ━━━ 6. 板块趋势 ━━━
-        sector_reject_pct = getattr(settings, "SECTOR_REJECT_PCT", -1.0)
-        sector_chg = self._get_sector_change(code)
-        decline = self._get_sector_decline(code)
-        trend = self._get_sector_trend(code)
-        if not trend or "数据不足" in trend or "数据积累中" in trend:
-            return "watching", f"板块数据不足，开盘初期暂不买入{trend}", None
-        if sector_chg is not None and sector_chg <= sector_reject_pct:
-            return "watching", f"板块跌幅 {sector_chg:+.1f}%，拒绝买入", None
-        if decline is not None and decline >= 1.5:
-            return "watching", f"板块冲高回落 {decline:+.1f}%，拒绝追入", None
-        # 日内深跌反弹风险：从日内最低点反弹超 2% → 当前强势不可靠
-        recovery_risk = self._get_sector_recovery_risk(code)
-        if recovery_risk is not None:
-            return (
-                "watching",
-                f"板块从日内低点反弹 {recovery_risk:+.1f}%，疑似死猫跳不追",
-                None,
-            )
-        if "持续走弱" in trend:
-            return "watching", f"板块持续走弱，不买入{trend}", None
-        if "走弱" in trend:
-            score -= 3
-        elif "持续走强" in trend:
-            score += 3
-        elif "走强" in trend:
-            score += 1
-
-        # 6b. 概念板块趋势
-        concept_score, concept_reason = self._get_concept_trend_score(code)
-        if concept_score <= -2:
-            return "watching", f"多数概念板块走弱{concept_reason}，不买入", None
-        score += concept_score
-
-        # ━━━ 7. 成交量验证（从 tick 数据判断量能变化）━━━
+        # 量能验证（QMT ticks）
+        vol_shrinking = False
+        vol_surging = False
         if self.qmt:
             try:
                 ticks = self.qmt.get_ticks(code)
                 if ticks and len(ticks) >= 40:
-                    # 取最近 20 笔和之前 20 笔的成交量对比
                     half = len(ticks) // 2
-                    recent = ticks[-half:]
-                    earlier = ticks[:half]
-                    recent_vol = sum(
-                        (
-                            float(recent[i].get("amount", 0))
-                            - float(recent[i - 1].get("amount", 0))
-                        )
-                        for i in range(1, len(recent))
-                        if float(recent[i].get("amount", 0))
-                        > float(recent[i - 1].get("amount", 0))
-                    )
-                    earlier_vol = sum(
-                        (
-                            float(earlier[i].get("amount", 0))
-                            - float(earlier[i - 1].get("amount", 0))
-                        )
-                        for i in range(1, len(earlier))
-                        if float(earlier[i].get("amount", 0))
-                        > float(earlier[i - 1].get("amount", 0))
-                    )
+                    recent = ticks[-half:]; earlier = ticks[:half]
+                    recent_vol = sum(float(recent[i].get("amount", 0)) - float(recent[i-1].get("amount", 0))
+                                    for i in range(1, len(recent))
+                                    if float(recent[i].get("amount", 0)) > float(recent[i-1].get("amount", 0)))
+                    earlier_vol = sum(float(earlier[i].get("amount", 0)) - float(earlier[i-1].get("amount", 0))
+                                     for i in range(1, len(earlier))
+                                     if float(earlier[i].get("amount", 0)) > float(earlier[i-1].get("amount", 0)))
                     if earlier_vol > 0 and recent_vol > 0:
                         vol_ratio = recent_vol / earlier_vol
                         if vol_ratio < 0.5:
-                            score += 2  # 缩量下跌，正常回调
+                            vol_shrinking = True
                         elif vol_ratio > 2:
-                            score -= 2  # 放量下跌，恐慌抛售
+                            vol_surging = True
             except Exception:
                 pass
 
-        # ━━━ 8. 昨日趋势背景 + 今日实时因子 ━━━
+        # 构建输入（复用 evaluate_buy 的 BuyEvalInput）
+        trend = self._get_sector_trend(code)
+        intra = self._get_intraday_indicators(code)
+        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
+        big_ratio, big_reason = self._get_big_order_direction(code)
         df = self._get_context_factors(code, price)
-        if df["available"]:
-            # 昨日主力资金：流入却在跌=洗盘，流出+跌=真破位
-            mf_ratio = df["yesterday_mf_ratio"]
-            if mf_ratio > 3:
-                score += 3  # 昨日主力大幅流入，今天下跌可能是洗盘
-            elif mf_ratio < -3:
-                score -= 3  # 昨日主力大幅流出+今天破位=真跌
-
-            ma5_ang = df["ma5_angle"]
-            if ma5_ang < -3:
-                score -= 3  # MA5 加速下行
-            elif ma5_ang > 1:
-                score += 1  # MA5 仍向上，短期回调
-
-            day_pos = df.get("day_position")
-            if day_pos is not None and day_pos < 0.1:
-                score += 1  # 接近日内低点
-
-            dm_dif = df["daily_macd_dif"]
-            dm_dea = df["daily_macd_dea"]
-            if dm_dif > dm_dea:
-                score += 1  # 日线 MACD 多头，中期趋势未坏
-            elif dm_dif < dm_dea and df["daily_macd_bar"] < -0.5:
-                score -= 2  # 日线 MACD 强空头
-
-            dk_j = df["daily_kdj_j"]
-            if dk_j < 0:
-                score += 2  # 日线 KDJ 极度超卖，反弹概率高
-            elif dk_j > 90:
-                score -= 1  # 日线 KDJ 还在高位，下跌可能刚开始
-
-            bbi = df["bbi_daily"]
-            if bbi > 0 and price < bbi * 0.9:
-                score -= 2  # 远低于 BBI 多空线
-
-            if "m5_macd_dif" in df:
-                m5_dif = df["m5_macd_dif"]
-                m5_dea = df["m5_macd_dea"]
-                if m5_dif > m5_dea:
-                    score += 1
-                elif m5_dif < m5_dea:
-                    score -= 1
-
-        # ━━━ 9. 价格走势：是否止跌企稳 ━━━
         price_action, price_action_desc = self._get_recent_price_action(code)
-        if price_action == "declining":
-            return "watching", f"10分钟内{price_action_desc}，等待止跌", None
-        elif price_action == "reversing":
-            score += 5  # 确认反弹，大幅加分
-        elif price_action == "stabilizing":
-            score += 3  # 横盘止跌，小幅加分
-        # no_data 不加分不扣分
 
-        # ━━━ 汇总判断 ━━━
-        if score >= 6:
-            mul = min(1.0, 0.5 + score * 0.05)  # 最高 1.0
-            return "opportunity", f"回调至支撑区(评分{score})，择机买入", mul
-        elif score >= 3:
-            mul = 0.5 + score * 0.05
-            return (
-                "opportunity",
-                f"回调偏深但止跌迹象(评分{score})，小仓位试探",
-                min(0.7, mul),
-            )
-        elif score >= 0:
-            return "watching", f"下方偏离未企稳(评分{score})，继续观察", None
-        elif score >= -4:
-            return "watching", f"偏弱(评分{score})，等待更明确信号", None
-        else:
-            return "abandon", f"破位下行(评分{score})，买入区已失效", None
+        ctx = BuyEvalInput(
+            code=code, price=price, buy_min=buy_min, buy_max=buy_max,
+            sector_trend=trend, sector_chg=self._get_sector_change(code),
+            sector_decline=self._get_sector_decline(code),
+            sector_recovery_risk=self._get_sector_recovery_risk(code),
+            concept_score=self._get_concept_trend_score(code)[0],
+            concept_reason=self._get_concept_trend_score(code)[1],
+            intra_available=intra.get("available", False),
+            intra_rsi6=intra.get("rsi6", 50), intra_rsi12=intra.get("rsi12", 50),
+            intra_macd_direction=intra.get("macd_direction", ""),
+            intra_macd_bar=intra.get("macd_bar", 0),
+            intra_kdj_k=intra.get("kdj_k", 50), intra_kdj_d=intra.get("kdj_d", 50),
+            intra_kdj_j=intra.get("kdj_j", 50),
+            intra_price_vs_ma5=intra.get("price_vs_ma5", 0),
+            ob_ratio=ob_ratio, ob_reason=ob_reason,
+            big_ratio=big_ratio, big_reason=big_reason,
+            yesterday_mf_ratio=df.get("yesterday_mf_ratio", 0),
+            ma5_angle=df.get("ma5_angle", 0),
+            day_position=df.get("day_position"),
+            daily_macd_dif=df.get("daily_macd_dif", 0),
+            daily_macd_dea=df.get("daily_macd_dea", 0),
+            daily_macd_bar=df.get("daily_macd_bar", 0),
+            daily_kdj_j_daily=df.get("daily_kdj_j", 50),
+            bbi_daily=df.get("bbi_daily", 0),
+            m5_macd_dif=df.get("m5_macd_dif"),
+            m5_macd_dea=df.get("m5_macd_dea"),
+            m5_macd_bar=df.get("m5_macd_bar"),
+            price_action=price_action, price_action_desc=price_action_desc,
+        )
+        return evaluate_below_zone(ctx, near_support=near_support,
+                                   vol_shrinking=vol_shrinking, vol_surging=vol_surging,
+                                   near_ma60=near_ma60)
 
     def _calc_dynamic_buy_zone(
         self, code: str, price: float, buy_min: float, buy_max: float, trend: str = ""

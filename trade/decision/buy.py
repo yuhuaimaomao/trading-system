@@ -341,3 +341,170 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     if warn_reasons:
         return True, "; ".join(warn_reasons), max(0.5, size_mul)
     return True, "条件符合", size_mul
+
+
+def evaluate_below_zone(ctx: BuyEvalInput, *, near_support: bool = False,
+                        support_name: str = "",
+                        near_ma60: bool = False,
+                        vol_shrinking: bool = False,
+                        vol_surging: bool = False) -> tuple[str, str, float | None]:
+    """价格低于买入区时的回调评估。返回 (action, reason, size_mul|None)。
+
+    action: "opportunity" / "watching" / "abandon"
+    """
+    zone_range = ctx.buy_max - ctx.buy_min if ctx.buy_max > ctx.buy_min else 1
+    below_pct = (ctx.buy_min - ctx.price) / ctx.buy_min * 100
+    score = 0
+
+    # 1. 偏离幅度
+    if below_pct <= 2:
+        score += 2
+    elif below_pct <= 4:
+        score += 0
+    elif below_pct <= 7:
+        score -= 2
+    else:
+        score -= 5
+
+    # 2. 距离关键支撑
+    if near_support:
+        score += 4
+    elif ctx.daily_ma20 and ctx.price > ctx.daily_ma20:
+        score += 1
+    elif near_ma60:
+        score -= 3
+
+    # 3. 日内指标
+    if ctx.intra_available:
+        r6 = ctx.intra_rsi6
+        if r6 <= 25:
+            score += 3
+        elif r6 <= 35:
+            score += 1
+        elif r6 >= 70:
+            score -= 1
+
+        j = ctx.intra_kdj_j
+        k, d = ctx.intra_kdj_k, ctx.intra_kdj_d
+        if j < 0:
+            score += 2
+        if k > d and j < 20:
+            score += 2
+
+        if ctx.intra_macd_direction == "bullish":
+            score += 1
+        elif ctx.intra_macd_direction == "bearish" and ctx.intra_macd_bar < -0.3:
+            score -= 2
+
+        vs_ma5 = ctx.intra_price_vs_ma5
+        if vs_ma5 < -5:
+            score -= 3
+        elif vs_ma5 < -2:
+            score -= 1
+
+    # 4. 大单方向
+    if ctx.big_reason:
+        if ctx.big_ratio >= 0.6:
+            score += 3
+        elif ctx.big_ratio <= 0.4:
+            score -= 3
+
+    # 5. 盘口支撑
+    if ctx.ob_ratio >= 0.65:
+        score += 2
+    elif ctx.ob_ratio <= 0.35:
+        score -= 2
+
+    # 6. 板块趋势
+    trend = ctx.sector_trend
+    sector_chg = ctx.sector_chg
+    decline = ctx.sector_decline
+    recovery_risk = ctx.sector_recovery_risk
+
+    if not trend or "数据不足" in trend or "数据积累中" in trend:
+        return "watching", f"板块数据不足，开盘初期暂不买入{trend}", None
+    if sector_chg is not None and sector_chg <= -1.0:
+        return "watching", f"板块跌幅 {sector_chg:+.1f}%，拒绝买入", None
+    if decline is not None and decline >= 1.5:
+        return "watching", f"板块冲高回落 {decline:+.1f}%，拒绝追入", None
+    if recovery_risk is not None:
+        return "watching", f"板块从日内低点反弹 {recovery_risk:+.1f}%，疑似死猫跳不追", None
+    if "持续走弱" in trend:
+        return "watching", f"板块持续走弱，不买入{trend}", None
+    if "走弱" in trend:
+        score -= 3
+    elif "持续走强" in trend:
+        score += 3
+    elif "走强" in trend:
+        score += 1
+
+    # 6b. 概念
+    if ctx.concept_score <= -2:
+        return "watching", f"多数概念板块走弱{ctx.concept_reason}，不买入", None
+    score += ctx.concept_score
+
+    # 7. 量能验证
+    if vol_shrinking:
+        score += 2
+    elif vol_surging:
+        score -= 2
+
+    # 8. 昨日趋势背景
+    mf_ratio = ctx.yesterday_mf_ratio
+    if mf_ratio > 3:
+        score += 3
+    elif mf_ratio < -3:
+        score -= 3
+
+    ma5_ang = ctx.ma5_angle
+    if ma5_ang < -3:
+        score -= 3
+    elif ma5_ang > 1:
+        score += 1
+
+    if ctx.day_position is not None and ctx.day_position < 0.1:
+        score += 1
+
+    dm_dif, dm_dea, dm_bar = ctx.daily_macd_dif, ctx.daily_macd_dea, ctx.daily_macd_bar
+    if dm_dif > dm_dea:
+        score += 1
+    elif dm_dif < dm_dea and dm_bar < -0.5:
+        score -= 2
+
+    dk_j = ctx.daily_kdj_j_daily
+    if dk_j < 0:
+        score += 2
+    elif dk_j > 90:
+        score -= 1
+
+    bbi = ctx.bbi_daily
+    if bbi > 0 and ctx.price < bbi * 0.9:
+        score -= 2
+
+    if ctx.m5_macd_dif is not None and ctx.m5_macd_dea is not None:
+        if ctx.m5_macd_dif > ctx.m5_macd_dea:
+            score += 1
+        elif ctx.m5_macd_dif < ctx.m5_macd_dea:
+            score -= 1
+
+    # 9. 价格走势
+    if ctx.price_action == "declining":
+        return "watching", f"10分钟内{ctx.price_action_desc}，等待止跌", None
+    elif ctx.price_action == "reversing":
+        score += 5
+    elif ctx.price_action == "stabilizing":
+        score += 3
+
+    # 汇总
+    if score >= 6:
+        mul = min(1.0, 0.5 + score * 0.05)
+        return "opportunity", f"回调至支撑区(评分{score})，择机买入", mul
+    elif score >= 3:
+        mul = 0.5 + score * 0.05
+        return "opportunity", f"回调偏深但止跌迹象(评分{score})，小仓位试探", min(0.7, mul)
+    elif score >= 0:
+        return "watching", f"下方偏离未企稳(评分{score})，继续观察", None
+    elif score >= -4:
+        return "watching", f"偏弱(评分{score})，等待更明确信号", None
+    else:
+        return "abandon", f"破位下行(评分{score})，买入区已失效", None

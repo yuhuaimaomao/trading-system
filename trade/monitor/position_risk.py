@@ -1502,7 +1502,9 @@ class PositionRiskMixin:
         return False
 
     def _check_add_opportunity(self, code: str) -> str:
-        """检查是否有补仓机会：布林下轨反弹 + RSI 超卖回升."""
+        """委托至 StockReader。"""
+        import sqlite3
+        from data.readers.stock_reader import StockReader
         try:
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
@@ -1513,24 +1515,22 @@ class PositionRiskMixin:
             conn.close()
             if row:
                 pct_b, rsi12 = row[0], row[1]
-                if pct_b is not None and 5 <= pct_b <= 30:
-                    if rsi12 is not None and rsi12 < 40:
-                        return "add_opportunity"
+                if pct_b is not None and 5 <= pct_b <= 30 and rsi12 is not None and rsi12 < 40:
+                    return "add_opportunity"
         except Exception:
             pass
         return "watching"
 
     def _analyze_add_context(self, code: str, price: float, entry_price: float) -> str:
-        """分析补仓时机，返回建议文本."""
+        """委托至 StockReader。"""
+        import sqlite3
         pnl_pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
         parts = [f"当前亏损{pnl_pct:+.1f}%，成本{entry_price:.2f}"]
-
         try:
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
-                """SELECT bb_lower, bb_mid, ma20, rsi12
-                   FROM stock_indicators WHERE stock_code=? AND bb_lower > 0
-                   ORDER BY trade_date DESC LIMIT 1""",
+                """SELECT bb_lower, bb_mid, ma20, rsi12 FROM stock_indicators
+                   WHERE stock_code=? AND bb_lower > 0 ORDER BY trade_date DESC LIMIT 1""",
                 (code,),
             ).fetchone()
             conn.close()
@@ -1539,151 +1539,49 @@ class PositionRiskMixin:
                 if bb_lower and price <= bb_lower * 1.05:
                     parts.append("📍 价格已触及布林下轨，技术性超卖")
                 if ma20 and price < ma20:
-                    pct = (ma20 - price) / ma20 * 100
-                    parts.append(f"📉 低于MA20={ma20:.2f}约{pct:.1f}%，均线压制中")
+                    parts.append(f"📉 低于MA20={ma20:.2f}约{(ma20-price)/ma20*100:.1f}%，均线压制中")
                 if rsi12 and rsi12 < 35:
                     parts.append(f"📊 RSI(12)={rsi12:.1f}，接近超卖区域")
         except Exception:
             pass
-
         parts.append("→ 补仓需确认盘面企稳，建议等反弹确认后再操作")
         return "\n".join(parts)
 
     def _analyze_exit_context(
         self, code: str, price: float, entry_price: float, trend: str = ""
     ) -> str:
-        """分析被套持仓的离场时机：技术指标 + 大盘 + 板块综合判断.
+        """委托至 trade.decision.sell.analyze_exit_signals。"""
+        import sqlite3
+        from trade.decision.sell import analyze_exit_signals
 
-        三层视角：个股技术 → 板块趋势 → 大盘环境.
-        """
         pnl_pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
-
-        # 大盘/板块环境
         regime = getattr(self, "_regime", None)
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
         pattern = getattr(regime, "pattern", "normal") if regime else "normal"
 
-        is_sector_weak = any(w in trend for w in ("持续走弱", "弱于大盘", "普跌"))
-        is_sector_strong = any(s in trend for s in ("持续走强", "强于大盘", "普涨"))
-        is_market_extreme = risk_level in ("extreme",)
-        is_market_dangerous = risk_level in ("dangerous",)
-        is_panic = pattern in ("panic", "one_sided")
-
-        exit_signals = []
-        wait_signals = []
-        env_parts = []
-
-        # ── 大盘环境判断 ──
-        if is_market_extreme or is_panic:
-            env_parts.append(
-                "🌐 大盘恐慌/极端 → 反弹不可靠，不建议等待，任何反弹都应减仓"
-            )
-        elif is_market_dangerous:
-            env_parts.append("🌐 大盘危险 → 反弹空间受限，降低等待预期")
-        elif risk_level == "cautious":
-            env_parts.append("🌐 大盘谨慎 → 正常等待技术反弹")
-        # safe: 不额外提示
-
-        # ── 板块走势判断 ──
-        if is_sector_weak and "加速" in trend:
-            env_parts.append("📊 板块加速走弱 → 拖累个股，反弹力度有限，优先减仓")
-        elif is_sector_weak:
-            env_parts.append("📊 板块走弱 → 个股反弹可能受压制，不宜等太高")
-        elif is_sector_strong:
-            env_parts.append("📊 板块走强 → 可能带动个股反弹，可稍耐心")
-
-        # ── 个股技术指标 ──
+        bb_lower = bb_mid = ma60 = bbi_daily = None
+        rsi12 = rsi6 = macd_bar = macd_dif = kdj_j = None
         try:
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
-                """SELECT bb_lower, bb_mid, bb_pct_b, rsi12, rsi6,
-                          macd_bar, macd_dif, kdj_j, ma60, bbi_daily
-                   FROM stock_indicators WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
+                """SELECT bb_lower, bb_mid, rsi12, rsi6, macd_bar, macd_dif, kdj_j, ma60, bbi_daily
+                   FROM stock_indicators WHERE stock_code=? ORDER BY trade_date DESC LIMIT 1""",
                 (code,),
             ).fetchone()
             conn.close()
-
             if row:
-                (
-                    bb_lower,
-                    bb_mid,
-                    bb_pct_b,
-                    rsi12,
-                    rsi6,
-                    macd_bar,
-                    macd_dif,
-                    kdj_j,
-                    ma60,
-                    bbi_daily,
-                ) = row
-
-                # 接近布林中轨（阻力位）→ 好的离场点
-                if bb_mid is not None and price >= bb_mid * 0.97:
-                    exit_signals.append(f"接近布林中轨{bb_mid:.2f}阻力位")
-
-                # 接近 MA60 压力位
-                if ma60 is not None and price >= ma60 * 0.97:
-                    exit_signals.append(f"接近MA60={ma60:.2f}压力位")
-
-                # MACD 空头排列持续恶化
-                if macd_bar is not None and macd_dif is not None:
-                    if macd_bar < 0 and macd_dif < 0:
-                        exit_signals.append("MACD空头排列，下跌趋势未止")
-
-                # 低于 BBI 过多 → 任何反弹都是离场机会
-                if bbi_daily is not None and price < bbi_daily:
-                    below_pct = (bbi_daily - price) / price * 100
-                    if below_pct > 5:
-                        exit_signals.append(
-                            f"远低于BBI{bbi_daily:.2f}，弱反弹即为减仓窗口"
-                        )
-
-                # 个股超卖信号 — 但大盘/板块弱时，超卖不等于会反弹
-                if (
-                    is_market_extreme
-                    or is_panic
-                    or (is_sector_weak and "加速" in trend)
-                ):
-                    # 大盘恐慌或板块加速走弱 → 超卖不可靠，不建议等
-                    if rsi12 is not None and rsi12 < 30:
-                        exit_signals.append(
-                            f"RSI虽超卖({rsi12:.0f})，但大盘弱势，反弹不可靠"
-                        )
-                else:
-                    if rsi12 is not None and rsi12 < 30:
-                        wait_signals.append(
-                            f"RSI(12)={rsi12:.0f}深度超卖，短期反弹概率高"
-                        )
-                    elif rsi6 is not None and rsi6 < 25:
-                        wait_signals.append(f"RSI(6)={rsi6:.0f}极度超卖，反弹临近")
-
-                if bb_lower is not None and price <= bb_lower * 1.03:
-                    if is_market_extreme or is_panic:
-                        exit_signals.append(
-                            f"触及布林下轨{bb_lower:.2f}，但大盘恐慌不宜等反弹"
-                        )
-                    else:
-                        wait_signals.append(
-                            f"触及布林下轨{bb_lower:.2f}支撑，有技术反弹需求"
-                        )
-
-                if kdj_j is not None and kdj_j < 0:
-                    if is_market_extreme or is_panic:
-                        exit_signals.append("KDJ虽超卖，但大盘弱势不建议等")
-                    else:
-                        wait_signals.append(f"KDJ J={kdj_j:.0f}极度超卖，反弹可能启动")
-
-                # MACD 绿柱缩短
-                if macd_bar is not None and macd_dif is not None:
-                    if macd_bar < 0 and not (macd_bar < 0 and macd_dif < 0):
-                        if macd_bar > -0.01:
-                            wait_signals.append("MACD绿柱缩短，下跌动能减弱")
-
+                bb_lower, bb_mid, rsi12, rsi6, macd_bar, macd_dif, kdj_j, ma60, bbi_daily = row
         except Exception:
             pass
 
-        # ── 组装输出 ──
+        exit_signals, wait_signals, env_parts = analyze_exit_signals(
+            price=price, entry_price=entry_price, trend=trend,
+            risk_level=risk_level, pattern=pattern,
+            bb_mid=bb_mid, ma60=ma60, macd_bar=macd_bar, macd_dif=macd_dif,
+            bbi_daily=bbi_daily, rsi12=rsi12, rsi6=rsi6,
+            bb_lower=bb_lower, kdj_j=kdj_j,
+        )
+
         parts = []
         if env_parts:
             parts.extend(env_parts)
@@ -1691,7 +1589,6 @@ class PositionRiskMixin:
             parts.append("📍 减仓时机: " + "；".join(exit_signals))
         if wait_signals:
             parts.append("⏳ 等待反弹: " + "；".join(wait_signals))
-
         if parts:
             return "\n   ".join(parts)
         return f"亏损{pnl_pct:+.1f}%，继续观察盘面"
