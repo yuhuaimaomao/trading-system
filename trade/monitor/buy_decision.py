@@ -24,96 +24,16 @@ class BuyDecisionMixin:
         pattern: str,
         sector_trend: str,
     ) -> tuple[int, str]:
-        """根据盘面动态计算买入金额（0-16000），返回 (金额, 决策理由)。"""
-        # 禁止买入的模式
-        BLOCKED = (
-            "panic",
-            "one_sided",
-            "dead_cat",
-            "inverted_v",
-            "m_top",
-            "gap_up_fade",
-            "late_dump",
-            "fishing_line",
+        """委托至 trade.decision.sizing.calculate_position_size。"""
+        from trade.decision.sizing import calculate_position_size
+
+        return calculate_position_size(
+            code=code, price=price, buy_min=buy_min, buy_max=buy_max,
+            pattern=pattern, sector_trend=sector_trend,
+            market_breadth=getattr(self, "_market_breadth", {}),
+            industry_cache=getattr(self, "_industry_cache", {}),
+            morning_sector_bias=self._morning_sector_bias,
         )
-        if pattern in BLOCKED:
-            return 0, f"市场{pattern}模式，暂停买入"
-
-        # 基础额度
-        CAUTIOUS = (
-            "v_reversal",
-            "w_bottom",
-            "melt_up",
-            "late_rally",
-            "wide_choppy",
-            "gap_down_recover",
-        )
-        if pattern in CAUTIOUS:
-            base = 8000
-            reason = f"市场{pattern}模式，谨慎参与"
-        elif pattern == "normal":
-            base = 16000
-            reason = "大盘正常"
-        elif pattern == "uptrend":
-            base = 16000
-            reason = "大盘上行"
-        else:
-            base = 16000
-            reason = ""
-
-        # 市场宽度修正
-        breadth = getattr(self, "_market_breadth", {})
-        up, down = breadth.get("up", 0), breadth.get("down", 0)
-        if up + down > 0:
-            down_ratio = down / (up + down)
-            if down_ratio > 0.7:
-                base = max(base * 0.3, 5000)
-                reason += " 普跌" if reason else "普跌"
-            elif down_ratio > 0.6:
-                base = max(base * 0.5, 5000)
-                reason += " 偏弱" if reason else "偏弱"
-
-        # 板块趋势修正
-        if "持续走弱" in sector_trend:
-            base = max(base * 0.3, 5000)
-            reason += " 板块持续走弱" if reason else "板块持续走弱"
-        elif "走弱" in sector_trend:
-            base = max(base * 0.6, 5000)
-            reason += " 板块走弱" if reason else "板块走弱"
-        elif "持续走强" in sector_trend:
-            base = min(base * 1.3, 16000)
-        elif "走强" in sector_trend:
-            base = min(base * 1.2, 16000)
-
-        # 早盘 AI 板块倾向修正（叠加在实时板块趋势之上）
-        industry = self._industry_cache.get(code, "")
-        if industry and industry in self._morning_sector_bias:
-            b = self._morning_sector_bias[industry]
-            b_mult = b.get("size_mult", 1.0)
-            if b["bias"] == "focus":
-                base = min(int(base * b_mult), 16000)
-                reason += (
-                    f" AI聚焦({b_mult:.1f}x)" if reason else f"AI聚焦({b_mult:.1f}x)"
-                )
-            elif b["bias"] == "avoid":
-                base = max(int(base * b_mult), 3000)
-                reason += (
-                    f" AI回避({b_mult:.1f}x)" if reason else f"AI回避({b_mult:.1f}x)"
-                )
-
-        # 买入区位置修正（下沿1/3 → 激进，上沿1/3 → 保守）
-        zone_range = buy_max - buy_min if buy_max > buy_min else 1
-        position_in_zone = (price - buy_min) / zone_range
-        if position_in_zone <= 0.33:
-            # 价格在买入区下沿，可更激进
-            base = min(base * 1.1, 16000)
-            reason += " 买入区下沿"
-        elif position_in_zone >= 0.67:
-            # 价格在买入区上沿，偏保守
-            base = max(base * 0.7, 5000)
-            reason += " 买入区上沿"
-
-        return int(base // 100 * 100), reason.strip()
 
     def _analyze_buy_context(
         self, code: str, price: float, buy_min: float, buy_max: float
