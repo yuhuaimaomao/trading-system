@@ -1446,7 +1446,10 @@ class BuyDecisionMixin:
                     ):
                         approach_key = f"approach:{c['alert_key']}"
                         last_scan = alert_state.get(approach_key, 0)
-                        if self._scan_count - last_scan >= 15 and not self._should_throttle(code, price):
+                        if (
+                            self._scan_count - last_scan >= 15
+                            and not self._should_throttle(code, price)
+                        ):
                             alert_state[approach_key] = self._scan_count
                             self._alert(
                                 f"🔔 {tag}买入区接近 — {code} {name}\n"

@@ -204,8 +204,14 @@ class PositionRiskMixin:
                             )
                             # 异步 AI：被套离场分析
                             self._submit_trapped_exit_ai(
-                                code, pos.stock_name, price, pos.avg_cost,
-                                sl, tp, trend, deep_state,
+                                code,
+                                pos.stock_name,
+                                price,
+                                pos.avg_cost,
+                                sl,
+                                tp,
+                                trend,
+                                deep_state,
                             )
 
                         # 更新最低价
@@ -213,9 +219,7 @@ class PositionRiskMixin:
                             deep_state["lowest"] = price
 
                         lowest = deep_state.get("lowest", price)
-                        rebound = (
-                            (price - lowest) / lowest * 100 if lowest > 0 else 0
-                        )
+                        rebound = (price - lowest) / lowest * 100 if lowest > 0 else 0
                         rebound_high = deep_state.get("rebound_high", 0)
 
                         # ── 更新反弹高点（从最低反弹 ≥3%）──
@@ -230,31 +234,31 @@ class PositionRiskMixin:
                                 )
                             # 反弹新高 → 异步 AI 重新评估离场时机
                             if (
-                                self._scan_count
-                                - deep_state.get("last_ai_scan", -100)
+                                self._scan_count - deep_state.get("last_ai_scan", -100)
                                 >= 20
                             ):
                                 deep_state["last_ai_scan"] = self._scan_count
                                 self._submit_trapped_exit_ai(
-                                    code, pos.stock_name, price, pos.avg_cost,
-                                    sl, tp, trend, deep_state,
+                                    code,
+                                    pos.stock_name,
+                                    price,
+                                    pos.avg_cost,
+                                    sl,
+                                    tp,
+                                    trend,
+                                    deep_state,
                                 )
 
                         # ── 反弹失败检测（代码级，不等 AI 不等 14:00）──
                         fail_reason = None
                         if rebound_high > 0:
-                            drop_from_high = (
-                                (rebound_high - price) / rebound_high * 100
-                            )
+                            drop_from_high = (rebound_high - price) / rebound_high * 100
                             # 条件1: 从反弹高点回落 ≥2%
                             if drop_from_high >= 2:
-                                fail_reason = (
-                                    f"反弹高点{rebound_high:.2f}回落{drop_from_high:.1f}%"
-                                )
+                                fail_reason = f"反弹高点{rebound_high:.2f}回落{drop_from_high:.1f}%"
                             # 条件2: 横盘 ≥30 轮 + 技术指标无改善
                             elif (
-                                self._scan_count
-                                - deep_state.get("rebound_scan", 0)
+                                self._scan_count - deep_state.get("rebound_scan", 0)
                                 >= 30
                             ):
                                 if not self._deep_rebound_improving(code, deep_state):
@@ -1137,7 +1141,9 @@ class PositionRiskMixin:
 
                 # 状态变更 → 即时推送详细信息
                 if status_changed:
-                    day_label = "今日买入" if is_today_buy else f"成本: {entry_price:.2f}"
+                    day_label = (
+                        "今日买入" if is_today_buy else f"成本: {entry_price:.2f}"
+                    )
                     detail = (
                         f"{emoji.get(new_status, '👀')} 持仓状态变更 — {code} {name}\n"
                         f"   {status_labels.get(new_status, new_status)}  现价: {price:.2f}  {day_label}"
@@ -1159,10 +1165,16 @@ class PositionRiskMixin:
                             )
                         except Exception:
                             pass
-                        label = "深度套牢超10%" if new_status == "deep_trapped" else "被套5%~10%"
+                        label = (
+                            "深度套牢超10%"
+                            if new_status == "deep_trapped"
+                            else "被套5%~10%"
+                        )
                         detail += f"\n   {emoji.get(new_status)} {label}\n   {exit_ctx}"
                     elif new_status == "add_opportunity":
-                        add_context = self._analyze_add_context(code, price, entry_price)
+                        add_context = self._analyze_add_context(
+                            code, price, entry_price
+                        )
                         if add_context:
                             detail += f"\n   💡 补仓机会: {add_context}"
                     self._alert(detail)
@@ -1516,7 +1528,11 @@ class PositionRiskMixin:
         # 维度3: 大盘未持续新低 — 最近 5 轮最低价没破位
         if hasattr(self, "_index_prices") and len(self._index_prices) >= 5:
             recent = self._index_prices[-5:]
-            if min(recent) >= min(self._index_prices[-15:-5]) if len(self._index_prices) >= 15 else min(recent):
+            if (
+                min(recent) >= min(self._index_prices[-15:-5])
+                if len(self._index_prices) >= 15
+                else min(recent)
+            ):
                 return True  # 5轮低点 ≥ 前10轮低点 → 大盘企稳
 
         return False
@@ -1718,21 +1734,23 @@ class PositionRiskMixin:
 
     def _submit_trapped_exit_ai(
         self,
-        code: str, name: str, price: float, cost: float,
-        sl: float, tp: float, trend: str, deep_state: dict,
+        code: str,
+        name: str,
+        price: float,
+        cost: float,
+        sl: float,
+        tp: float,
+        trend: str,
+        deep_state: dict,
     ):
         """异步 AI 被套离场分析 — 结合个股+板块+大盘给出离场建议。"""
         loss_pct = (cost - price) / cost * 100 if cost > 0 else 0
         lowest = deep_state.get("lowest", price)
         rebound_high = deep_state.get("rebound_high", 0) or price
-        rebound_pct = (
-            (price - lowest) / lowest * 100 if lowest > 0 else 0
-        )
+        rebound_pct = (price - lowest) / lowest * 100 if lowest > 0 else 0
 
         # 找最近阻力位
-        target_price, target_label = self._calc_exit_target(
-            code, price, cost, trend
-        )
+        target_price, target_label = self._calc_exit_target(code, price, cost, trend)
         if target_price is None:
             target_price = cost
             target_label = "成本价"

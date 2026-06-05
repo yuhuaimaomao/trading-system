@@ -2,7 +2,7 @@
 
 > 日期：2026-06-05
 > 前置文档：[2026-06-04-pipeline-refactoring-plan.md](./2026-06-04-pipeline-refactoring-plan.md)
-> 
+>
 > 原方案的四层分离架构（Layer 0-4）仍是目标，本更新调整的是**路线和优先级**，不是架构方向。
 
 ---
@@ -52,12 +52,12 @@
     从 Mixin 改成独立类，构造函数收 Provider
     这是「从 Mixin 搬家到 Engine」的一次练兵
     风险低（新代码，没有历史包袱）
-    
+
 1b. prompts/ 加 re-export
     已经是独立模块，不需要改动
     只需确认 import 路径对上层友好
 
-    
+
 阶段2: 按复杂度拆 position_risk（下周）
 ─────────────────────────────────────────────
 position_risk.py 里最值得拆的部分（按自包含程度排序）:
@@ -132,7 +132,7 @@ TechnicalEngine 就绪后，第一个 analyzer（technical）直接复用:
 class TechnicalAnalyzer:
     def __init__(self, tech_engine: TechnicalEngine):
         self.engine = tech_engine
-    
+
     def analyze(self, symbol: str) -> AnalysisResult:
         snap = self.engine.daily_snapshot(symbol)
         sr = self.engine.support_resistance(symbol, snap.ma20)
@@ -176,7 +176,7 @@ class IntradayScoutMixin:
 class ScoutEngine:
     def __init__(self, db_path: str):
         self.db_path = db_path
-    
+
     def scan(
         self,
         market_snapshot: dict,

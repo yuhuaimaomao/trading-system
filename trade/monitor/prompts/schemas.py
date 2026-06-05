@@ -6,8 +6,8 @@ from dataclasses import dataclass
 @dataclass
 class PromptTemplate:
     scenario: str
-    system_prompt: str          # AI 角色定义 + 核心判断原则
-    user_template: str          # {field} 占位模板
+    system_prompt: str  # AI 角色定义 + 核心判断原则
+    user_template: str  # {field} 占位模板
     required_fields: list[str]  # 模板必填字段（格式化前校验）
-    max_tokens: int = 100       # AI 返回长度
-    dedupe: bool = True         # 同名 key 是否替换旧任务
+    max_tokens: int = 100  # AI 返回长度
+    dedupe: bool = True  # 同名 key 是否替换旧任务

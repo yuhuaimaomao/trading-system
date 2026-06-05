@@ -4,10 +4,9 @@
 新增场景只需：(1) 写模板文件 (2) 在 _TEMPLATES 注册 (3) detect_scenario 加规则。
 """
 
-from trade.monitor.prompts.schemas import PromptTemplate
 from trade.monitor.prompts.breakout import BREAKOUT_TEMPLATE
+from trade.monitor.prompts.schemas import PromptTemplate
 from trade.monitor.prompts.trapped_exit import TRAPPED_EXIT_TEMPLATE
-
 
 # ── 模板注册表 ──
 _TEMPLATES: dict[str, PromptTemplate] = {

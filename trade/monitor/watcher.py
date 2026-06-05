@@ -24,14 +24,15 @@ from trade.monitor.audit.decision_logger import DecisionLoggerMixin
 from trade.monitor.buy_decision import BuyDecisionMixin
 from trade.monitor.close_summary import CloseSummaryMixin
 from trade.monitor.closing import ClosingDecisionMixin
+from trade.monitor.intraday_scout import IntradayScoutMixin
 from trade.monitor.market_state import MarketRegime, MarketStateMixin
 from trade.monitor.position_risk import PositionRiskMixin
 from trade.monitor.sector_context import SectorContextMixin
-from trade.monitor.intraday_scout import IntradayScoutMixin
 from trade.monitor.sector_resonance import (
     INDEX_VOLATILITY_THRESHOLD,
     SectorResonanceAnalyzer,
 )
+from trade.monitor.state import ScanState
 from trade.paper.account import PaperAccount
 from trade.risk.engine import RiskEngine
 
@@ -203,7 +204,9 @@ class Watcher(
         self._daily_factor_cache: dict[str, dict] = {}
 
         # 个股价格追踪（最近10分钟，用于止跌确认）
-        self._recent_prices: dict[str, list[tuple[float, float]]] = {}  # {code: [(ts, price), ...]}
+        self._recent_prices: dict[
+            str, list[tuple[float, float]]
+        ] = {}  # {code: [(ts, price), ...]}
 
         # 全市场快照价格追踪（用于回踩机会扫描，覆盖所有5000+只）
         self._snapshot_price_history: dict[str, list[tuple[float, float]]] = {}
@@ -231,6 +234,81 @@ class Watcher(
         self._push_cooldown: dict[str, tuple[int, float]] = {}
         # 健康检查告警指纹：{fingerprint: last_scan_count} 抑制重复告警
         self._health_alert_seen: dict[str, int] = {}
+
+    def build_state(self) -> ScanState:
+        """构建当前运行时状态快照，传递给各领域模块。"""
+        return ScanState(
+            running=self._running,
+            trade_date=self._trade_date,
+            scan_count=self._scan_count,
+            # 指数
+            index_prices=list(self._index_prices),
+            index_high=self._index_high,
+            index_low=self._index_low,
+            index_map=dict(self._index_map),
+            index_close_high=self._index_close_high,
+            index_close_low=self._index_close_low,
+            index_alerted_downtrend=self._index_alerted_downtrend,
+            index_alerted_ma20=self._index_alerted_ma20,
+            index_last_fluctuation_price=self._index_last_fluctuation_price,
+            index_tech_state=dict(self._index_tech_state),
+            # 市场宽度
+            market_breadth=dict(self._market_breadth),
+            market_turnovers=list(self._market_turnovers),
+            volume_alerted_divergence=self._volume_alerted_divergence,
+            # 市场状态
+            regime=self._regime,
+            closing_decision_done=self._closing_decision_done,
+            max_drawdown_alerted=self._max_drawdown_alerted,
+            # 数据就绪
+            data_ready=self._data_ready,
+            data_ready_at=self._data_ready_at,
+            data_missing_rounds=self._data_missing_rounds,
+            market_snapshot=dict(self._market_snapshot),
+            last_index_quote=dict(self._last_index_quote) if self._last_index_quote else None,
+            last_db_ts=self._last_db_ts,
+            # 板块趋势
+            sector_stats=dict(self._sector_stats),
+            concept_stats=dict(self._concept_stats),
+            industry_cache=dict(self._industry_cache),
+            concept_cache=dict(self._concept_cache),
+            last_resonance_push_scan=self._last_resonance_push_scan,
+            last_resonance_index_dir=self._last_resonance_index_dir,
+            # 告警
+            triggered_ids=set(self._triggered_ids),
+            alerted_sl_tp=set(self._alerted_sl_tp),
+            alert_fingerprints=dict(self._alert_fingerprints),
+            signal_alert_state=dict(self._signal_alert_state),
+            review_alert_state=dict(self._review_alert_state),
+            prev_snapshot=dict(self._prev_snapshot),
+            # 卖出冷却
+            recently_sold=dict(self._recently_sold),
+            # 持仓
+            pos_meta=dict(self._pos_meta),
+            bought_watch=dict(self._bought_watch),
+            recent_prices=dict(self._recent_prices),
+            snapshot_price_history=dict(self._snapshot_price_history),
+            sl_reminders=dict(self._sl_reminders),
+            # 缓存
+            ma_baseline_cache=self._ma_baseline_cache,
+            limit_cache=dict(self._limit_cache),
+            instrument_cache=dict(self._instrument_cache),
+            intraday_cache=dict(self._intraday_cache),
+            intraday_cache_scan=self._intraday_cache_scan,
+            daily_factor_cache=dict(self._daily_factor_cache),
+            cached_db_watch_codes=set(self._cached_db_watch_codes),
+            watch_codes_stale=self._watch_codes_stale,
+            # 回踩
+            pullback_scan_count=self._pullback_scan_count,
+            pullback_alerted_today=set(self._pullback_alerted_today),
+            # AI
+            pending_chase=dict(self._pending_chase),
+            pending_index_ai=dict(self._pending_index_ai),
+            morning_sector_bias=dict(self._morning_sector_bias),
+            # 推送
+            push_cooldown=dict(self._push_cooldown),
+            health_alert_seen=dict(self._health_alert_seen),
+        )
 
     def _init_private_telegram(self):
         try:
@@ -633,7 +711,10 @@ class Watcher(
 
         # 盘中回踩机会发现（每 N 轮，走完整买入管线）
         try:
-            if self._data_ready and self._scan_count % settings.PULLBACK_SCAN_INTERVAL == 0:
+            if (
+                self._data_ready
+                and self._scan_count % settings.PULLBACK_SCAN_INTERVAL == 0
+            ):
                 opps = self._scan_pullback_opportunities(prices)
                 if opps:
                     self._check_buy_candidates(opps, self._regime)
@@ -1062,7 +1143,9 @@ class Watcher(
                             hist.append((now_ts, price_f))
                         # 只保留最近10分钟
                         cutoff = now_ts - 600
-                        self._recent_prices[code] = [(t, p) for t, p in hist if t > cutoff]
+                        self._recent_prices[code] = [
+                            (t, p) for t, p in hist if t > cutoff
+                        ]
 
                 # 涨跌停价
                 pre_close = item.get("preClose") or item.get("pre_close") or 0
@@ -1535,9 +1618,7 @@ class Watcher(
 
     # ======================== AI 辅助 ========================
 
-    def _submit_scenario_ai(
-        self, key: str, scenario: str, **fields
-    ) -> bool:
+    def _submit_scenario_ai(self, key: str, scenario: str, **fields) -> bool:
         """使用场景模板提交 AI 异步评估。返回 True 表示已入队。"""
         from trade.monitor.prompts import build_prompt, get_template
 
@@ -1550,7 +1631,8 @@ class Watcher(
         tmpl = get_template(scenario)
         dedupe = tmpl.dedupe if tmpl else True
         return self._ai_queue.submit(
-            key, user_prompt,
+            key,
+            user_prompt,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             dedupe=dedupe,
@@ -1656,29 +1738,35 @@ class Watcher(
             # 提取板块行业名
             industry = self._industry_cache.get(code, "")
 
-            chase_items.append({
-                "code": code,
-                "name": name,
-                "price": ctx["price"],
-                "buy_min": ctx["buy_min"],
-                "buy_max": ctx["buy_max"],
-                "sl": ctx["sl"],
-                "tp": ctx["tp"],
-                "trend": ctx["trend"],
-                "above_pct": above_pct,
-                "reject_reason": ctx["reject_reason"],
-                "intra_str": ctx["intra_str"],
-                "result": result,
-                "title": title,
-                "industry": industry,
-            })
+            chase_items.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "price": ctx["price"],
+                    "buy_min": ctx["buy_min"],
+                    "buy_max": ctx["buy_max"],
+                    "sl": ctx["sl"],
+                    "tp": ctx["tp"],
+                    "trend": ctx["trend"],
+                    "above_pct": above_pct,
+                    "reject_reason": ctx["reject_reason"],
+                    "intra_str": ctx["intra_str"],
+                    "result": result,
+                    "title": title,
+                    "industry": industry,
+                }
+            )
 
         # ── 合并推送：同板块 ≥3 只追高提醒 → 合并为一条 ──
         if chase_items:
             # 分组：按 (title, industry)
             groups: dict[tuple, list[dict]] = {}
             for item in chase_items:
-                key = (item["title"], item["industry"]) if item["industry"] else (item["title"], item["code"])
+                key = (
+                    (item["title"], item["industry"])
+                    if item["industry"]
+                    else (item["title"], item["code"])
+                )
                 groups.setdefault(key, []).append(item)
 
             for (title, sector), items in groups.items():
@@ -1774,7 +1862,10 @@ class Watcher(
 
         sell_meta = self._pos_meta.get(sell_code, {})
         sell_result = self.paper_account.sell(
-            sell_code, sell_price, f"AI异步换仓→{buy_code}", signal_id=sell_meta.get("signal_id")
+            sell_code,
+            sell_price,
+            f"AI异步换仓→{buy_code}",
+            signal_id=sell_meta.get("signal_id"),
         )
         if sell_result.success:
             self._pos_meta.pop(sell_code, None)
@@ -1976,7 +2067,9 @@ class Watcher(
 
     # ======================== 推送 ========================
 
-    def _should_throttle(self, code: str, price: float, cooldown_scans: int = 15) -> bool:
+    def _should_throttle(
+        self, code: str, price: float, cooldown_scans: int = 15
+    ) -> bool:
         """推送冷却：同票同价区间内抑制重复推送。返回 True 表示应跳过。"""
         if code in self._push_cooldown:
             last_scan, last_price = self._push_cooldown[code]
@@ -1998,7 +2091,8 @@ class Watcher(
             # 定期清理过期指纹（每100轮）
             if self._scan_count % 100 == 0:
                 stale = [
-                    k for k, v in self._alert_fingerprints.items()
+                    k
+                    for k, v in self._alert_fingerprints.items()
                     if self._scan_count - v > 200
                 ]
                 for k in stale:
@@ -2014,6 +2108,7 @@ class Watcher(
     def _alert_fingerprint(self, msg: str) -> str:
         """提取消息指纹：首行类型 + 股票代码（如有）"""
         import re
+
         first_line = msg.split("\n")[0] if msg else ""
         # 提取股票代码（6位数字）
         m = re.search(r"\b(\d{6})\b", first_line)

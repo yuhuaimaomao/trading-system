@@ -6,7 +6,6 @@ Mixin 方式混入 Watcher。
 
 import logging
 import time
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -15,26 +14,26 @@ class IntradayScoutMixin:
     """盘中机会发现 — 全市场扫描，不等均线回踩。"""
 
     # ── 运行参数 ──
-    SCOUT_INTERVAL = 3          # 每 N 轮触发一次
-    SCOUT_AI_TIMEOUT = 45       # AI 超时（秒）
+    SCOUT_INTERVAL = 3  # 每 N 轮触发一次
+    SCOUT_AI_TIMEOUT = 45  # AI 超时（秒）
 
     # ── 风控限制 ──
-    MAX_SCOUT_POSITIONS = 4     # 引擎2 最大持仓数
+    MAX_SCOUT_POSITIONS = 4  # 引擎2 最大持仓数
     MIN_POSITION_AMOUNT = 3000  # 单只最小买入金额
     MAX_POSITION_AMOUNT = 5000  # 单只最大买入金额
-    MAX_SAME_SECTOR = 2         # 同板块最多持仓数
+    MAX_SAME_SECTOR = 2  # 同板块最多持仓数
 
     # ── 筛选阈值 ──
-    CHANGE_MIN = 2.0            # 最低涨幅 %
-    CHANGE_MAX = 7.0            # 最高涨幅 %
-    SECTOR_TOP_N = 15           # 板块排名门槛
-    SECTOR_MIN_PCT = 0.5        # 板块最小涨幅 %
+    CHANGE_MIN = 2.0  # 最低涨幅 %
+    CHANGE_MAX = 7.0  # 最高涨幅 %
+    SECTOR_TOP_N = 15  # 板块排名门槛
+    SECTOR_MIN_PCT = 0.5  # 板块最小涨幅 %
 
     # ── 内部状态 ──
-    _prev_snapshot_amounts: dict[str, float] = {}   # 上轮 amount
-    _scout_ai_pending: dict[str, dict] = {}          # AI 待处理
-    _scout_recent_sectors: dict[str, int] = {}       # 板块→最近推送 scan_count
-    _scout_positions: set[str] = set()               # 引擎2当前持仓 code
+    _prev_snapshot_amounts: dict[str, float] = {}  # 上轮 amount
+    _scout_ai_pending: dict[str, dict] = {}  # AI 待处理
+    _scout_recent_sectors: dict[str, int] = {}  # 板块→最近推送 scan_count
+    _scout_positions: set[str] = set()  # 引擎2当前持仓 code
 
     # ═══════════════════════════════════════════════════════════════
     # 主入口
@@ -93,8 +92,7 @@ class IntradayScoutMixin:
 
         # 保存本轮 amount 供下轮对比
         self._prev_snapshot_amounts = {
-            code: float(item.get("amount", 0) or 0)
-            for code, item in snapshot.items()
+            code: float(item.get("amount", 0) or 0) for code, item in snapshot.items()
         }
 
     # ═══════════════════════════════════════════════════════════════
@@ -152,9 +150,9 @@ class IntradayScoutMixin:
             amount_up = prev_amount > 0 and amount > prev_amount
 
             # 价格动量：近5分钟趋势
-            price_hist = (
-                getattr(self, "_snapshot_price_history", {}) or {}
-            ).get(code, [])
+            price_hist = (getattr(self, "_snapshot_price_history", {}) or {}).get(
+                code, []
+            )
             price_trending_up = False
             if len(price_hist) >= 3:
                 recent_prices = [p for _, p in price_hist[-5:]]
@@ -167,9 +165,7 @@ class IntradayScoutMixin:
 
             # 排除引擎1已推送过的（同票30轮内不重复）
             alert_fps = getattr(self, "_alert_fingerprints", {}) or {}
-            already_alerted = any(
-                code in k for k in alert_fps
-            )
+            already_alerted = any(code in k for k in alert_fps)
             if already_alerted:
                 continue
 
@@ -185,15 +181,17 @@ class IntradayScoutMixin:
                 if scan_diff < 60:  # 卖出后 ~15 分钟内不回补
                     continue
 
-            candidates.append({
-                "code": code,
-                "price": price,
-                "change_pct": change_pct,
-                "amount": amount,
-                "amount_up": amount_up,
-                "price_trending_up": price_trending_up,
-                "industry": industry,
-            })
+            candidates.append(
+                {
+                    "code": code,
+                    "price": price,
+                    "change_pct": change_pct,
+                    "amount": amount,
+                    "amount_up": amount_up,
+                    "price_trending_up": price_trending_up,
+                    "industry": industry,
+                }
+            )
 
         return candidates
 
@@ -213,9 +211,7 @@ class IntradayScoutMixin:
             key=lambda x: x[1].get("change_pct", 0),
             reverse=True,
         )
-        sector_rank_map = {
-            name: i + 1 for i, (name, _) in enumerate(ranked_sectors)
-        }
+        sector_rank_map = {name: i + 1 for i, (name, _) in enumerate(ranked_sectors)}
 
         regime = getattr(self, "_regime", None)
         market_env = getattr(regime, "pattern", "normal") if regime else "normal"
@@ -231,9 +227,11 @@ class IntradayScoutMixin:
             rank_score = max(0, (1 - sector_rank / total_sectors)) * 35
 
             # 2. 价格动量分（涨幅在 2-7% 区间线性映射，满分 25）
-            momentum_score = (item["change_pct"] - self.CHANGE_MIN) / (
-                self.CHANGE_MAX - self.CHANGE_MIN
-            ) * 25
+            momentum_score = (
+                (item["change_pct"] - self.CHANGE_MIN)
+                / (self.CHANGE_MAX - self.CHANGE_MIN)
+                * 25
+            )
 
             # 3. 量能分（放量 + 价涨=高分，满分 20）
             volume_score = 0
@@ -242,7 +240,7 @@ class IntradayScoutMixin:
             elif item["amount_up"]:
                 volume_score = 12  # 仅放量
             elif item["price_trending_up"]:
-                volume_score = 8   # 仅价涨
+                volume_score = 8  # 仅价涨
 
             # 4. 大盘配合分（满分 20）
             market_score = 0
@@ -283,9 +281,7 @@ class IntradayScoutMixin:
             amount_desc = "价涨量平"
 
         # 价格走势描述
-        price_hist = (
-            getattr(self, "_snapshot_price_history", {}) or {}
-        ).get(code, [])
+        price_hist = (getattr(self, "_snapshot_price_history", {}) or {}).get(code, [])
         if len(price_hist) >= 5:
             recent = [p for _, p in price_hist[-5:]]
             if all(recent[i] <= recent[i + 1] for i in range(len(recent) - 1)):
@@ -387,13 +383,15 @@ class IntradayScoutMixin:
         industry = ctx.get("industry", "")
         same_sector_count = 0
         for held_code in self._scout_positions:
-            held_industry = (
-                getattr(self, "_industry_cache", {}) or {}
-            ).get(held_code, "")
+            held_industry = (getattr(self, "_industry_cache", {}) or {}).get(
+                held_code, ""
+            )
             if held_industry == industry:
                 same_sector_count += 1
         if same_sector_count >= self.MAX_SAME_SECTOR:
-            logger.info(f"Scout [{code}] 板块{industry}已达上限{self.MAX_SAME_SECTOR}只，跳过")
+            logger.info(
+                f"Scout [{code}] 板块{industry}已达上限{self.MAX_SAME_SECTOR}只，跳过"
+            )
             return
 
         # 计算买入量
@@ -403,7 +401,10 @@ class IntradayScoutMixin:
             return
 
         result = self.paper_account.buy(
-            code, name, price, volume,
+            code,
+            name,
+            price,
+            volume,
             source=f"盘中机会(评分{ctx.get('score', 0):.0f})",
         )
         if result.success:
@@ -451,8 +452,7 @@ class IntradayScoutMixin:
         now_scan = self._scan_count
         # 清理板块冷却（30轮 = ~7.5分钟）
         stale_sectors = [
-            s for s, scan in self._scout_recent_sectors.items()
-            if now_scan - scan > 30
+            s for s, scan in self._scout_recent_sectors.items() if now_scan - scan > 30
         ]
         for s in stale_sectors:
             del self._scout_recent_sectors[s]

@@ -690,7 +690,9 @@ class MarketStateMixin:
                 # dead_cat 前置条件：日内必须有显著下跌（从高点跌幅 > 0.5%）
                 # 无大跌则无所谓"死猫跳"
                 drop_from_hi = (hi - mid_low) / hi if hi > 0 else 0
-                if pos_in_range <= 0.5 and drop_from_hi > 0.005:  # 未过50%分位 + 确实大跌过
+                if (
+                    pos_in_range <= 0.5 and drop_from_hi > 0.005
+                ):  # 未过50%分位 + 确实大跌过
                     return "dead_cat"
 
         # ━━ 单边下跌 ━━
