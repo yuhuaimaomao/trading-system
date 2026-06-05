@@ -165,6 +165,93 @@ class StockReader:
 
         return strong_stocks
 
+    # ── 盯盘专用查询（被 trade/monitor/ 调用）────────────────────
+
+    @staticmethod
+    def get_daily_indicators(conn, code: str) -> dict | None:
+        """查询个股最新日线技术指标（stock_indicators 表）。"""
+        row = conn.execute(
+            """SELECT ma5, ma10, ma20, ma60, ma120,
+                      bb_upper, bb_mid, bb_lower, bb_pct_b, bb_width,
+                      macd_dif, macd_dea, macd_bar,
+                      kdj_k, kdj_d, kdj_j,
+                      rsi6, rsi12, rsi24,
+                      bbi_daily, bbi_weekly
+               FROM stock_indicators WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "ma5": row[0], "ma10": row[1], "ma20": row[2],
+            "ma60": row[3], "ma120": row[4],
+            "bb_upper": row[5], "bb_mid": row[6], "bb_lower": row[7],
+            "bb_pct_b": row[8], "bb_width": row[9],
+            "macd_dif": row[10], "macd_dea": row[11], "macd_bar": row[12],
+            "kdj_k": row[13], "kdj_d": row[14], "kdj_j": row[15],
+            "rsi6": row[16], "rsi12": row[17], "rsi24": row[18],
+            "bbi_daily": row[19], "bbi_weekly": row[20],
+        }
+
+    @staticmethod
+    def get_money_flow(conn, code: str) -> dict | None:
+        """查询个股最新主力资金流向（stock_basic 表）。"""
+        row = conn.execute(
+            """SELECT main_force_net, main_force_ratio,
+                      super_large_net, large_net,
+                      ma5_angle, pe_dynamic, circ_market_cap
+               FROM stock_basic WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "main_force_net": row[0] or 0, "main_force_ratio": row[1] or 0,
+            "super_large_net": row[2] or 0, "large_net": row[3] or 0,
+            "ma5_angle": row[4] or 0, "pe_dynamic": row[5] or 0,
+            "circ_market_cap": row[6] or 0,
+        }
+
+    @staticmethod
+    def get_support_resistance(conn, code: str, price: float) -> dict:
+        """查询个股最近支撑/阻力位。
+
+        Returns:
+            {"supports": [(price, label), ...], "resistances": [(price, label), ...]}
+            按距离排序（支撑从高到低，阻力从低到高）。
+        """
+        row = conn.execute(
+            """SELECT bb_upper, bb_mid, bb_lower, ma20, ma60, bbi_daily
+               FROM stock_indicators WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+
+        supports = []
+        resistances = []
+        if row:
+            bb_upper, bb_mid, bb_lower, ma20, ma60, bbi = row
+            # 阻力：当前价上方
+            for label, val in [
+                ("布林上轨", bb_upper), ("布林中轨", bb_mid),
+                ("MA20", ma20), ("MA60", ma60), ("BBI", bbi),
+            ]:
+                if val and val > price * 1.005:
+                    resistances.append((val, label))
+            # 支撑：当前价下方
+            for label, val in [
+                ("布林下轨", bb_lower), ("布林中轨", bb_mid),
+                ("MA20", ma20), ("MA60", ma60), ("BBI", bbi),
+            ]:
+                if val and val < price * 0.995:
+                    supports.append((val, label))
+
+        supports.sort(key=lambda x: x[0], reverse=True)
+        resistances.sort(key=lambda x: x[0])
+        return {"supports": supports, "resistances": resistances}
+
     @staticmethod
     def get_trend_stocks(conn, trade_date: str) -> dict:
         """
