@@ -1391,68 +1391,32 @@ class PositionRiskMixin:
         return True
 
     def _find_resistance_ceiling(self, code: str, price: float) -> float | None:
-        """找当前价上方最近的技术阻力位."""
-        candidates = []
+        """委托至 StockReader.get_support_resistance。"""
+        import sqlite3
+        from data.readers.stock_reader import StockReader
+
         try:
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_upper, bb_mid, ma20, ma60, bbi_daily
-                   FROM stock_indicators WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            sr = StockReader.get_support_resistance(conn, code, price)
             conn.close()
-
-            if row:
-                bb_upper, bb_mid, ma20, ma60, bbi = row
-                for label, val in [
-                    ("布林上轨", bb_upper),
-                    ("布林中轨", bb_mid),
-                    ("MA20", ma20),
-                    ("MA60", ma60),
-                    ("BBI", bbi),
-                ]:
-                    if val and val > price * 1.005:  # 至少高于现价 0.5%
-                        candidates.append((val, label))
+            resistances = sr.get("resistances", [])
+            return resistances[0][0] if resistances else None
         except Exception:
-            pass
-
-        if candidates:
-            candidates.sort(key=lambda x: x[0])
-            return candidates[0][0]  # 最近的阻力位
-        return None
+            return None
 
     def _find_support_floor(self, code: str, price: float) -> float | None:
-        """找当前价下方最近的技术支撑位."""
-        candidates = []
+        """委托至 StockReader.get_support_resistance。"""
+        import sqlite3
+        from data.readers.stock_reader import StockReader
+
         try:
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_lower, bb_mid, ma20, ma60, bbi_daily
-                   FROM stock_indicators WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            sr = StockReader.get_support_resistance(conn, code, price)
             conn.close()
-
-            if row:
-                bb_lower, bb_mid, ma20, ma60, bbi = row
-                for label, val in [
-                    ("布林下轨", bb_lower),
-                    ("布林中轨", bb_mid),
-                    ("MA20", ma20),
-                    ("MA60", ma60),
-                    ("BBI", bbi),
-                ]:
-                    if val and val < price * 0.995:  # 至少低于现价 0.5%
-                        candidates.append((val, label))
+            supports = sr.get("supports", [])
+            return supports[0][0] if supports else None
         except Exception:
-            pass
-
-        if candidates:
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            return candidates[0][0]  # 最近的支撑位
-        return None
+            return None
 
     def _classify_holding_status(
         self,
