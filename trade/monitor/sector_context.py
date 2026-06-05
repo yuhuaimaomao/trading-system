@@ -628,135 +628,18 @@ class SectorContextMixin:
         return "\n".join(lines)
 
     def _get_concept_trend_score(self, code: str) -> tuple[int, str]:
-        """返回股票所属概念板块的趋势评分。正=概念偏强，负=概念偏弱。
-        返回 (score, reason) — score 范围约 -3~+3。
-        """
+        from trade.detect.sector_trend import get_concept_trend_score
         self._ensure_concept_cache()
-        concepts = self._concept_cache.get(code, [])
-        if not concepts:
-            return 0, ""
-
-        score = 0
-        weak_count = 0
-        strong_count = 0
-        for c in concepts[:5]:  # 只看前5个概念
-            cs = self._concept_stats.get(c, {})
-            if not cs:
-                continue
-            chg = cs.get("change_pct", 0)
-            if chg < -1.0:
-                weak_count += 1
-                score -= 1
-            elif chg > 1.0:
-                strong_count += 1
-                score += 1
-
-        reason = ""
-        if weak_count >= 3:
-            reason = f" {weak_count}个概念板块偏弱"
-        elif strong_count >= 3:
-            reason = f" {strong_count}个概念板块偏强"
-
-        # 限制范围
-        return max(-3, min(3, score)), reason
+        return get_concept_trend_score(code, self._concept_cache, self._concept_stats)
 
     def _get_sector_trend(self, code: str) -> str:
-        """返回股票所在板块的日内趋势描述 — 含行业、概念、连续性、量能、相对强度。"""
+        from trade.detect.sector_trend import get_sector_trend
         self._ensure_industry_cache()
         self._ensure_concept_cache()
-        industry = self._industry_cache.get(code, "")
-        if not industry:
-            return ""
-
-        stats = self._sector_stats.get(industry)
-        if not stats:
-            return "数据不足"
-
-        history = stats.get("trend_history", [])
-        if len(history) < 2:
-            return "数据积累中"
-
-        # 1. 趋势方向 + 强度
-        first, last = history[0], history[-1]
-        cumulative = last - first
-        n = len(history)
-
-        # 线性回归斜率
-        x_mean = (n - 1) / 2
-        y_mean = sum(history) / n
-        num = sum((i - x_mean) * (history[i] - y_mean) for i in range(n))
-        den = sum((i - x_mean) ** 2 for i in range(n))
-        slope = num / den if den > 0 else 0
-
-        # 方向判断
-        if slope > 0.003 and n >= 5:
-            direction = "持续走强" if cumulative > 0.3 else "走强"
-        elif slope < -0.003 and n >= 5:
-            direction = "持续走弱" if cumulative < -0.3 else "走弱"
-        elif abs(cumulative) < 0.3:
-            direction = "横盘"
-        elif cumulative > 0:
-            direction = "走强"
-        else:
-            direction = "走弱"
-
-        # 2. 加速度
-        is_weak = "走弱" in direction
-        is_strong = "走强" in direction
-        accel = ""
-        if n >= 4:
-            half = n // 2
-            recent_slope = sum(
-                (i - (half - 1) / 2)
-                * (history[n - half + i] - sum(history[-half:]) / half)
-                for i in range(half)
-            ) / max(sum((i - (half - 1) / 2) ** 2 for i in range(half)), 0.01)
-            if (
-                is_strong
-                and recent_slope > slope * 1.5
-                or is_weak
-                and recent_slope < slope * 1.5
-            ):
-                accel = "加速"
-            elif (
-                is_strong
-                and recent_slope < slope * 0.3
-                or is_weak
-                and recent_slope > slope * 0.3
-            ):
-                accel = "趋缓"
-
-        # 3. 相对强度
-        rel = stats.get("relative", 0)
-        rel_str = ""
-        if rel > 0.5:
-            rel_str = "强于大盘"
-        elif rel < -0.5:
-            rel_str = "弱于大盘"
-
-        # 4. 板块广度
-        breadth = stats.get("breadth", 0)
-        breadth_str = ""
-        if breadth > 0.4:
-            breadth_str = "普涨"
-        elif breadth < -0.4:
-            breadth_str = "普跌"
-
-        # 5. 量能
-        vol_ratio = stats.get("vol_ratio", 1.0)
-        vol_str = ""
-        if vol_ratio > 1.5:
-            vol_str = "放量"
-        elif vol_ratio < 0.5:
-            vol_str = "缩量"
-
-        # 拼接行业
-        parts = [industry, direction]
-        if accel:
-            parts.append(accel)
-        parts.append(f"{cumulative:+.1f}%")
-        if vol_str:
-            parts.append(vol_str)
+        return get_sector_trend(
+            code, self._industry_cache, self._sector_stats,
+            self._concept_cache, self._concept_stats,
+        )
         if rel_str:
             parts.append(rel_str)
         if breadth_str:

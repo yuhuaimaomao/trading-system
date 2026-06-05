@@ -566,67 +566,19 @@ class BuyDecisionMixin:
         return evaluate_buy(ctx)
 
     def _get_sector_change(self, code: str) -> float | None:
-        """返回股票所属行业的平均涨跌幅，数据不足返回 None。"""
-        try:
-            industry = getattr(self, "_industry_cache", {}).get(code, "")
-            if not industry:
-                return None
-            stats = getattr(self, "_sector_stats", {}).get(industry)
-            if not stats:
-                return None
-            return stats.get("change_pct")
-        except Exception:
-            return None
+        from trade.detect.sector_trend import get_sector_change
+        return get_sector_change(code, getattr(self, "_industry_cache", {}),
+                                 getattr(self, "_sector_stats", {}))
 
     def _get_sector_decline(self, code: str) -> float | None:
-        """返回板块从近期高点回落的幅度（正数=回落多少），数据不足返回 None。
-
-        用 trend_history 最近 5 个采样点，对比当前值与区间高点。
-        """
-        try:
-            industry = getattr(self, "_industry_cache", {}).get(code, "")
-            if not industry:
-                return None
-            stats = getattr(self, "_sector_stats", {}).get(industry)
-            if not stats:
-                return None
-            history = stats.get("trend_history", [])
-            if len(history) < 3:
-                return None
-            recent = history[-5:]  # 最近 5 个采样点
-            peak = max(recent)
-            current = recent[-1]
-            decline = peak - current
-            return round(decline, 2) if decline > 0 else None
-        except Exception:
-            return None
+        from trade.detect.sector_trend import get_sector_decline
+        return get_sector_decline(code, getattr(self, "_industry_cache", {}),
+                                  getattr(self, "_sector_stats", {}))
 
     def _get_sector_recovery_risk(self, code: str) -> float | None:
-        """检测板块是否从日内深跌中反弹（死猫跳风险）。
-
-        用完整 trend_history，如果板块从日内最低点反弹超过阈值，
-        说明当前强势可能是假象。返回反弹幅度（正数=反弹多少），None=安全。
-        """
-        try:
-            industry = getattr(self, "_industry_cache", {}).get(code, "")
-            if not industry:
-                return None
-            stats = getattr(self, "_sector_stats", {}).get(industry)
-            if not stats:
-                return None
-            history = stats.get("trend_history", [])
-            if len(history) < 6:
-                return None
-            # 用所有历史数据，找日内最低点
-            intra_low = min(history)
-            current = history[-1]
-            recovery = current - intra_low  # 反弹幅度
-            # 反弹超过 2% 说明板块日内波动剧烈，当前强势不可靠
-            if recovery > 2.0:
-                return round(recovery, 2)
-            return None
-        except Exception:
-            return None
+        from trade.detect.sector_trend import get_sector_recovery_risk
+        return get_sector_recovery_risk(code, getattr(self, "_industry_cache", {}),
+                                        getattr(self, "_sector_stats", {}))
 
     def _get_recent_price_action(self, code: str) -> tuple[str, str]:
         """分析最近10分钟价格走势。返回 (action, description)。
