@@ -171,6 +171,7 @@ class PositionRiskMixin:
                 if triggered:
                     key = f"{code}:sl"
                     loss_pct = -pnl_pct  # pnl_pct = (price-cost)/cost，正值=盈利
+                    extra = ""  # 止损附言，深跌分支会覆盖
 
                     # ━━ 深跌判断：亏损超 7%，不立即止损，等反弹机会 ━━
                     # 状态机：深跌 → 等反弹 → 检测反弹失败 → 止损

@@ -79,11 +79,23 @@ class _TestWatcher(PositionRiskMixin):
         self._alerts = []
         self._stop_signals = []
         self.qmt = None
+        self._scan_count = 0
+        self._recently_sold = {}
+        self._industry_cache = {}
+
+    def _minutes_since_open(self):
+        return 999  # 跳过开盘缓冲期
 
     def _get_sector_trend(self, code):
         return "横盘"
 
     def _is_limit_down(self, code, price):
+        return False
+
+    def _invalidate_watch_codes_cache(self):
+        pass
+
+    def _deep_rebound_improving(self, code, deep_state):
         return False
 
     def _alert(self, msg):
