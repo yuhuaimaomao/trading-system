@@ -2021,11 +2021,14 @@ class MarketStateMixin:
 
         # —— 传统阈值补充（MA20+跌幅） ——
         if index_price < ma20 and change_pct < INDEX_DANGER_PCT:
-            self._alert(
-                f"⚠️ 大盘偏弱\n"
-                f"   上证: {index_price:.2f}  跌破 MA20: {ma20:.2f}  跌幅: {change_pct:.1%}\n"
-                f"   → 暂停买入"
-            )
+            last_alert = self._index_alerted_ma20
+            if self._scan_count - last_alert >= 30:
+                self._index_alerted_ma20 = self._scan_count
+                self._alert(
+                    f"⚠️ 大盘偏弱\n"
+                    f"   上证: {index_price:.2f}  跌破 MA20: {ma20:.2f}  跌幅: {change_pct:.1%}\n"
+                    f"   → 暂停买入"
+                )
             regime.allow_buy = False
             regime.position_mult = 0.0
             regime.entry_rule = "none"

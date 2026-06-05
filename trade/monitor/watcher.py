@@ -27,6 +27,7 @@ from trade.monitor.closing import ClosingDecisionMixin
 from trade.monitor.market_state import MarketRegime, MarketStateMixin
 from trade.monitor.position_risk import PositionRiskMixin
 from trade.monitor.sector_context import SectorContextMixin
+from trade.monitor.intraday_scout import IntradayScoutMixin
 from trade.monitor.sector_resonance import (
     INDEX_VOLATILITY_THRESHOLD,
     SectorResonanceAnalyzer,
@@ -63,6 +64,7 @@ class Watcher(
     PositionRiskMixin,
     SectorContextMixin,
     AbnormalMonitorMixin,
+    IntradayScoutMixin,
     ClosingDecisionMixin,
     CloseSummaryMixin,
 ):
@@ -89,6 +91,7 @@ class Watcher(
         self._scan_count = 0
         self._triggered_ids: set[int] = set()
         self._alerted_sl_tp: set[str] = set()  # "code:type" 防重复推送
+        self._alert_fingerprints: dict[str, int] = {}  # 消息指纹→上次推送scan_count
 
         # 子监控器（懒加载）
         self._review_monitor = None
@@ -108,6 +111,7 @@ class Watcher(
         self._index_close_high: float = 0.0  # 收盘价序列最大值（健康检查用）
         self._index_close_low: float = 0.0  # 收盘价序列最小值（健康检查用）
         self._index_alerted_downtrend: bool = False
+        self._index_alerted_ma20: int = 0  # 大盘偏弱告警去重（scan_count）
         self._index_last_fluctuation_price: float = 0.0  # 上次波动预警时的价格
 
         # 大盘量能追踪（量价背离检测）
@@ -222,6 +226,11 @@ class Watcher(
         self._pending_index_ai: dict = {}
         # 早盘 AI 板块倾向：{sector_name: {bias, priority, size_mult, stock_codes, reason}}
         self._morning_sector_bias: dict[str, dict] = {}
+
+        # 推送冷却：{code: (scan_count, price)} 抑制重复推送
+        self._push_cooldown: dict[str, tuple[int, float]] = {}
+        # 健康检查告警指纹：{fingerprint: last_scan_count} 抑制重复告警
+        self._health_alert_seen: dict[str, int] = {}
 
     def _init_private_telegram(self):
         try:
@@ -342,6 +351,8 @@ class Watcher(
         self._sl_reminders.clear()
         self._alerted_sl_tp.clear()
         self._index_alerted_downtrend = False
+        self._index_alerted_ma20 = 0
+        self._alert_fingerprints.clear()
         self._max_drawdown_alerted = False
         self._closing_decision_done = False
 
@@ -585,6 +596,13 @@ class Watcher(
         except Exception as e:
             logger.warning(f"主动退出检查异常: {e}", exc_info=True)
 
+        # 引擎2：盘中机会发现（每 SCOUT_INTERVAL 轮触发）
+        if self._scan_count % IntradayScoutMixin.SCOUT_INTERVAL == 0:
+            try:
+                self._scout_intraday()
+            except Exception as e:
+                logger.warning(f"盘中机会扫描异常: {e}", exc_info=True)
+
         try:
             self._check_signals(prices, self._regime)
         except Exception as e:
@@ -594,6 +612,10 @@ class Watcher(
             self._check_bought_signals(prices)
         except Exception as e:
             logger.warning(f"已买入信号检查异常: {e}", exc_info=True)
+
+        # 引擎2 定期清理过期状态
+        if self._scan_count % 30 == 0:
+            self._scout_cleanup_stale()
 
         try:
             self._check_review_picks(prices, self._regime)
@@ -871,9 +893,18 @@ class Watcher(
             alerts.append("⚠️ 指数停更: 近 15 轮上证波动 < 0.01")
 
         if alerts:
-            msg = "🩺 健康检查\n" + "\n".join(f"  {a}" for a in alerts)
-            logger.warning(msg)
-            self._alert_private(msg)
+            # 去重：同一告警指纹至少隔 10 轮再推
+            new_alerts = []
+            for a in alerts:
+                fp = a[:40]  # 取前 40 字符做指纹（code+类型足够唯一）
+                last_seen = self._health_alert_seen.get(fp, -999)
+                if self._scan_count - last_seen >= 10:
+                    new_alerts.append(a)
+                    self._health_alert_seen[fp] = self._scan_count
+            if new_alerts:
+                msg = "🩺 健康检查\n" + "\n".join(f"  {a}" for a in new_alerts)
+                logger.warning(msg)
+                self._alert_private(msg)
 
     def _restore_pos_meta(self):
         """从 trade_signals 恢复 _pos_meta（止损止盈板块等决策数据）。
@@ -1504,6 +1535,27 @@ class Watcher(
 
     # ======================== AI 辅助 ========================
 
+    def _submit_scenario_ai(
+        self, key: str, scenario: str, **fields
+    ) -> bool:
+        """使用场景模板提交 AI 异步评估。返回 True 表示已入队。"""
+        from trade.monitor.prompts import build_prompt, get_template
+
+        try:
+            system_prompt, user_prompt, max_tokens = build_prompt(scenario, **fields)
+        except (KeyError, ValueError) as e:
+            logger.warning(f"场景AI模板构建失败 [{scenario}] {key}: {e}")
+            return False
+
+        tmpl = get_template(scenario)
+        dedupe = tmpl.dedupe if tmpl else True
+        return self._ai_queue.submit(
+            key, user_prompt,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            dedupe=dedupe,
+        )
+
     def _ai_chase_opinion(
         self,
         code,
@@ -1564,7 +1616,8 @@ class Watcher(
 
     def _process_pending_ai(self):
         """处理已完成的异步 AI 结果，发送延迟提醒。"""
-        # 1. 追高/二判 AI
+        # 1. 追高/二判 AI — 收集后按板块合并推送
+        chase_items = []  # 本轮收集的所有追高/二判结果
         for akey in list(self._pending_chase.keys()):
             result = self._ai_queue.pop_result(akey)
             if result is None:
@@ -1594,21 +1647,70 @@ class Watcher(
                 alert_dict[ctx["chase_key"]] = self._scan_count
 
             above_pct = ctx["above_pct"]
-            emoji = "📈" if above_pct > 0 else "⏸️"
             title = "追高提醒" if above_pct > 0 else "暂不买入"
-            msg = (
-                f"{emoji} {title} — {code} {name}\n"
-                f"   现价 {ctx['price']:.2f}  买入区 {ctx['buy_min']:.2f}~{ctx['buy_max']:.2f}"
-                f"  超出 {above_pct:+.1f}%\n"
-                f"   止损 {ctx['sl']:.2f}  止盈 {ctx['tp']:.2f}\n"
-                f"   板块: {ctx['trend']}"
-            )
-            if ctx["intra_str"]:
-                msg += ctx["intra_str"]
-            if ctx["reject_reason"]:
-                msg += f"\n   ⛔ {ctx['reject_reason']}"
-            msg += f"\n   ─────────────────────────\n   🤖 {result}"
-            self._alert(msg)
+
+            # 冷却检查：同票 15 轮内且价格变化 < 2% → 跳过
+            if self._should_throttle(code, ctx["price"]):
+                continue
+
+            # 提取板块行业名
+            industry = self._industry_cache.get(code, "")
+
+            chase_items.append({
+                "code": code,
+                "name": name,
+                "price": ctx["price"],
+                "buy_min": ctx["buy_min"],
+                "buy_max": ctx["buy_max"],
+                "sl": ctx["sl"],
+                "tp": ctx["tp"],
+                "trend": ctx["trend"],
+                "above_pct": above_pct,
+                "reject_reason": ctx["reject_reason"],
+                "intra_str": ctx["intra_str"],
+                "result": result,
+                "title": title,
+                "industry": industry,
+            })
+
+        # ── 合并推送：同板块 ≥3 只追高提醒 → 合并为一条 ──
+        if chase_items:
+            # 分组：按 (title, industry)
+            groups: dict[tuple, list[dict]] = {}
+            for item in chase_items:
+                key = (item["title"], item["industry"]) if item["industry"] else (item["title"], item["code"])
+                groups.setdefault(key, []).append(item)
+
+            for (title, sector), items in groups.items():
+                if len(items) >= 3 and title == "追高提醒":
+                    # 合并推送
+                    emoji = "📈"
+                    lines = [f"{emoji} {title} — {sector}板块 {len(items)}只"]
+                    for it in items[:8]:  # 最多展示8只
+                        lines.append(
+                            f"   {it['code']} {it['name']}  {it['price']:.2f}  超出{it['above_pct']:+.1f}%"
+                        )
+                    # 取第一只的 AI 分析作为板块级建议
+                    ai_text = items[0]["result"]
+                    lines.append(f"   ─────────────────────────\n   🤖 {ai_text}")
+                    self._alert("\n".join(lines))
+                else:
+                    # 单只推送
+                    for it in items:
+                        emoji = "📈" if it["above_pct"] > 0 else "⏸️"
+                        msg = (
+                            f"{emoji} {it['title']} — {it['code']} {it['name']}\n"
+                            f"   现价 {it['price']:.2f}  买入区 {it['buy_min']:.2f}~{it['buy_max']:.2f}"
+                            f"  超出 {it['above_pct']:+.1f}%\n"
+                            f"   止损 {it['sl']:.2f}  止盈 {it['tp']:.2f}\n"
+                            f"   板块: {it['trend']}"
+                        )
+                        if it["intra_str"]:
+                            msg += it["intra_str"]
+                        if it["reject_reason"]:
+                            msg += f"\n   ⛔ {it['reject_reason']}"
+                        msg += f"\n   ─────────────────────────\n   🤖 {it['result']}"
+                        self._alert(msg)
 
         # 2. 指数波动 AI
         index_result = self._ai_queue.pop_result("index_fluctuation")
@@ -1623,6 +1725,10 @@ class Watcher(
         swap_result = self._ai_queue.pop_result("swap_eval")
         if swap_result is not None:
             self._handle_swap_ai_result(swap_result)
+
+        # 4. 被套离场 AI — 每 10 轮检查一次异步结果
+        if self._scan_count % 10 == 0:
+            self._process_trapped_ai_results()
 
     def _handle_swap_ai_result(self, ai_text: str):
         """处理异步换仓 AI 结果，解析并执行换仓。"""
@@ -1870,13 +1976,72 @@ class Watcher(
 
     # ======================== 推送 ========================
 
+    def _should_throttle(self, code: str, price: float, cooldown_scans: int = 15) -> bool:
+        """推送冷却：同票同价区间内抑制重复推送。返回 True 表示应跳过。"""
+        if code in self._push_cooldown:
+            last_scan, last_price = self._push_cooldown[code]
+            price_chg = abs(price - last_price) / last_price if last_price > 0 else 999
+            if self._scan_count - last_scan < cooldown_scans and price_chg < 0.02:
+                return True
+        self._push_cooldown[code] = (self._scan_count, price)
+        return False
+
     def _alert(self, msg: str):
+        # ── 消息去重：同指纹 N 轮内不重复推送 ──
+        fp = self._alert_fingerprint(msg)
+        if fp:
+            last = self._alert_fingerprints.get(fp, -999)
+            cooldown = self._alert_cooldown(msg)
+            if self._scan_count - last < cooldown:
+                return  # 冷却中，跳过
+            self._alert_fingerprints[fp] = self._scan_count
+            # 定期清理过期指纹（每100轮）
+            if self._scan_count % 100 == 0:
+                stale = [
+                    k for k, v in self._alert_fingerprints.items()
+                    if self._scan_count - v > 200
+                ]
+                for k in stale:
+                    del self._alert_fingerprints[k]
+
         if self.telegram:
             try:
                 self.telegram.send(msg)
             except Exception as e:
                 logger.error(f"Telegram推送失败: {e}")
         logger.info(f"📤 Telegram: {msg}")
+
+    def _alert_fingerprint(self, msg: str) -> str:
+        """提取消息指纹：首行类型 + 股票代码（如有）"""
+        import re
+        first_line = msg.split("\n")[0] if msg else ""
+        # 提取股票代码（6位数字）
+        m = re.search(r"\b(\d{6})\b", first_line)
+        if m:
+            # 股票相关消息：类型+代码去重（不同股票不互斥）
+            prefix = re.sub(r"\d{6}", "XXXXXX", first_line)
+            return f"{prefix}:{m.group(1)}"
+        # 大盘/板块消息：首行前40字符作为指纹
+        return first_line[:40]
+
+    def _alert_cooldown(self, msg: str) -> int:
+        """不同类型消息的冷却轮数（~15s/轮）"""
+        first_line = msg.split("\n")[0] if msg else ""
+        if "大盘偏弱" in first_line:
+            return 30  # 7.5分钟
+        if "暂停买入" in first_line:
+            return 20  # 5分钟
+        if "追高提醒" in first_line:
+            return 15  # 同只股票3.75分钟内不重复
+        if "暂不买入" in first_line or "暂缓买入" in first_line:
+            return 10
+        if "逼近涨停" in first_line:
+            return 12  # 3分钟
+        if "板块热度" in first_line or "板块急" in first_line:
+            return 20  # 5分钟
+        if "止损未触发" in first_line:
+            return 40  # 10分钟（健康检查已有自己的去重）
+        return 3  # 默认45秒
 
     def _alert_private(self, msg: str):
         """推送消息到私聊（实盘交易信息）"""

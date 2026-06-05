@@ -1428,6 +1428,10 @@ class BuyDecisionMixin:
                     f"价格{price:.2f} 区间{buy_min:.2f}~{buy_max:.2f} 板块{trend}"
                 )
 
+                # 距买入区 > 3% → 太远没意义，不推送
+                if above_pct > 3:
+                    continue
+
                 # 情景引擎：市场预测回调 + 距买入区 < 3% → 提前预告准备入场
                 # 但如果预判是死猫跳/恐慌，回调不可靠，不提示买入
                 if above_pct <= 3.0:
@@ -1442,7 +1446,7 @@ class BuyDecisionMixin:
                     ):
                         approach_key = f"approach:{c['alert_key']}"
                         last_scan = alert_state.get(approach_key, 0)
-                        if self._scan_count - last_scan >= 15:
+                        if self._scan_count - last_scan >= 15 and not self._should_throttle(code, price):
                             alert_state[approach_key] = self._scan_count
                             self._alert(
                                 f"🔔 {tag}买入区接近 — {code} {name}\n"

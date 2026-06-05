@@ -172,45 +172,115 @@ class PositionRiskMixin:
                     key = f"{code}:sl"
                     loss_pct = -pnl_pct  # pnl_pct = (price-cost)/cost，正值=盈利
 
-                    # ━━ 深跌判断：亏损超 7%，不立即止损，等下午反弹机会 ━━
+                    # ━━ 深跌判断：亏损超 7%，不立即止损，等反弹机会 ━━
+                    # 状态机：深跌 → 等反弹 → 检测反弹失败 → 止损
                     if loss_pct > 7 and not is_today_buy:
                         deep_state = meta.get("_deep_loss", {})
-                        now_ts = time.time()
                         hour = datetime.now().hour
                         minute = datetime.now().minute
                         afternoon = hour >= 14 or (hour == 13 and minute >= 30)
 
-                        if not afternoon:
-                            # 上午/午休：不卖，等下午
-                            if not deep_state:
-                                deep_state = {
-                                    "entry_price": price,
-                                    "lowest": price,
-                                    "start_scan": self._scan_count,
-                                }
-                                meta["_deep_loss"] = deep_state
+                        if not deep_state:
+                            deep_state = {
+                                "entry_price": price,
+                                "lowest": price,
+                                "start_scan": self._scan_count,
+                                "rebound_high": 0,
+                                "rebound_scan": 0,
+                                "failed": False,
+                                "sector_at_entry": trend,
+                                "last_ai_scan": -100,  # 首次触发时立即调AI
+                            }
+                            meta["_deep_loss"] = deep_state
+                            logger.info(
+                                f"深跌等待 [{code}] 亏损{loss_pct:.1f}%>7% "
+                                f"现价{price:.2f} 等待反弹机会"
+                            )
+                            self._alert(
+                                f"🔄 深跌等待反弹 — {code} {pos.stock_name}\n"
+                                f"   现价: {price:.2f}  亏损: {-loss_pct:+.1f}%\n"
+                                f"   止损触发但跌幅已深，等待反弹评估\n"
+                                f"   板块:{trend}"
+                            )
+                            # 异步 AI：被套离场分析
+                            self._submit_trapped_exit_ai(
+                                code, pos.stock_name, price, pos.avg_cost,
+                                sl, tp, trend, deep_state,
+                            )
+
+                        # 更新最低价
+                        if price < deep_state.get("lowest", price):
+                            deep_state["lowest"] = price
+
+                        lowest = deep_state.get("lowest", price)
+                        rebound = (
+                            (price - lowest) / lowest * 100 if lowest > 0 else 0
+                        )
+                        rebound_high = deep_state.get("rebound_high", 0)
+
+                        # ── 更新反弹高点（从最低反弹 ≥3%）──
+                        if rebound >= 3 and price > rebound_high:
+                            is_new_high = rebound_high == 0
+                            deep_state["rebound_high"] = price
+                            deep_state["rebound_scan"] = self._scan_count
+                            if is_new_high:
                                 logger.info(
-                                    f"深跌等待 [{code}] 亏损{loss_pct:.1f}%>7% "
-                                    f"现价{price:.2f} 等14:00反弹机会"
+                                    f"深跌反弹 [{code}] 最低{lowest:.2f}→现价{price:.2f} "
+                                    f"(+{rebound:.1f}%) 开始监控反弹失败"
                                 )
-                                self._alert(
-                                    f"🔄 深跌等待反弹 — {code} {pos.stock_name}\n"
-                                    f"   现价: {price:.2f}  亏损: {-loss_pct:+.1f}%\n"
-                                    f"   止损触发但跌幅已深，等14:00评估反弹\n"
-                                    f"   板块:{trend}"
+                            # 反弹新高 → 异步 AI 重新评估离场时机
+                            if (
+                                self._scan_count
+                                - deep_state.get("last_ai_scan", -100)
+                                >= 20
+                            ):
+                                deep_state["last_ai_scan"] = self._scan_count
+                                self._submit_trapped_exit_ai(
+                                    code, pos.stock_name, price, pos.avg_cost,
+                                    sl, tp, trend, deep_state,
                                 )
-                            elif price < deep_state.get("lowest", price):
-                                deep_state["lowest"] = price
+
+                        # ── 反弹失败检测（代码级，不等 AI 不等 14:00）──
+                        fail_reason = None
+                        if rebound_high > 0:
+                            drop_from_high = (
+                                (rebound_high - price) / rebound_high * 100
+                            )
+                            # 条件1: 从反弹高点回落 ≥2%
+                            if drop_from_high >= 2:
+                                fail_reason = (
+                                    f"反弹高点{rebound_high:.2f}回落{drop_from_high:.1f}%"
+                                )
+                            # 条件2: 横盘 ≥30 轮 + 技术指标无改善
+                            elif (
+                                self._scan_count
+                                - deep_state.get("rebound_scan", 0)
+                                >= 30
+                            ):
+                                if not self._deep_rebound_improving(code, deep_state):
+                                    fail_reason = (
+                                        f"反弹后横盘"
+                                        f"{self._scan_count - deep_state['rebound_scan']}轮"
+                                        f" 指标无改善"
+                                    )
+                            # 条件3: 板块加速走弱 + 价格低于反弹高点
+                            elif is_sector_accel_down and price < rebound_high * 0.99:
+                                fail_reason = "板块加速走弱 反弹夭折"
+
+                        if fail_reason:
+                            deep_state["failed"] = True
+                            extra = f"反弹失败({fail_reason})"
+                            logger.info(
+                                f"深跌反弹失败 [{code}] {fail_reason} 立即止损 "
+                                f"现价{price:.2f} 亏损{loss_pct:.1f}%"
+                            )
+                            # 跳出深跌分支，走正常止损执行
+                        elif not afternoon:
+                            # 上午/午休：未检测到失败，继续等
                             continue
                         else:
                             # 14:00 后：根据反弹情况决定
-                            lowest = deep_state.get("lowest", price)
-                            rebound = (
-                                (price - lowest) / lowest * 100 if lowest > 0 else 0
-                            )
-
                             if rebound >= 3:
-                                # 已从最低反弹 3%+ → 继续等更好的卖点
                                 if (
                                     self._scan_count
                                     - deep_state.get("last_alert_scan", 0)
@@ -230,6 +300,10 @@ class PositionRiskMixin:
                                 extra = "深跌弱反弹，尾盘止损"
                             else:
                                 extra = "深跌无反弹，尾盘止损"
+
+                        # 没有 fail_reason → continue 已跳过了，到这里一定是失败或下午
+                        if not fail_reason:
+                            continue
                     # ━━ 正常止损 ━━
 
                     _extra = ""
@@ -1050,111 +1124,55 @@ class PositionRiskMixin:
                     "add_opportunity": "补仓机会",
                 }
 
-                day_label = "今日买入" if is_today_buy else f"成本: {entry_price:.2f}"
-                status_label = status_labels.get(new_status, new_status)
-                line = (
-                    f"{emoji.get(new_status, '👀')} {code} {name}  现价: {price:.2f}  {day_label}  盈亏: {pnl_pct:+.1f}%\n"
-                    f"   止损: {sl:.2f}  止盈: {tp:.2f}\n"
-                    f"   板块:{trend}"
+                # 收集到批次列表，循环结束后合并推送
+                dist_to_sl = (price - sl) / price * 100 if sl > 0 and price > 0 else 0
+                batch = getattr(self, "_holding_batch", None)
+                if batch is None:
+                    self._holding_batch = []
+                    batch = self._holding_batch
+                batch.append(
+                    f"{emoji.get(new_status, '👀')} {code} {name} {price:.2f} {pnl_pct:+.1f}% "
+                    f"距止损{dist_to_sl:.1f}%"
                 )
-                # 日内技术指标 + 方向预判
-                intra = self._get_intraday_indicators(code)
-                if intra["available"]:
-                    macd_dir = (
-                        "多头"
-                        if intra["macd_direction"] == "bullish"
-                        else "空头"
-                        if intra["macd_direction"] == "bearish"
-                        else "震荡"
-                    )
-                    parts = [f"RSI6={intra['rsi6']:.0f} RSI12={intra['rsi12']:.0f}"]
-                    parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
-                    parts.append(
-                        f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}"
-                    )
-                    vs_ma5 = intra["price_vs_ma5"]
-                    if vs_ma5 != 0:
-                        side = "上" if vs_ma5 > 0 else "下"
-                        parts.append(f"价MA5{side}{abs(vs_ma5):.1f}%")
-                    line += f"\n   日内: {' | '.join(parts)}"
 
-                    # 短线方向预判
-                    j = intra["kdj_j"]
-                    r6 = intra["rsi6"]
-                    score = 0
-                    if intra["macd_direction"] == "bullish":
-                        score += 1
-                    elif intra["macd_direction"] == "bearish":
-                        score -= 1
-                    if r6 < 30:
-                        score += 1  # 超卖反弹预期
-                    elif r6 > 70:
-                        score -= 1
-                    if j < 20:
-                        score += 1
-                    elif j > 80:
-                        score -= 1
-                    if vs_ma5 > 0:
-                        score += 1
-                    elif vs_ma5 < 0:
-                        score -= 1
-                    bias = (
-                        "偏多 ↑"
-                        if score >= 3
-                        else "偏多"
-                        if score >= 1
-                        else "偏空 ↓"
-                        if score <= -3
-                        else "偏空"
-                        if score <= -1
-                        else "震荡"
+                # 状态变更 → 即时推送详细信息
+                if status_changed:
+                    day_label = "今日买入" if is_today_buy else f"成本: {entry_price:.2f}"
+                    detail = (
+                        f"{emoji.get(new_status, '👀')} 持仓状态变更 — {code} {name}\n"
+                        f"   {status_labels.get(new_status, new_status)}  现价: {price:.2f}  {day_label}"
+                        f"  盈亏: {pnl_pct:+.1f}%\n"
+                        f"   止损: {sl:.2f}  止盈: {tp:.2f}  板块:{trend}"
                     )
-                    line += f"\n   短线: {bias}"
-
-                if new_status == "deep_trapped":
-                    exit_ctx = self._analyze_exit_context(
-                        code, price, entry_price, trend
-                    )
-                    try:
-                        self._log_exit_analysis(
-                            stock_code=code,
-                            holding_status=new_status,
-                            market_env=pattern,
-                            sector_trend=trend,
+                    if new_status == "at_risk":
+                        detail += f"\n   ⚠️ 接近止损线，距触发仅 {dist_to_sl:.1f}%，做好离场准备"
+                    elif new_status in ("trapped", "deep_trapped"):
+                        exit_ctx = self._analyze_exit_context(
+                            code, price, entry_price, trend
                         )
-                    except Exception:
-                        pass
-                    line += f"\n   💀 深度套牢超10%\n   {exit_ctx}"
-                elif new_status == "trapped":
-                    exit_ctx = self._analyze_exit_context(
-                        code, price, entry_price, trend
-                    )
-                    try:
-                        self._log_exit_analysis(
-                            stock_code=code,
-                            holding_status=new_status,
-                            market_env=pattern,
-                            sector_trend=trend,
-                        )
-                    except Exception:
-                        pass
-                    line += f"\n   ⚠️ 被套5%~10%\n   {exit_ctx}"
-                elif new_status == "at_risk":
-                    dist_pct = (price - sl) / price * 100 if sl > 0 and price > 0 else 0
-                    line += f"\n   ⚠️ 接近止损线，距触发仅 {dist_pct:.1f}%，做好离场准备"
-                elif new_status == "add_opportunity":
-                    add_context = self._analyze_add_context(code, price, entry_price)
-                    if add_context:
-                        line += f"\n   💡 补仓机会: {add_context}"
+                        try:
+                            self._log_exit_analysis(
+                                stock_code=code,
+                                holding_status=new_status,
+                                market_env=pattern,
+                                sector_trend=trend,
+                            )
+                        except Exception:
+                            pass
+                        label = "深度套牢超10%" if new_status == "deep_trapped" else "被套5%~10%"
+                        detail += f"\n   {emoji.get(new_status)} {label}\n   {exit_ctx}"
+                    elif new_status == "add_opportunity":
+                        add_context = self._analyze_add_context(code, price, entry_price)
+                        if add_context:
+                            detail += f"\n   💡 补仓机会: {add_context}"
+                    self._alert(detail)
 
-                # 被套状态下附加目标价信息
-                if new_status in ("trapped", "deep_trapped") and watch.get(
-                    "exit_target"
-                ):
-                    dist_to_target = (watch["exit_target"] - price) / price * 100
-                    line += f"\n   🎯 减仓目标: {watch['exit_target']:.2f} ({watch.get('exit_target_label', '')})  距目标: {dist_to_target:.1f}%"
-
-                self._alert(line)
+        # 合并持仓摘要，每 20 轮推送一条（避免每票单独刷屏）
+        batch = getattr(self, "_holding_batch", None)
+        if batch:
+            self._holding_batch = []
+            msg = "📊 持仓汇总\n" + "\n".join(f"  {b}" for b in batch)
+            self._alert(msg)
 
     def _check_predictive_proximity(
         self,
@@ -1469,6 +1487,40 @@ class PositionRiskMixin:
 
         return "watching"
 
+    def _deep_rebound_improving(self, code: str, deep_state: dict) -> bool:
+        """深跌反弹后盘中走势是否有改善 — 纯盘中数据，不依赖日线指标。
+
+        检查维度：
+        1. 价格是否还在创新高（rebound_high 在最近 10 轮内更新过）
+        2. 板块趋势是否在好转
+        3. 大盘是否企稳（未持续新低）
+
+        任一改善即返回 True（继续等），全部恶化返回 False（触发止损）。
+        """
+        # 维度1: 反弹高点是否在最近 10 轮内更新过 — 价格还在走强
+        rebound_scan = deep_state.get("rebound_scan", 0)
+        if self._scan_count - rebound_scan < 10:
+            return True
+
+        # 维度2: 板块趋势好转 — 从弱转强或横盘
+        trend = self._get_sector_trend(code)
+        improving_keywords = ("持续走强", "强于大盘", "普涨", "反弹")
+        if any(kw in trend for kw in improving_keywords):
+            return True
+        # 板块从「加速走弱」变成「走弱」也算改善
+        if "走弱" in trend and "加速" not in trend:
+            deep_sector = deep_state.get("sector_at_entry", "")
+            if "加速" in deep_sector and "走弱" in deep_sector:
+                return True
+
+        # 维度3: 大盘未持续新低 — 最近 5 轮最低价没破位
+        if hasattr(self, "_index_prices") and len(self._index_prices) >= 5:
+            recent = self._index_prices[-5:]
+            if min(recent) >= min(self._index_prices[-15:-5]) if len(self._index_prices) >= 15 else min(recent):
+                return True  # 5轮低点 ≥ 前10轮低点 → 大盘企稳
+
+        return False
+
     def _check_add_opportunity(self, code: str) -> str:
         """检查是否有补仓机会：布林下轨反弹 + RSI 超卖回升."""
         try:
@@ -1663,6 +1715,74 @@ class PositionRiskMixin:
         if parts:
             return "\n   ".join(parts)
         return f"亏损{pnl_pct:+.1f}%，继续观察盘面"
+
+    def _submit_trapped_exit_ai(
+        self,
+        code: str, name: str, price: float, cost: float,
+        sl: float, tp: float, trend: str, deep_state: dict,
+    ):
+        """异步 AI 被套离场分析 — 结合个股+板块+大盘给出离场建议。"""
+        loss_pct = (cost - price) / cost * 100 if cost > 0 else 0
+        lowest = deep_state.get("lowest", price)
+        rebound_high = deep_state.get("rebound_high", 0) or price
+        rebound_pct = (
+            (price - lowest) / lowest * 100 if lowest > 0 else 0
+        )
+
+        # 找最近阻力位
+        target_price, target_label = self._calc_exit_target(
+            code, price, cost, trend
+        )
+        if target_price is None:
+            target_price = cost
+            target_label = "成本价"
+
+        # 大盘/板块环境
+        regime = getattr(self, "_regime", None)
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
+        market_env = pattern if pattern != "normal" else risk_level
+
+        try:
+            self._submit_scenario_ai(
+                key=f"trapped:{code}",
+                scenario="trapped_exit",
+                code=code,
+                name=name,
+                price=price,
+                cost=cost,
+                loss_pct=loss_pct,
+                sl=sl,
+                tp=tp,
+                lowest=lowest,
+                rebound_high=rebound_high,
+                rebound_pct=rebound_pct,
+                resistance_label=target_label,
+                resistance_price=target_price,
+                sector_trend=trend,
+                market_env=market_env,
+                risk_level=risk_level,
+            )
+        except Exception as e:
+            logger.warning(f"提交被套AI分析失败 [{code}]: {e}")
+
+    def _process_trapped_ai_results(self):
+        """处理被套离场 AI 异步结果（每 10 轮调用一次）。"""
+        for code in list(self.paper_account.positions.keys()):
+            akey = f"trapped:{code}"
+            result = getattr(self, "_ai_queue", None)
+            if result is None:
+                continue
+            text = result.pop_result(akey)
+            if text:
+                pos = self.paper_account.positions.get(code)
+                if pos:
+                    pnl = pos.pnl_pct or 0
+                    self._alert(
+                        f"🤖 被套AI分析 — {code} {pos.stock_name}\n"
+                        f"   现价: {pos.current_price:.2f}  盈亏: {pnl:+.1f}%\n"
+                        f"   {text}"
+                    )
 
     def _calc_exit_target(
         self, code: str, price: float, entry_price: float, trend: str = ""

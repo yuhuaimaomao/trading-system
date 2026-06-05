@@ -243,15 +243,33 @@ def _stop_below_entry_tp_above_entry(ctx: CheckContext) -> list[str]:
 
 
 def _stop_not_triggered(ctx: CheckContext) -> list[str]:
-    """现价已跌破止损但未触发 → 逻辑 bug"""
+    """现价已跌破止损但未触发 → 逻辑 bug。
+
+    排除深跌等待反弹场景：亏损 > 7% 且未到下午 14:00 时，
+    _check_positions 会通过 continue 跳过卖出执行等反弹机会，不是 bug。
+    """
+    from datetime import datetime
+
+    now = datetime.now()
+    afternoon = now.hour >= 14 or (now.hour == 13 and now.minute >= 30)
+
     alerts = []
     for code, pos in ctx.positions.items():
         meta = ctx.pos_meta.get(code, {})
         sl = meta.get("sl", 0)
         price = ctx.prices.get(code, pos.current_price)
         is_today = pos.entry_date == ctx.trade_date if ctx.trade_date else False
-        if sl > 0 and price > 0 and not is_today and price < sl:
-            alerts.append(f"🔴 止损未触发: {code} 现价{price:.2f} < 止损{sl:.2f}")
+        if not (sl > 0 and price > 0 and not is_today and price < sl):
+            continue
+
+        # 深跌等待反弹：亏损 > 7% 且非下午 且未标记失败 → 故意延迟，不报
+        if pos.avg_cost > 0:
+            loss_pct = (pos.avg_cost - price) / pos.avg_cost * 100
+            deep_state = meta.get("_deep_loss", {})
+            if loss_pct > 7 and not afternoon and not deep_state.get("failed"):
+                continue
+
+        alerts.append(f"🔴 止损未触发: {code} 现价{price:.2f} < 止损{sl:.2f}")
     return alerts
 
 
