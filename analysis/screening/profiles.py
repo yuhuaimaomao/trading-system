@@ -442,7 +442,7 @@ class ProfileBuilder:
         snapshot: dict,
     ) -> dict:
         """从 stock_indicators 表读取当前 + 5日前指标值；形态检测实时计算"""
-        from analysis.screening.indicators import (
+        from analysis.indicators import (
             calc_macd_series,
             detect_divergence,
             detect_macd_cross,

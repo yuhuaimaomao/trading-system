@@ -176,7 +176,7 @@ class BuyDecisionMixin:
             return result
 
         try:
-            from analysis.screening.indicators import (
+            from analysis.indicators import (
                 calc_kdj,
                 calc_macd,
                 calc_rsi,
@@ -323,7 +323,7 @@ class BuyDecisionMixin:
             # 5分钟K线 MACD（今日实时）
             if self.qmt:
                 try:
-                    from analysis.screening.indicators import calc_macd, calc_rsi
+                    from analysis.indicators import calc_macd, calc_rsi
 
                     raw_5m = self.qmt.get_kline(code, period="5m", count=50)
                     if raw_5m:

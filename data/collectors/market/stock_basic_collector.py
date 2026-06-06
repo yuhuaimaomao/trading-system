@@ -379,7 +379,7 @@ class StockBasicCollector(ProxyBaseCollector):
         self.logger.info("计算技术指标 (MA60/120/BBI/MACD/RSI/KDJ/BOLL)...")
         import sqlite3 as _sql
 
-        from analysis.screening.indicators import (
+        from analysis.indicators import (
             calc_bollinger,
             calc_kdj,
             calc_macd,

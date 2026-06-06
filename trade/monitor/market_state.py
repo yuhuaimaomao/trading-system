@@ -437,7 +437,7 @@ class MarketStateMixin:
             if len(closes) < 26:
                 return False
 
-            from analysis.screening.indicators import calc_kdj, calc_macd, calc_rsi
+            from analysis.indicators import calc_kdj, calc_macd, calc_rsi
 
             macd = calc_macd(closes)
             rsi6 = calc_rsi(closes, 6)
@@ -629,7 +629,7 @@ class MarketStateMixin:
                 for i in range(0, len(px), window):
                     closes.append(px[i + window - 1])
                 if len(closes) >= 14:
-                    from analysis.screening.indicators import calc_rsi
+                    from analysis.indicators import calc_rsi
 
                     rsi6 = calc_rsi(closes, 6)
                     if rsi6 < 25:
@@ -1421,7 +1421,7 @@ class MarketStateMixin:
         if len(closes) < 26:
             return
 
-        from analysis.screening.indicators import (
+        from analysis.indicators import (
             calc_kdj,
             calc_macd_series,
             calc_rsi,
@@ -1677,7 +1677,7 @@ class MarketStateMixin:
         if len(closes) < 26:
             return
 
-        from analysis.screening.indicators import (
+        from analysis.indicators import (
             calc_kdj,
             calc_macd,
             calc_macd_series,
