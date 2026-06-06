@@ -59,15 +59,12 @@ class BuyDecisionMixin:
         # 2. 布林带位置（从数据库获取最近指标）
         try:
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_upper, bb_mid, bb_lower, bb_pct_b, ma5, ma10, ma20
-                   FROM stock_indicators WHERE stock_code=? AND bb_mid > 0
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            from data.readers.stock_reader import StockReader
+            row = StockReader.get_daily_indicators(conn, code)
             conn.close()
             if row:
-                bb_upper, bb_mid, bb_lower, pct_b, ma5, ma10, ma20 = row
+                bb_upper = row["bb_upper"]; bb_mid = row["bb_mid"]; bb_lower = row["bb_lower"]
+                pct_b = row["bb_pct_b"]; ma5 = row["ma5"]; ma10 = row["ma10"]; ma20 = row["ma20"]
                 if pct_b is not None:
                     if pct_b <= 10:
                         parts.append("📊 布林带(昨): 触及下轨（超卖区域，可能反弹）")
@@ -234,68 +231,34 @@ class BuyDecisionMixin:
 
         factors = {"available": False}
         try:
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-
-            # 昨日主力资金（有延续性，今天大概率方向一致）
-            row = conn.execute(
-                """SELECT main_force_net, main_force_ratio,
-                          super_large_net, large_net,
-                          ma5_angle, pe_dynamic, circ_market_cap
-                   FROM stock_basic WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
-
-            if row:
-                (mf_net, mf_ratio, sl_net, l_net, ma5_angle, pe, circ_cap) = row
-                factors["yesterday_mf_net"] = mf_net or 0
-                factors["yesterday_mf_ratio"] = mf_ratio or 0
-                factors["yesterday_sl_net"] = sl_net or 0
-                factors["yesterday_l_net"] = l_net or 0
-                factors["ma5_angle"] = ma5_angle or 0
-                factors["pe_dynamic"] = pe or 0
-                factors["circ_market_cap"] = circ_cap or 0
+            # 主力资金
+            mf = StockReader.get_money_flow(conn, code)
+            if mf:
+                factors["yesterday_mf_net"] = mf["main_force_net"]
+                factors["yesterday_mf_ratio"] = mf["main_force_ratio"]
+                factors["yesterday_sl_net"] = mf["super_large_net"]
+                factors["yesterday_l_net"] = mf["large_net"]
+                factors["ma5_angle"] = mf["ma5_angle"]
+                factors["pe_dynamic"] = mf["pe_dynamic"]
+                factors["circ_market_cap"] = mf["circ_market_cap"]
                 factors["available"] = True
-
-            # 昨日技术指标（日线级别趋势，非日内）
-            row2 = conn.execute(
-                """SELECT macd_dif, macd_dea, macd_bar,
-                          kdj_k, kdj_d, kdj_j,
-                          rsi6, rsi24,
-                          bbi_daily, bbi_weekly, bb_width, ma120
-                   FROM stock_indicators WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
-
-            if row2:
-                (
-                    macd_dif,
-                    macd_dea,
-                    macd_bar,
-                    kdj_k,
-                    kdj_d,
-                    kdj_j,
-                    rsi6,
-                    rsi24,
-                    bbi_daily,
-                    bbi_weekly,
-                    bb_width,
-                    ma120,
-                ) = row2
-                factors["daily_macd_dif"] = macd_dif or 0
-                factors["daily_macd_dea"] = macd_dea or 0
-                factors["daily_macd_bar"] = macd_bar or 0
-                factors["daily_kdj_k"] = kdj_k or 50
-                factors["daily_kdj_d"] = kdj_d or 50
-                factors["daily_kdj_j"] = kdj_j or 50
-                factors["daily_rsi6"] = rsi6 or 50
-                factors["daily_rsi24"] = rsi24 or 50
-                factors["bbi_daily"] = bbi_daily or 0
-                factors["bbi_weekly"] = bbi_weekly or 0
-                factors["bb_width"] = bb_width or 0
-                factors["ma120"] = ma120 or 0
-
+            # 日线技术指标
+            ind = StockReader.get_daily_indicators(conn, code)
+            if ind:
+                factors["daily_macd_dif"] = ind.get("macd_dif", 0) or 0
+                factors["daily_macd_dea"] = ind.get("macd_dea", 0) or 0
+                factors["daily_macd_bar"] = ind.get("macd_bar", 0) or 0
+                factors["daily_kdj_k"] = ind.get("kdj_k", 50) or 50
+                factors["daily_kdj_d"] = ind.get("kdj_d", 50) or 50
+                factors["daily_kdj_j"] = ind.get("kdj_j", 50) or 50
+                factors["daily_rsi6"] = ind.get("rsi6", 50) or 50
+                factors["daily_rsi24"] = ind.get("rsi24", 50) or 50
+                factors["bbi_daily"] = ind.get("bbi_daily", 0) or 0
+                factors["bbi_weekly"] = ind.get("bbi_weekly", 0) or 0
+                factors["bb_width"] = ind.get("bb_width", 0) or 0
+                factors["ma120"] = ind.get("ma120", 0) or 0
             conn.close()
 
             # ━━━ 以下为今日实时数据 ━━━
@@ -494,35 +457,26 @@ class BuyDecisionMixin:
         daily_bb_upper = daily_bb_mid = daily_bb_lower = 0.0
         daily_bb_pct_b = None
         daily_ma5 = daily_ma10 = daily_ma20 = 0.0
-        try:
-            import sqlite3
-            conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_upper, bb_mid, bb_lower, bb_pct_b, ma5, ma10, ma20
-                   FROM stock_indicators WHERE stock_code=? AND bb_mid > 0
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
-            conn.close()
-            if row:
-                daily_bb_upper, daily_bb_mid, daily_bb_lower, daily_bb_pct_b, daily_ma5, daily_ma10, daily_ma20 = row
-        except Exception:
-            pass
-
-        # 日线 KDJ/RSI
         daily_rsi6 = daily_rsi12 = None
         daily_kdj_k = daily_kdj_d = daily_kdj_j = None
         try:
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            daily = conn.execute(
-                """SELECT rsi6, rsi12, kdj_k, kdj_d, kdj_j
-                   FROM stock_indicators WHERE stock_code=? AND ma5 > 0
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
             conn.close()
-            if daily:
-                daily_rsi6, daily_rsi12, daily_kdj_k, daily_kdj_d, daily_kdj_j = daily
+            if ind:
+                daily_bb_upper = ind.get("bb_upper", 0) or 0
+                daily_bb_mid = ind.get("bb_mid", 0) or 0
+                daily_bb_lower = ind.get("bb_lower", 0) or 0
+                daily_bb_pct_b = ind.get("bb_pct_b")
+                daily_ma5 = ind.get("ma5", 0) or 0
+                daily_ma10 = ind.get("ma10", 0) or 0
+                daily_ma20 = ind.get("ma20", 0) or 0
+                daily_rsi6 = ind.get("rsi6")
+                daily_rsi12 = ind.get("rsi12")
+                daily_kdj_k = ind.get("kdj_k")
+                daily_kdj_d = ind.get("kdj_d")
+                daily_kdj_j = ind.get("kdj_j")
         except Exception:
             pass
 
@@ -651,17 +605,14 @@ class BuyDecisionMixin:
         near_support = False
         near_ma60 = False
         try:
-            import sqlite3
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_lower, ma20, ma60 FROM stock_indicators
-                   WHERE stock_code=? AND bb_mid > 0
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
             conn.close()
-            if row:
-                bb_lower, ma20, ma60 = row
+            if ind:
+                bb_lower = ind.get("bb_lower")
+                ma20 = ind.get("ma20")
+                ma60 = ind.get("ma60")
                 if bb_lower and abs(price - bb_lower) / bb_lower < 0.02:
                     near_support = True
                 elif ma20 and abs(price - ma20) / ma20 < 0.02:

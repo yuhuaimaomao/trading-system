@@ -1518,18 +1518,15 @@ class PositionRiskMixin:
 
     def _check_add_opportunity(self, code: str) -> str:
         """委托至 StockReader。"""
-        import sqlite3
-        from data.readers.stock_reader import StockReader
         try:
+            import sqlite3
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_pct_b, rsi12 FROM stock_indicators
-                   WHERE stock_code=? ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
             conn.close()
-            if row:
-                pct_b, rsi12 = row[0], row[1]
+            if ind:
+                pct_b = ind.get("bb_pct_b")
+                rsi12 = ind.get("rsi12")
                 if pct_b is not None and 5 <= pct_b <= 30 and rsi12 is not None and rsi12 < 40:
                     return "add_opportunity"
         except Exception:
@@ -1538,19 +1535,19 @@ class PositionRiskMixin:
 
     def _analyze_add_context(self, code: str, price: float, entry_price: float) -> str:
         """委托至 StockReader。"""
-        import sqlite3
         pnl_pct = (price - entry_price) / entry_price * 100 if entry_price > 0 else 0
         parts = [f"当前亏损{pnl_pct:+.1f}%，成本{entry_price:.2f}"]
         try:
+            import sqlite3
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_lower, bb_mid, ma20, rsi12 FROM stock_indicators
-                   WHERE stock_code=? AND bb_lower > 0 ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
             conn.close()
-            if row:
-                bb_lower, bb_mid, ma20, rsi12 = row
+            if ind:
+                bb_lower = ind.get("bb_lower")
+                bb_mid = ind.get("bb_mid")
+                ma20 = ind.get("ma20")
+                rsi12 = ind.get("rsi12")
                 if bb_lower and price <= bb_lower * 1.05:
                     parts.append("📍 价格已触及布林下轨，技术性超卖")
                 if ma20 and price < ma20:
@@ -1577,15 +1574,20 @@ class PositionRiskMixin:
         bb_lower = bb_mid = ma60 = bbi_daily = None
         rsi12 = rsi6 = macd_bar = macd_dif = kdj_j = None
         try:
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_lower, bb_mid, rsi12, rsi6, macd_bar, macd_dif, kdj_j, ma60, bbi_daily
-                   FROM stock_indicators WHERE stock_code=? ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
             conn.close()
-            if row:
-                bb_lower, bb_mid, rsi12, rsi6, macd_bar, macd_dif, kdj_j, ma60, bbi_daily = row
+            if ind:
+                bb_lower = ind.get("bb_lower")
+                bb_mid = ind.get("bb_mid")
+                ma60 = ind.get("ma60")
+                bbi_daily = ind.get("bbi_daily")
+                rsi12 = ind.get("rsi12")
+                rsi6 = ind.get("rsi6")
+                macd_bar = ind.get("macd_bar")
+                macd_dif = ind.get("macd_dif")
+                kdj_j = ind.get("kdj_j")
         except Exception:
             pass
 
@@ -1691,13 +1693,11 @@ class PositionRiskMixin:
         is_sector_accelerating_down = "持续走弱" in trend and "加速" in trend
 
         try:
+            from data.readers.stock_reader import StockReader
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """SELECT bb_mid, ma60, bbi_daily
-                   FROM stock_indicators WHERE stock_code=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code,),
-            ).fetchone()
+            ind = StockReader.get_daily_indicators(conn, code)
+            conn.close()
+            row = (ind.get("bb_mid"), ind.get("ma60"), ind.get("bbi_daily")) if ind else None
             conn.close()
 
             if row:
