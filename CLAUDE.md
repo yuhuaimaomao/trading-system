@@ -90,7 +90,7 @@ trading-system/
 │   ├── risk/                       风控（engine + rules: stop_loss/take_profit/...）
 │   ├── paper/                      模拟盘（PaperAccount + buy执行 + 告警）
 │   ├── portfolio/                  持仓数据结构
-│   └── execution/                  手动成交/双线比对（manual/comparator/qmt）
+│   └── execution/                  手动成交/双线比对（manual/comparator）
 ├── data/                           【数据访问】
 │   ├── repo.py                     TradeRepository（统一DB读写）
 │   ├── schema.py                   表结构 + 迁移
@@ -106,7 +106,7 @@ trading-system/
 │   └── processors/                 数据处理
 ├── system/                         【基础设施】
 │   ├── config/                     配置 + prompts
-│   ├── qmt/                        QMT HTTP 客户端
+│   ├── qmt/                        QMT HTTP 客户端（行情，不含下单）
 │   ├── utils/                      工具（telegram/function_calling/stock_tools）
 │   └── services/                   后台服务
 └── tests/                          测试（单元 + E2E）
@@ -213,7 +213,7 @@ python main.py portfolio           # 持仓查询
 - **天启代理整点劣化**：整点附近代理采集器易失败，review/service.py 已加重试
 - **dns_bypass**：绕过小火箭 DNS 劫持（198.18.x.x 假 IP）
 - **telegram.py requests verify=False**：小火箭 HTTPS MITM 导致证书验证失败
-- **QMT 被拆到三处**：`data/live/quotes.py`（行情）、`trade/execution/orders.py`（下单存根）、`system/qmt/`（连接）
+- **QMT 只用于行情**：`data/live/quotes.py`（行情）、`system/qmt/`（连接）。下单功能不可用，已删除
 - `stock_tracker` 字段 `star_rating`（不是 `score`）
 - `PROJECT_ROOT` 用了 `.parent.parent.parent`（相对 system/config/）
 
