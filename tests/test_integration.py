@@ -4,13 +4,16 @@
 逐一调用每个方法，验证不抛异常、返回值类型正确。
 """
 
-import pytest
 from collections import defaultdict
-from trade.monitor.state import MarketRegime, MicroSignals, MarketScenario, MarketOutlook
+
+import pytest
+
+from trade.core.scan_state import MarketOutlook, MarketRegime, MicroSignals
 
 
 class FakePaperAccount:
     """最小 PaperAccount 替身，提供各 Mixin 需要的属性。"""
+
     def __init__(self):
         self.positions = {}
         self.cash = 180000
@@ -19,12 +22,27 @@ class FakePaperAccount:
         self.position_count = 0
         self._peak_value = 200000
 
-    def update_prices(self, prices): pass
+    def update_prices(self, prices):
+        pass
+
     def buy(self, code, name, price, volume, signal_id=None, source=""):
-        class R: success = True; cost = price * volume; commission = 5; reason = "ok"
+        class R:
+            success = True
+            cost = price * volume
+            commission = 5
+            reason = "ok"
+
         return R()
+
     def sell(self, code, price, reason="", signal_id=None):
-        class R: success = True; pnl = 0; pnl_pct = 0; proceeds = 0; commission = 5; reason = reason
+        class R:
+            success = True
+            pnl = 0
+            pnl_pct = 0
+            proceeds = 0
+            commission = 5
+            reason = reason
+
         return R()
 
 
@@ -32,8 +50,9 @@ class TestWatcher:
     """模拟完整 Watcher，包含所有 Mixin 需要的最小状态。"""
 
     def __init__(self):
-        from trade.monitor.watcher import Watcher
         from system.message import AlertRouter
+        from trade.core.watcher import Watcher
+
         # 拿真正的 MRO 但不真正初始化
         self.__class__ = Watcher  # 借用 MRO
         self.alerter = AlertRouter()
@@ -53,8 +72,16 @@ class TestWatcher:
         # 缓存
         self._industry_cache = {"000001": "银行"}
         self._concept_cache = {}
-        self._sector_stats = {"银行": {"change_pct": 1.5, "trend_history": [0.0, 0.3, 0.5, 0.8, 1.0, 1.2],
-                                        "relative": 0.6, "breadth": 0.4, "vol_ratio": 1.2, "continuity": 3}}
+        self._sector_stats = {
+            "银行": {
+                "change_pct": 1.5,
+                "trend_history": [0.0, 0.3, 0.5, 0.8, 1.0, 1.2],
+                "relative": 0.6,
+                "breadth": 0.4,
+                "vol_ratio": 1.2,
+                "continuity": 3,
+            }
+        }
         self._concept_stats = {}
         self._intraday_cache = {}
         self._intraday_cache_scan = -1
@@ -63,7 +90,9 @@ class TestWatcher:
         self._limit_cache = {}
         self._ma_baseline_cache = None
         self._market_breadth = {"up": 500, "down": 300, "flat": 100, "total": 900}
-        self._market_snapshot = {"000001": {"price": 10.0, "changePct": 2.0, "amount": 50000000}}
+        self._market_snapshot = {
+            "000001": {"price": 10.0, "changePct": 2.0, "amount": 50000000}
+        }
         self._market_turnovers = []
         self._index_prices = [3400 + i * 0.5 for i in range(100)]
         self._index_high = max(self._index_prices)
@@ -74,9 +103,14 @@ class TestWatcher:
         self._index_alerted_downtrend = False
         self._index_alerted_ma20 = 0
         self._index_last_fluctuation_price = 0
-        self._index_tech_state = {"macd_cross": None, "rsi6_zone": "normal",
-                                  "rsi12_zone": "normal", "kdj_cross": None,
-                                  "kdj_j_zone": "normal", "divergence": None}
+        self._index_tech_state = {
+            "macd_cross": None,
+            "rsi6_zone": "normal",
+            "rsi12_zone": "normal",
+            "kdj_cross": None,
+            "kdj_j_zone": "normal",
+            "divergence": None,
+        }
         self._last_index_quote = {"price": 3420, "pre_close": 3400, "change_pct": 0.005}
         self._volume_alerted_divergence = False
         self._closing_decision_done = False
@@ -144,35 +178,88 @@ class TestWatcher:
         self._scenario_scan_count = 0
         self._scenario_last_alert_scan = 0
 
-    def _alert(self, msg): pass
-    def _alert_private(self, msg): pass
-    def _resolve_name(self, code): return "测试股票"
-    def _get_market_adjustment(self, code, trend): return {}
-    def _init_private_telegram(self): pass
-    def _compute_breadth(self): return {"up": 500, "down": 300, "flat": 100}
-    def _get_index_baseline(self): return (3390, 3395, 3400)
-    def _get_index_ma60(self): return 3350
-    def _calc_intraday_ema(self, prices, period): return sum(prices[-period:]) / period if len(prices) >= period else sum(prices) / len(prices)
-    def _compute_key_levels(self): return ([3380.0], [3450.0])
-    def _detect_higher_highs(self, px): return False
-    def _get_index_quote(self): return {"price": 3420, "pre_close": 3400}
-    def _check_multi_day_downtrend(self): return False
+    def _alert(self, msg):
+        pass
+
+    def _alert_private(self, msg):
+        pass
+
+    def _resolve_name(self, code):
+        return "测试股票"
+
+    def _get_market_adjustment(self, code, trend):
+        return {}
+
+    def _init_private_telegram(self):
+        pass
+
+    def _compute_breadth(self):
+        return {"up": 500, "down": 300, "flat": 100}
+
+    def _get_index_baseline(self):
+        return (3390, 3395, 3400)
+
+    def _get_index_ma60(self):
+        return 3350
+
+    def _calc_intraday_ema(self, prices, period):
+        return (
+            sum(prices[-period:]) / period
+            if len(prices) >= period
+            else sum(prices) / len(prices)
+        )
+
+    def _compute_key_levels(self):
+        return ([3380.0], [3450.0])
+
+    def _detect_higher_highs(self, px):
+        return False
+
+    def _get_index_quote(self):
+        return {"price": 3420, "pre_close": 3400}
+
+    def _check_multi_day_downtrend(self):
+        return False
+
     def _init_scenario_state(self):
         from trade.scenario.scenario_engine import ScenarioEngine
+
         self._scenario_engine = ScenarioEngine()
         self._scenario_probs = self._scenario_engine.probs
         self._scenario_scan_count = self._scenario_engine.scan_count
-    def _should_throttle(self, code, price): return False
-    def _is_limit_up(self, code, price): return False
-    def _is_limit_down(self, code, price): return False
-    def _invalidate_watch_codes_cache(self): pass
-    def _log_buy_filter(self, **kw): pass
-    def _log_buy_trigger(self, **kw): pass
-    def _log_position_size(self, **kw): pass
-    def _log_stop_trigger(self, **kw): pass
-    def _log_tp_trigger(self, **kw): pass
-    def _submit_scenario_ai(self, **kw): pass
-    def _get_watch_codes(self): return set()
+
+    def _should_throttle(self, code, price):
+        return False
+
+    def _is_limit_up(self, code, price):
+        return False
+
+    def _is_limit_down(self, code, price):
+        return False
+
+    def _invalidate_watch_codes_cache(self):
+        pass
+
+    def _log_buy_filter(self, **kw):
+        pass
+
+    def _log_buy_trigger(self, **kw):
+        pass
+
+    def _log_position_size(self, **kw):
+        pass
+
+    def _log_stop_trigger(self, **kw):
+        pass
+
+    def _log_tp_trigger(self, **kw):
+        pass
+
+    def _submit_scenario_ai(self, **kw):
+        pass
+
+    def _get_watch_codes(self):
+        return set()
 
 
 @pytest.fixture
@@ -186,10 +273,24 @@ class TestMarketStateMethods:
     def test_classify_market_pattern(self, w):
         result = w._classify_market_pattern()
         assert isinstance(result, str)
-        assert result in ("normal", "uptrend", "one_sided", "panic", "v_reversal",
-                          "dead_cat", "melt_up", "inverted_v", "w_bottom", "m_top",
-                          "gap_up_fade", "gap_down_recover", "late_rally", "late_dump",
-                          "fishing_line", "wide_choppy")
+        assert result in (
+            "normal",
+            "uptrend",
+            "one_sided",
+            "panic",
+            "v_reversal",
+            "dead_cat",
+            "melt_up",
+            "inverted_v",
+            "w_bottom",
+            "m_top",
+            "gap_up_fade",
+            "gap_down_recover",
+            "late_rally",
+            "late_dump",
+            "fishing_line",
+            "wide_choppy",
+        )
 
     def test_assess_regime(self, w):
         result = w._assess_regime("normal", 3420, 3400, 0.005)
@@ -197,7 +298,7 @@ class TestMarketStateMethods:
         assert result.pattern == "normal"
 
     def test_check_market_state(self, w):
-        result = w._check_market_state({"000001": 10.0})
+        result = w._check_market_state(w.build_state(), {"000001": 10.0})
         assert isinstance(result, MarketRegime)
 
     def test_check_index_technicals(self, w):
@@ -223,7 +324,9 @@ class TestBuyDecisionMethods:
         assert action in ("opportunity", "watching", "abandon")
 
     def test_calculate_position_size(self, w):
-        amount, reason = w._calculate_position_size("000001", 10.0, 9.5, 10.5, "normal", "走强")
+        amount, reason = w._calculate_position_size(
+            "000001", 10.0, 9.5, 10.5, "normal", "走强"
+        )
         assert isinstance(amount, int)
         assert amount >= 0
 

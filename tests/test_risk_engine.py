@@ -1,12 +1,13 @@
 """RiskEngine 单元测试 — 开仓检查/持仓巡检/止损止盈"""
 
 import pytest
-from trade.paper.portfolio import Portfolio, Position
+
+from trade.exec.paper.portfolio import Portfolio, Position
 from trade.risk.risk_engine import RiskEngine
-from trade.risk.rules.stop_loss import check_stop_loss, check_time_stop
-from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop
 from trade.risk.rules.concentration import check_concentration
 from trade.risk.rules.market_env import get_market_environment
+from trade.risk.rules.stop_loss import check_stop_loss
+from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop
 
 
 class TestStopLoss:
@@ -117,6 +118,7 @@ class TestRiskEngine:
         # 黑名单目前为空（PERMANENT_BLACKLIST = set()）
         # 普通代码不触发黑名单
         from trade.risk.rules.blacklist import is_blacklisted
+
         assert not is_blacklisted("600519")
         assert not is_blacklisted("000001")
 
@@ -131,7 +133,8 @@ class TestRiskEngine:
         pos.highest_price = 10.0
 
         signals = engine.check_positions(
-            {"000001": 9.0}, portfolio  # 跌破止损
+            {"000001": 9.0},
+            portfolio,  # 跌破止损
         )
         assert len(signals) > 0
         assert signals[0]["stock_code"] == "000001"
@@ -142,20 +145,24 @@ class TestRiskEngine:
 # 纯函数测试（should_stop_loss / should_take_profit / should_trailing_stop）
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestPureStopLoss:
     def test_triggers(self):
         from trade.risk.rules.stop_loss import should_stop_loss
+
         triggered, sl = should_stop_loss(9.5, 10.0, 9.8)
         assert triggered
         assert sl == pytest.approx(9.8)
 
     def test_no_trigger(self):
         from trade.risk.rules.stop_loss import should_stop_loss
+
         triggered, _ = should_stop_loss(9.9, 10.0, 9.5)
         assert not triggered
 
     def test_tighten_triggers_earlier(self):
         from trade.risk.rules.stop_loss import should_stop_loss
+
         # tighten=0.7: effective=10-(10-9.5)*0.7=9.65, floor=9.5*0.85=8.075
         # price 9.6 <= 9.65 → trigger
         triggered, sl = should_stop_loss(9.6, 10.0, 9.5, tighten=0.70)
@@ -164,6 +171,7 @@ class TestPureStopLoss:
 
     def test_floor_protection(self):
         from trade.risk.rules.stop_loss import should_stop_loss
+
         # tighten=5.0 (极端): effective=10-(10-9.8)*5.0=9.0, floor=8.33
         # max(9.0, 8.33)=9.0, price 8.5 <= 9.0 → trigger
         triggered, sl = should_stop_loss(8.5, 10.0, 9.8, tighten=5.0)
@@ -174,17 +182,20 @@ class TestPureStopLoss:
 class TestPureTakeProfit:
     def test_triggers(self):
         from trade.risk.rules.take_profit import should_take_profit
+
         triggered, tp = should_take_profit(12.5, 10.0, 12.0)
         assert triggered
         assert tp == 12.0
 
     def test_no_trigger(self):
         from trade.risk.rules.take_profit import should_take_profit
+
         triggered, _ = should_take_profit(11.0, 10.0, 12.0)
         assert not triggered
 
     def test_tp_lower_triggers_earlier(self):
         from trade.risk.rules.take_profit import should_take_profit
+
         # tp_lower=0.8: effective_tp=10+(15-10)*0.8=14.0, price 14.2 >=14 → trigger
         triggered, tp = should_take_profit(14.2, 10.0, 15.0, tp_lower=0.80)
         assert triggered
@@ -194,18 +205,21 @@ class TestPureTakeProfit:
 class TestPureTrailingStop:
     def test_triggers(self):
         from trade.risk.rules.take_profit import should_trailing_stop
+
         triggered, trail = should_trailing_stop(9.0, 20.0, 0.05)
         # 20*0.95=19, 9 <= 19 → trigger
         assert triggered
 
     def test_no_trigger(self):
         from trade.risk.rules.take_profit import should_trailing_stop
+
         triggered, _ = should_trailing_stop(19.5, 20.0, 0.05)
         # 19.5 > 19 → no trigger
         assert not triggered
 
     def test_tighten_triggers_earlier(self):
         from trade.risk.rules.take_profit import should_trailing_stop
+
         # trail_tighten=0.7: effective_trail=0.05*0.7=0.035, trail=20*0.965=19.3
         # 19.2 <= 19.3 → trigger
         triggered, _ = should_trailing_stop(19.2, 20.0, 0.05, trail_tighten=0.70)

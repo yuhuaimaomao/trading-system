@@ -1,6 +1,6 @@
 """止盈规则"""
 
-from trade.paper.portfolio import Position
+from trade.exec.paper.portfolio import Position
 
 
 def check_take_profit(pos: Position) -> str:
@@ -26,8 +26,9 @@ def check_trailing_stop(pos: Position) -> str:
     return ""
 
 
-def should_take_profit(price: float, avg_cost: float, take_profit: float,
-                       tp_lower: float = 1.0) -> tuple:
+def should_take_profit(
+    price: float, avg_cost: float, take_profit: float, tp_lower: float = 1.0
+) -> tuple:
     """止盈检查（纯函数，不依赖 Position）。
     返回 (触发: bool, 有效止盈价: float)。
     tp_lower < 1 表示下调止盈目标（大盘危险时提前锁定利润）。
@@ -45,8 +46,9 @@ def should_take_profit(price: float, avg_cost: float, take_profit: float,
     return False, take_profit
 
 
-def should_trailing_stop(price: float, highest_price: float, trailing_stop: float,
-                         trail_tighten: float = 1.0) -> tuple:
+def should_trailing_stop(
+    price: float, highest_price: float, trailing_stop: float, trail_tighten: float = 1.0
+) -> tuple:
     """移动止盈检查（纯函数）。
     返回 (触发: bool, 触发价: float)。
     trail_tighten < 1 表示缩小回撤容忍（大盘危险时快跑）。

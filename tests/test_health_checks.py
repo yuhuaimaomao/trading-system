@@ -1,7 +1,6 @@
 """健康检查框架 + 独立重算验证测试"""
 
-import pytest
-from trade.monitor.health_checks import (
+from trade.core.health_checks import (
     CheckContext,
     _expected_base_tighten,
     _expected_sector_mult,
@@ -56,18 +55,27 @@ class TestRecomputeAdjustment:
         ctx = CheckContext(
             risk_level="dangerous",
             sector_trends={"000001": "持续走弱 加速 -3% 弱于大盘"},
-            pos_meta={"000001": {"_sl_tighten": 0.765, "_tp_lower": 0.81, "_trail_tighten": 0.765}},
+            pos_meta={
+                "000001": {
+                    "_sl_tighten": 0.765,
+                    "_tp_lower": 0.81,
+                    "_trail_tighten": 0.765,
+                }
+            },
         )
         alerts = _recompute_adjustment(ctx)
         assert len(alerts) == 0  # 一致
 
     def test_divergence_detected(self):
         """系统用了错误值 → 应该告警"""
-        from trade.paper.portfolio import Position
+        from trade.exec.paper.portfolio import Position
+
         ctx = CheckContext(
             risk_level="extreme",
             sector_trends={"000001": "横盘"},
-            positions={"000001": Position(stock_code="000001", volume=100, avg_cost=10.0)},
+            positions={
+                "000001": Position(stock_code="000001", volume=100, avg_cost=10.0)
+            },
             pos_meta={"000001": {"_sl_tighten": 1.0}},  # 应该是 0.70*1.0=0.70
         )
         alerts = _recompute_adjustment(ctx)
@@ -108,7 +116,8 @@ class TestRunChecks:
     def test_account_imbalance_detected(self):
         """账户不平 → 告警"""
         ctx = CheckContext(
-            cash=100000, total_value=105000,  # 差了 5000
+            cash=100000,
+            total_value=105000,  # 差了 5000
             positions={},
         )
         alerts = run_checks(ctx)

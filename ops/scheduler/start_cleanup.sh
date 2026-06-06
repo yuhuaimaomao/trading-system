@@ -49,7 +49,7 @@ fi
 
 # 执行清理任务
 log "执行清理..."
-python ops/scripts/cleanup.py 2>&1 | tee -a "$LOG_FILE"
+python ops/tools/cleanup.py 2>&1 | tee -a "$LOG_FILE"
 
 log ""
 log "=========================================="

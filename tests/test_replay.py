@@ -11,6 +11,8 @@ import pytest
 
 from system.config import settings
 
+pytestmark = [pytest.mark.e2e, pytest.mark.db, pytest.mark.slow]
+
 DB_PATH = settings.DATABASE_PATH
 
 
@@ -70,7 +72,9 @@ def load_sector_stats(conn, trade_date: str) -> dict[str, dict]:
                 "change_pct": changes[-1],
                 "trend_history": changes[-30:] if len(changes) >= 30 else changes,
                 "relative": changes[-1] - (sum(changes) / len(changes)),
-                "breadth": 0.0, "vol_ratio": 1.0, "continuity": 0,
+                "breadth": 0.0,
+                "vol_ratio": 1.0,
+                "continuity": 0,
             }
     return result
 
@@ -86,11 +90,20 @@ def load_stock_indicators(conn, code: str) -> dict | None:
     if not row:
         return None
     return {
-        "bb_upper": row[0] or 0, "bb_mid": row[1] or 0, "bb_lower": row[2] or 0,
-        "bb_pct_b": row[3], "rsi6": row[4], "rsi12": row[5],
-        "kdj_k": row[6], "kdj_d": row[7], "kdj_j": row[8],
-        "macd_dif": row[9] or 0, "macd_dea": row[10] or 0, "macd_bar": row[11] or 0,
-        "bbi_daily": row[12] or 0, "bb_width": row[13] or 0,
+        "bb_upper": row[0] or 0,
+        "bb_mid": row[1] or 0,
+        "bb_lower": row[2] or 0,
+        "bb_pct_b": row[3],
+        "rsi6": row[4],
+        "rsi12": row[5],
+        "kdj_k": row[6],
+        "kdj_d": row[7],
+        "kdj_j": row[8],
+        "macd_dif": row[9] or 0,
+        "macd_dea": row[10] or 0,
+        "macd_bar": row[11] or 0,
+        "bbi_daily": row[12] or 0,
+        "bb_width": row[13] or 0,
     }
 
 
@@ -117,10 +130,22 @@ class TestMarketPatternReplay:
         result = classify_market_pattern(prices, hi, lo)
 
         valid_patterns = {
-            "normal", "uptrend", "one_sided", "panic", "v_reversal",
-            "inverted_v", "w_bottom", "m_top", "dead_cat", "melt_up",
-            "gap_up_fade", "gap_down_recover", "late_rally", "late_dump",
-            "fishing_line", "wide_choppy",
+            "normal",
+            "uptrend",
+            "one_sided",
+            "panic",
+            "v_reversal",
+            "inverted_v",
+            "w_bottom",
+            "m_top",
+            "dead_cat",
+            "melt_up",
+            "gap_up_fade",
+            "gap_down_recover",
+            "late_rally",
+            "late_dump",
+            "fishing_line",
+            "wide_choppy",
         }
         assert result in valid_patterns, f"{trade_date}: 非法模式 '{result}'"
 
@@ -138,7 +163,7 @@ class TestMarketPatternReplay:
         # 滑动窗口模拟盘中走势
         window = 100
         for i in range(0, len(all_prices) - window, window):
-            segment = all_prices[i:i + window + 50]
+            segment = all_prices[i : i + window + 50]
             seg_hi = max(segment)
             seg_lo = min(segment)
             p = classify_market_pattern(segment, seg_hi, seg_lo)
@@ -222,15 +247,26 @@ class TestBuyDecisionReplay:
                 continue
 
             ctx = BuyEvalInput(
-                code=code, price=ma20, buy_min=ma20 * 0.95,
-                buy_max=ma20 * 1.05, sector_trend="走强", sector_chg=1.0,
+                code=code,
+                price=ma20,
+                buy_min=ma20 * 0.95,
+                buy_max=ma20 * 1.05,
+                sector_trend="走强",
+                sector_chg=1.0,
                 daily_bb_pct_b=ind["bb_pct_b"],
-                daily_ma5=ma5 or 0, daily_ma10=ma10 or 0, daily_ma20=ma20 or 0,
-                daily_rsi6=ind["rsi6"], daily_rsi12=ind["rsi12"],
-                daily_kdj_k=ind["kdj_k"], daily_kdj_d=ind["kdj_d"], daily_kdj_j=ind["kdj_j"],
-                daily_macd_dif=ind["macd_dif"], daily_macd_dea=ind["macd_dea"],
+                daily_ma5=ma5 or 0,
+                daily_ma10=ma10 or 0,
+                daily_ma20=ma20 or 0,
+                daily_rsi6=ind["rsi6"],
+                daily_rsi12=ind["rsi12"],
+                daily_kdj_k=ind["kdj_k"],
+                daily_kdj_d=ind["kdj_d"],
+                daily_kdj_j=ind["kdj_j"],
+                daily_macd_dif=ind["macd_dif"],
+                daily_macd_dea=ind["macd_dea"],
                 daily_macd_bar=ind["macd_bar"],
-                bbi_daily=ind["bbi_daily"], bb_width=ind["bb_width"],
+                bbi_daily=ind["bbi_daily"],
+                bb_width=ind["bb_width"],
             )
             ok, reason, mul = evaluate_buy(ctx)
             results.append((code, ok, mul))
@@ -243,7 +279,9 @@ class TestBuyDecisionReplay:
         # 至少有一些结果（可能全拒绝，正常——收盘数据可能偏超买）
         reject_count = sum(1 for _, ok, _ in results if not ok)
         allow_count = sum(1 for _, ok, _ in results if ok)
-        print(f"  买入决策: {allow_count} 通过 / {reject_count} 拒绝 (共 {len(results)} 只)")
+        print(
+            f"  买入决策: {allow_count} 通过 / {reject_count} 拒绝 (共 {len(results)} 只)"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -257,8 +295,8 @@ class TestScenarioEngineReplay:
     @pytest.mark.parametrize("trade_date", ["2026-06-03", "2026-06-04", "2026-06-05"])
     def test_scenario_engine_with_real_data(self, trade_date):
         """验证情景引擎多轮运行不崩溃、概率归一化。"""
+        from trade.core.scan_state import MicroSignals
         from trade.scenario.scenario_engine import ScenarioEngine
-        from trade.monitor.state import MicroSignals
 
         conn = _get_conn()
         prices = load_index_prices(conn, trade_date, max_points=300)
@@ -274,7 +312,11 @@ class TestScenarioEngineReplay:
             accel = velocity - prev_velocity
             prev_velocity = velocity
 
-            ema12_pos = "above" if cur > sum(prices[max(0, i - 12):i + 1]) / min(12, i + 1) else "below"
+            ema12_pos = (
+                "above"
+                if cur > sum(prices[max(0, i - 12) : i + 1]) / min(12, i + 1)
+                else "below"
+            )
 
             recent_highs.append(cur)
             if len(recent_highs) > 20:
@@ -282,17 +324,20 @@ class TestScenarioEngineReplay:
 
             bounce_pct = 0
             if i > 10:
-                recent = prices[max(0, i - 10):i + 1]
+                recent = prices[max(0, i - 10) : i + 1]
                 lo = min(recent)
                 bounce_pct = (cur - lo) / lo * 100 if lo > 0 else 0
 
             micro = MicroSignals(
-                price_velocity=velocity, price_accel=accel,
-                ema12_pos=ema12_pos, bounce_from_low=bounce_pct,
+                price_velocity=velocity,
+                price_accel=accel,
+                ema12_pos=ema12_pos,
+                bounce_from_low=bounce_pct,
             )
             outlook = engine.update(micro)
-            assert abs(sum(engine.probs.values()) - 1.0) < 0.01, \
+            assert abs(sum(engine.probs.values()) - 1.0) < 0.01, (
                 f"{trade_date} 迭代 {i}: 概率和 = {sum(engine.probs.values()):.4f}"
+            )
 
         # 最终概率应该收敛
         assert engine.scan_count == len(prices) - 1
@@ -309,7 +354,7 @@ class TestRegimeReplay:
     @pytest.mark.parametrize("trade_date", ["2026-06-03", "2026-06-04", "2026-06-05"])
     def test_assess_regime_all_patterns(self, trade_date):
         """对每种模式测试 assess_regime 不崩溃。"""
-        from trade.decision.regime import assess_regime, PATTERN_REGIME
+        from trade.decision.regime import PATTERN_REGIME, assess_regime
 
         conn = _get_conn()
         prices = load_index_prices(conn, trade_date)
@@ -323,8 +368,12 @@ class TestRegimeReplay:
         for pattern in PATTERN_REGIME:
             try:
                 regime = assess_regime(
-                    pattern, cur, pre_close, chg_pct,
-                    ma20=cur * 0.99, ma60=cur * 0.95,
+                    pattern,
+                    cur,
+                    pre_close,
+                    chg_pct,
+                    ma20=cur * 0.99,
+                    ma60=cur * 0.95,
                     market_breadth={"up": 500, "down": 400},
                 )
                 assert regime.pattern == pattern
@@ -342,8 +391,8 @@ class TestEndToEndReplay:
 
     def test_full_scan_cycle(self):
         """用真实数据走一遍完整的 _scan() 逻辑路径。"""
-        from trade.monitor.watcher import Watcher
-        from trade.monitor.state import MarketRegime
+        from trade.core.scan_state import MarketRegime
+        from trade.core.watcher import Watcher
 
         # 最小初始化 — 跳过需要 QMT 的部分
         try:
@@ -410,9 +459,9 @@ class TestEndToEndReplay:
 
     def test_multiday_consistency(self):
         """跨日验证：三天数据都能正常走通。"""
+        from trade.core.scan_state import MicroSignals
         from trade.detect.market_pattern import classify_market_pattern
         from trade.scenario.scenario_engine import ScenarioEngine
-        from trade.monitor.state import MicroSignals
 
         conn = _get_conn()
         results = {}
@@ -457,16 +506,19 @@ class TestEdgeCases:
 
     def test_empty_prices(self):
         from trade.detect.market_pattern import classify_market_pattern
+
         assert classify_market_pattern([], 0, 0) == "normal"
         assert classify_market_pattern([3400.0] * 5, 3400, 3400) == "normal"
 
     def test_empty_sector_stats(self):
-        from trade.detect.sector_trend import get_sector_trend, get_sector_change
+        from trade.detect.sector_trend import get_sector_change, get_sector_trend
+
         assert get_sector_trend("000001", {}, {}) == ""
         assert get_sector_change("000001", {}, {}) is None
 
     def test_none_inputs_decision(self):
         from trade.decision.buy import BuyEvalInput, evaluate_buy
+
         ctx = BuyEvalInput()
         ok, reason, mul = evaluate_buy(ctx)
         assert isinstance(ok, bool)
@@ -475,40 +527,62 @@ class TestEdgeCases:
 
     def test_empty_breadth_regime(self):
         from trade.decision.regime import assess_regime
+
         regime = assess_regime("normal", 3400, 3390, 0.001)
         assert regime.pattern == "normal"
 
     def test_sizing_with_none_breadth(self):
         from trade.decision.sizing import calculate_position_size
-        amount, reason = calculate_position_size("000001", 10.0, 9.5, 10.5, "normal", "走强", market_breadth=None)
+
+        amount, reason = calculate_position_size(
+            "000001", 10.0, 9.5, 10.5, "normal", "走强", market_breadth=None
+        )
         assert amount > 0
 
     def test_all_patterns_assess_regime(self):
         """16 种模式全部调用 assess_regime，确保不崩溃。"""
         from trade.decision.regime import assess_regime
-        for pattern in ["normal", "uptrend", "one_sided", "panic", "v_reversal",
-                         "inverted_v", "w_bottom", "m_top", "dead_cat", "melt_up",
-                         "gap_up_fade", "gap_down_recover", "late_rally", "late_dump",
-                         "fishing_line", "wide_choppy"]:
+
+        for pattern in [
+            "normal",
+            "uptrend",
+            "one_sided",
+            "panic",
+            "v_reversal",
+            "inverted_v",
+            "w_bottom",
+            "m_top",
+            "dead_cat",
+            "melt_up",
+            "gap_up_fade",
+            "gap_down_recover",
+            "late_rally",
+            "late_dump",
+            "fishing_line",
+            "wide_choppy",
+        ]:
             regime = assess_regime(pattern, 3400, 3390, 0.003)
             assert regime.pattern == pattern
 
     def test_concept_score_empty_cache(self):
         from trade.detect.sector_trend import get_concept_trend_score
+
         score, reason = get_concept_trend_score("000001", {}, {})
         assert score == 0
 
     def test_scenario_engine_convergence(self):
         """连续相同信号 → 概率应收敛到主情景。"""
+        from trade.core.scan_state import MicroSignals
         from trade.scenario.scenario_engine import ScenarioEngine
-        from trade.monitor.state import MicroSignals
 
         engine = ScenarioEngine()
         # 给连续的上涨信号
         for _ in range(50):
             micro = MicroSignals(
-                price_velocity=0.05, ema12_pos="above",
-                breadth_trend="improving", higher_highs=True,
+                price_velocity=0.05,
+                ema12_pos="above",
+                breadth_trend="improving",
+                higher_highs=True,
             )
             engine.update(micro)
         # 上涨情景概率应该显著提高
@@ -544,9 +618,15 @@ class TestDelegationChain:
         from trade.decision.buy import BuyEvalInput, evaluate_buy
 
         ctx = BuyEvalInput(
-            code=code, price=price, buy_min=price * 0.97, buy_max=price * 1.03,
-            sector_trend="走强", sector_chg=2.0,
-            daily_ma5=ma5 or 0, daily_ma10=ma10 or 0, daily_ma20=ma20 or 0,
+            code=code,
+            price=price,
+            buy_min=price * 0.97,
+            buy_max=price * 1.03,
+            sector_trend="走强",
+            sector_chg=2.0,
+            daily_ma5=ma5 or 0,
+            daily_ma10=ma10 or 0,
+            daily_ma20=ma20 or 0,
         )
         ok, reason, mul = evaluate_buy(ctx)
         assert isinstance(ok, bool)
@@ -556,10 +636,22 @@ class TestDelegationChain:
         """calculate_position_size 各种模式。"""
         from trade.decision.sizing import calculate_position_size
 
-        for pattern in ["normal", "uptrend", "panic", "v_reversal",
-                         "one_sided", "melt_up", "wide_choppy"]:
+        for pattern in [
+            "normal",
+            "uptrend",
+            "panic",
+            "v_reversal",
+            "one_sided",
+            "melt_up",
+            "wide_choppy",
+        ]:
             amount, reason = calculate_position_size(
-                "000001", 10.0, 9.5, 10.5, pattern, "横盘",
+                "000001",
+                10.0,
+                9.5,
+                10.5,
+                pattern,
+                "横盘",
             )
             assert isinstance(amount, int)
             assert amount >= 0
@@ -579,10 +671,18 @@ class TestDelegationChain:
         from trade.decision.sell import analyze_exit_signals
 
         exit_s, wait_s, env = analyze_exit_signals(
-            price=10.0, entry_price=12.0, trend="走弱",
-            bb_mid=row[0], ma60=row[1], macd_bar=row[2], macd_dif=row[3],
-            bbi_daily=row[4], rsi12=row[5], rsi6=row[6],
-            bb_lower=row[7], kdj_j=row[8],
+            price=10.0,
+            entry_price=12.0,
+            trend="走弱",
+            bb_mid=row[0],
+            ma60=row[1],
+            macd_bar=row[2],
+            macd_dif=row[3],
+            bbi_daily=row[4],
+            rsi12=row[5],
+            rsi6=row[6],
+            bb_lower=row[7],
+            kdj_j=row[8],
         )
         assert isinstance(exit_s, list)
         assert isinstance(wait_s, list)

@@ -191,14 +191,27 @@ class StockReader:
         if not row:
             return None
         return {
-            "ma5": row[0] or 0, "ma10": row[1] or 0, "ma20": row[2] or 0,
-            "ma60": row[3] or 0, "ma120": row[4] or 0,
-            "bb_upper": row[5] or 0, "bb_mid": row[6] or 0, "bb_lower": row[7] or 0,
-            "bb_pct_b": row[8], "bb_width": row[9] or 0,
-            "macd_dif": row[10] or 0, "macd_dea": row[11] or 0, "macd_bar": row[12] or 0,
-            "kdj_k": row[13] or 50, "kdj_d": row[14] or 50, "kdj_j": row[15] or 50,
-            "rsi6": row[16] or 50, "rsi12": row[17] or 50, "rsi24": row[18] or 50,
-            "bbi_daily": row[19] or 0, "bbi_weekly": row[20] or 0,
+            "ma5": row[0] or 0,
+            "ma10": row[1] or 0,
+            "ma20": row[2] or 0,
+            "ma60": row[3] or 0,
+            "ma120": row[4] or 0,
+            "bb_upper": row[5] or 0,
+            "bb_mid": row[6] or 0,
+            "bb_lower": row[7] or 0,
+            "bb_pct_b": row[8],
+            "bb_width": row[9] or 0,
+            "macd_dif": row[10] or 0,
+            "macd_dea": row[11] or 0,
+            "macd_bar": row[12] or 0,
+            "kdj_k": row[13] or 50,
+            "kdj_d": row[14] or 50,
+            "kdj_j": row[15] or 50,
+            "rsi6": row[16] or 50,
+            "rsi12": row[17] or 50,
+            "rsi24": row[18] or 50,
+            "bbi_daily": row[19] or 0,
+            "bbi_weekly": row[20] or 0,
         }
 
     @staticmethod
@@ -215,11 +228,52 @@ class StockReader:
         if not row:
             return None
         return {
-            "main_force_net": row[0] or 0, "main_force_ratio": row[1] or 0,
-            "super_large_net": row[2] or 0, "large_net": row[3] or 0,
-            "ma5_angle": row[4] or 0, "pe_dynamic": row[5] or 0,
+            "main_force_net": row[0] or 0,
+            "main_force_ratio": row[1] or 0,
+            "super_large_net": row[2] or 0,
+            "large_net": row[3] or 0,
+            "ma5_angle": row[4] or 0,
+            "pe_dynamic": row[5] or 0,
             "circ_market_cap": row[6] or 0,
         }
+
+    @staticmethod
+    def get_stock_basic(conn, code: str) -> dict | None:
+        """查询个股基础信息。"""
+        row = conn.execute(
+            """SELECT trade_date, stock_code, stock_name, price, open, high, low,
+                      prev_close, change_pct, total_market_cap, circ_market_cap,
+                      turnover_rate, volume_ratio, amplitude, volume,
+                      ma5, ma10, ma20, ma5_angle, industry, concepts,
+                      main_force_net, main_force_ratio,
+                      super_large_net, large_net, medium_net, small_net,
+                      avg_vol_5d, avg_vol_20d,
+                      pe_ttm, pb_ratio, revenue_growth, profit_growth
+               FROM stock_basic WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    @staticmethod
+    def get_recent_prices(conn, code: str, limit: int = 5) -> list:
+        """查询近期收盘价列表。"""
+        rows = conn.execute(
+            "SELECT price FROM stock_basic WHERE stock_code=? ORDER BY trade_date DESC LIMIT ?",
+            (code, limit),
+        ).fetchall()
+        return [row["price"] for row in rows]
+
+    @staticmethod
+    def get_stock_name(conn, code: str) -> str | None:
+        """查询股票名称。"""
+        row = conn.execute(
+            "SELECT stock_name FROM stock_basic WHERE stock_code=? LIMIT 1",
+            (code,),
+        ).fetchone()
+        return row["stock_name"] if row else None
 
     @staticmethod
     def get_support_resistance(conn, code: str, price: float) -> dict:
@@ -242,15 +296,21 @@ class StockReader:
             bb_upper, bb_mid, bb_lower, ma20, ma60, bbi = row
             # 阻力：当前价上方
             for label, val in [
-                ("布林上轨", bb_upper), ("布林中轨", bb_mid),
-                ("MA20", ma20), ("MA60", ma60), ("BBI", bbi),
+                ("布林上轨", bb_upper),
+                ("布林中轨", bb_mid),
+                ("MA20", ma20),
+                ("MA60", ma60),
+                ("BBI", bbi),
             ]:
                 if val and val > price * 1.005:
                     resistances.append((val, label))
             # 支撑：当前价下方
             for label, val in [
-                ("布林下轨", bb_lower), ("布林中轨", bb_mid),
-                ("MA20", ma20), ("MA60", ma60), ("BBI", bbi),
+                ("布林下轨", bb_lower),
+                ("布林中轨", bb_mid),
+                ("MA20", ma20),
+                ("MA60", ma60),
+                ("BBI", bbi),
             ]:
                 if val and val < price * 0.995:
                     supports.append((val, label))

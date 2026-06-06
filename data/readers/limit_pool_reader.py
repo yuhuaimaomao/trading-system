@@ -289,3 +289,15 @@ class LimitPoolReader:
                 }
             )
         return records
+        return records
+
+    @staticmethod
+    def get_limit_pool(conn, trade_date: str) -> list:
+        """查询涨跌停池列表。"""
+        cursor = conn.execute(
+            """SELECT stock_code, stock_name, pool_type, consecutive_boards,
+                      first_seal_time, seal_amount, zt_stat, industry, open_count
+               FROM limit_pool WHERE trade_date = ?""",
+            (trade_date,),
+        )
+        return [dict(row) for row in cursor.fetchall()]

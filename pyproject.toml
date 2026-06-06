@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "slow: slow tests (deselect with '-m \"not slow\"')",
+    "db: tests that need database",
+    "e2e: end-to-end tests that need full environment",
+    "qmt: tests that need QMT connection",
+]
+timeout = 300

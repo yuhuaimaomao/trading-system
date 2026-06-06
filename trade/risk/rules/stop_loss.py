@@ -1,6 +1,6 @@
 """止损规则"""
 
-from trade.paper.portfolio import Position
+from trade.exec.paper.portfolio import Position
 
 
 def check_stop_loss(pos: Position) -> str:
@@ -21,8 +21,9 @@ def check_ma_stop(pos: Position, ma_value: float) -> str:
     return ""
 
 
-def should_stop_loss(price: float, avg_cost: float, stop_loss: float,
-                     tighten: float = 1.0) -> tuple:
+def should_stop_loss(
+    price: float, avg_cost: float, stop_loss: float, tighten: float = 1.0
+) -> tuple:
     """止损检查（纯函数，不依赖 Position）。
     返回 (触发: bool, 有效止损价: float)。
     tighten < 1 表示收紧止损（大盘/板块弱时）。

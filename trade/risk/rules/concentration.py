@@ -1,6 +1,6 @@
 """集中度控制"""
 
-from trade.paper.portfolio import Portfolio
+from trade.exec.paper.portfolio import Portfolio
 
 
 def check_concentration(
@@ -15,7 +15,9 @@ def check_concentration(
     # 计算加仓后的总占比（已有持仓 + 本次买入）
     current_pct = 0.0
     if stock_code in portfolio.positions:
-        current_pct = portfolio.positions[stock_code].market_value / max(portfolio.total_value, 1)
+        current_pct = portfolio.positions[stock_code].market_value / max(
+            portfolio.total_value, 1
+        )
 
     new_total_pct = current_pct + target_pct
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from trade.execution.manual import ManualExecutor
+from trade.exec.real.manual import ManualExecutor
 
 
 class TestParseReply:

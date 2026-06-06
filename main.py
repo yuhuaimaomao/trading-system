@@ -33,7 +33,7 @@ def cmd_review():
     """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送，成功后自动跑策略管线"""
     import sys
 
-    from analysis.review.service import ReviewService
+    from review.review_service import ReviewService
 
     analyze_only = "--analyze-only" in sys.argv
 
@@ -45,9 +45,9 @@ def cmd_review():
 
 def cmd_morning():
     """盘前简报：隔夜宏观 + 候选池确认 + 推送"""
-    from analysis.morning import MorningBrief
-    from system.utils.logger import get_task_logger, set_current_task
+    from strategy.morning import MorningBrief
     from system.message import MessageSender
+    from system.utils.logger import get_task_logger, set_current_task
 
     set_current_task("morning")
     logger = get_task_logger("morning")
@@ -83,10 +83,10 @@ def cmd_monitor():
     _sys.stdout = _monitor_fh
     _sys.stderr = _monitor_fh
 
-    from data.live.quotes import QuoteClient
-    from system.utils.logger import get_task_logger, set_current_task
+    from data.collect.live.quotes import QuoteClient
     from system.message import MessageSender
-    from trade.monitor.watcher import Watcher
+    from system.utils.logger import get_task_logger, set_current_task
+    from trade.core.watcher import Watcher
 
     set_current_task("monitor")
     logger = get_task_logger("monitor")
@@ -181,93 +181,93 @@ def cmd_collect():
         # Market (行情)
         (
             "stock_basic",
-            "data.collectors.market.stock_basic_collector",
+            "data.collect.market.stock_basic_collector",
             "StockBasicCollector",
             "market",
         ),
         (
             "main_index",
-            "data.collectors.market.main_index_collector",
+            "data.collect.market.main_index_collector",
             "MainIndexCollector",
             "market",
         ),
         (
             "industry_board",
-            "data.collectors.market.industry_board_collector",
+            "data.collect.market.industry_board_collector",
             "IndustryBoardCollector",
             "market",
         ),
         (
             "concept_board",
-            "data.collectors.market.concept_board_collector",
+            "data.collect.market.concept_board_collector",
             "ConceptBoardCollector",
             "market",
         ),
         (
             "sector_stocks",
-            "data.collectors.market.sector_stocks_collector",
+            "data.collect.market.sector_stocks_collector",
             "SectorStocksCollector",
             "market",
         ),
         (
             "suspend_resume",
-            "data.collectors.market.suspend_resume_collector",
+            "data.collect.market.suspend_resume_collector",
             "SuspendResumeCollector",
             "market",
         ),
         # News (盘中电报)
         (
             "telegraph",
-            "data.collectors.events.telegraph_collector",
+            "data.collect.events.telegraph_collector",
             "TelegraphCollector",
             "news",
         ),
         # Events (事件)
         (
             "cls_digest",
-            "data.collectors.events.cls_digest_collector",
+            "data.collect.events.cls_digest_collector",
             "CLSDigestCollector",
             "events",
         ),
-        ("lhb", "data.collectors.events.lhb_collector", "LHBCollector", "events"),
+        ("lhb", "data.collect.events.lhb_collector", "LHBCollector", "events"),
         (
             "limit_pool",
-            "data.collectors.events.limit_pool_collector",
+            "data.collect.events.limit_pool_collector",
             "LimitPoolCollector",
             "events",
         ),
         (
             "strong_stock",
-            "data.collectors.events.strong_stock_collector",
+            "data.collect.events.strong_stock_collector",
             "StrongStockCollector",
             "events",
         ),
         (
             "regulatory",
-            "data.collectors.events.regulatory_letter_collector",
+            "data.collect.events.regulatory_letter_collector",
             "RegulatoryLetterCollector",
             "events",
         ),
         (
             "stock_monitor",
-            "data.collectors.events.stock_monitor_collector",
+            "data.collect.events.stock_monitor_collector",
             "StockMonitorCollector",
             "events",
         ),
         (
             "shareholder",
-            "data.collectors.events.share_holder_change_collector",
+            "data.collect.events.share_holder_change_collector",
             "ShareHolderChangeCollector",
             "events",
         ),
         (
             "notice",
-            "data.collectors.events.notice_collector",
+            "data.collect.events.notice_collector",
             "NoticeCollector",
             "events",
         ),
         # Macro (宏观)
-        ("macro", "data.collectors.macro.macro_collector", "MacroCollector", "macro"),
+        ("macro", "data.collect.macro.macro_collector", "MacroCollector", "macro"),
     ]
 
     if module_filter:
@@ -302,7 +302,7 @@ def cmd_cleanup():
 
 def cmd_portfolio():
     """持仓查询"""
-    from trade.paper.portfolio import Portfolio
+    from trade.exec.paper.portfolio import Portfolio
 
     p = Portfolio()
     print(
@@ -314,9 +314,9 @@ def cmd_strategy():
     """盘前管线：趋势筛选 → AI 分析 → 信号入库"""
     import re
 
-    from analysis.strategy import StrategyPipeline
-    from system.utils.logger import get_task_logger, set_current_task
+    from strategy.strategy_pipeline import StrategyPipeline
     from system.message import MessageSender
+    from system.utils.logger import get_task_logger, set_current_task
 
     set_current_task("strategy")
     logger = get_task_logger("strategy")
@@ -342,9 +342,9 @@ def cmd_compare():
     """收盘后双线比对：实盘 vs 模拟盘成交"""
     from datetime import datetime
 
-    from system.utils.logger import get_task_logger, set_current_task
     from system.message import MessageSender
-    from trade.execution.comparator import OrderComparator
+    from system.utils.logger import get_task_logger, set_current_task
+    from trade.exec.real.comparator import OrderComparator
 
     set_current_task("compare")
     logger = get_task_logger("compare")
@@ -368,7 +368,7 @@ def cmd_trade():
     print("[trade] 用法: python main.py trade --text '模拟盘 000001 1000股 12.50'")
     import sys
 
-    from trade.execution.manual import ManualExecutor
+    from trade.exec.real.manual import ManualExecutor
 
     if "--text" in sys.argv:
         idx = sys.argv.index("--text")
@@ -384,7 +384,7 @@ def cmd_track():
     """股票追踪：更新当日行情 + 次日表现 + 统计"""
     from datetime import datetime, timedelta
 
-    from analysis.tracker import StockTracker
+    from review.tracker import StockTracker
     from system.utils.logger import get_task_logger, set_current_task
 
     set_current_task("track")
@@ -409,9 +409,9 @@ def cmd_listen():
     """
     import time
 
-    from system.utils.logger import get_task_logger, set_current_task
     from system.message import MessageReceiver, MessageSender
-    from trade.execution.manual import ManualExecutor
+    from system.utils.logger import get_task_logger, set_current_task
+    from trade.exec.real.manual import ManualExecutor
 
     set_current_task("listen")
     logger = get_task_logger("listen")
@@ -462,7 +462,7 @@ def cmd_qmt_collect():
     import sys as _sys
     from datetime import datetime as _dt
 
-    from data.live.qmt_collector import QMTCollector
+    from data.collect.live.qmt_collector import QMTCollector
     from system.config.settings import PROJECT_ROOT
     from system.utils.logger import get_task_logger, set_current_task
 
@@ -499,152 +499,70 @@ def cmd_qmt_collect():
 
 
 def cmd_strategy_audit():
-    """选股审计：规则审计 + AI 审计 + 生成改进建议"""
+    """选股审计：统一管线。"""
     import sys
     from datetime import datetime, timedelta
 
-    from analysis.audit.ai_auditor import AIAuditor
-    from analysis.audit.improvement_applier import ImprovementApplier
-    from analysis.audit.rule_auditor import RuleAuditor
-    from system.utils.logger import get_task_logger, set_current_task
-    from system.message import MessageSender
+    from audit import AuditPipeline, apply_improvement, list_pending
+    from audit.strategy_ai_auditor import AIAuditor as SAI
+    from audit.strategy_rule_auditor import RuleAuditor as SRule
+    from data.repo import TradeRepository
 
-    set_current_task("strategy_audit")
-    logger = get_task_logger("strategy_audit")
-
-    push_date = None
+    repo = TradeRepository()
     args = [a for a in sys.argv[2:] if not a.startswith("--")]
-    if args and not args[0].startswith("-"):
-        push_date = args[0]
+    push_date = args[0] if args and not args[0].startswith("-") else None
     if not push_date:
         push_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if "--apply" in sys.argv:
         idx = sys.argv.index("--apply")
         if idx + 1 < len(sys.argv):
-            imp_id = int(sys.argv[idx + 1])
-            applier = ImprovementApplier()
-            ok = applier.apply(imp_id)
-            logger.info(f"改进 #{imp_id} 应用{'成功' if ok else '失败或需人工审核'}")
-            print(f"改进 #{imp_id} 应用{'成功' if ok else '失败或需人工审核'}")
-            return
-
+            print(apply_improvement(repo, int(sys.argv[idx + 1])))
+        return
     if "--list" in sys.argv:
-        applier = ImprovementApplier()
-        pending = applier.list_pending()
-        if not pending:
-            print("无待处理改进")
-        else:
-            for imp in pending:
-                print(
-                    f"  #{imp['id']} [{imp['improvement_type']}] "
-                    f"{imp.get('target_module', '')} — {imp['suggested_change'][:80]}"
-                )
+        for imp in list_pending(repo):
+            print(
+                f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
+            )
         return
 
-    logger.info(f"开始规则审计 push_date={push_date}")
-    rule_auditor = RuleAuditor()
-    rule_findings = rule_auditor.audit(push_date)
-    logger.info(f"规则审计: {len(rule_findings)} 条发现")
-
-    logger.info("开始 AI 审计")
-    ai_auditor = AIAuditor()
-    result = ai_auditor.audit(push_date, rule_findings)
-
-    bias_count = len(result.get("bias_findings", []))
-    omission_count = len(result.get("omission_findings", []))
-    improvement_count = len(result.get("improvements", []))
-    logger.info(
-        f"AI 审计完成: {bias_count} 偏见, {omission_count} 遗漏, {improvement_count} 改进"
+    pipeline = AuditPipeline("strategy", SRule(), SAI(), repo=repo)
+    result = pipeline.run(push_date)
+    print(
+        f"  规则发现: {len(result['findings'])} 条  改进建议: {len(result['improvements'])} 条"
     )
-
-    from system.config.settings import (
-        TELEGRAM_REPORT_BOT_TOKEN,
-        TELEGRAM_REPORT_CHAT_ID,
-    )
-
-    if TELEGRAM_REPORT_CHAT_ID and (rule_findings or result.get("improvements")):
-        try:
-            sender = MessageSender(
-                chat_id=TELEGRAM_REPORT_CHAT_ID,
-                bot_token=TELEGRAM_REPORT_BOT_TOKEN,
-            )
-            lines = [f"🔍 选股审计 {push_date}", ""]
-            lines.append(f"📊 规则发现: {len(rule_findings)} 条")
-            for f in rule_findings:
-                sev = f.get("severity", "P2")
-                if sev in ("P0", "P1"):
-                    lines.append(
-                        f"  [{sev}] {f.get('type', '')}: {f.get('evidence', '')[:80]}"
-                    )
-
-            if result.get("bias_findings"):
-                lines.append("")
-                lines.append("🧠 偏见发现:")
-                for b in result["bias_findings"]:
-                    sev = b.get("severity", "P2")
-                    lines.append(
-                        f"  [{sev}] {b.get('bias_type', '')}: {b.get('pattern', '')[:80]}"
-                    )
-
-            if result.get("omission_findings"):
-                lines.append("")
-                lines.append("👁️ 遗漏发现:")
-                for o in result["omission_findings"]:
-                    lines.append(
-                        f"  {o.get('signal_type', '')}: {o.get('impact', '')[:80]}"
-                    )
-
-            if result.get("improvements"):
-                lines.append("")
-                lines.append("🔧 改进建议:")
-                for i, imp in enumerate(result["improvements"], 1):
-                    lines.append(
-                        f"  #{i} [{imp.get('type', '')}] {imp.get('target', '')}"
-                    )
-                    lines.append(f"     {imp.get('suggested_change', '')[:100]}")
-                lines.append("")
-                lines.append("💡 回复「strategy-audit --apply N」应用改进")
-            sender.send("\n".join(lines))
-            logger.info("审计结果已推送 Telegram")
-        except Exception as e:
-            logger.warning(f"审计结果推送失败: {e}")
-
-    print(f"\n📊 选股审计 {push_date}")
-    print(f"  规则发现: {len(rule_findings)} 条")
-    print(f"  偏见发现: {bias_count} 条")
-    print(f"  遗漏发现: {omission_count} 条")
-    print(f"  改进建议: {improvement_count} 条")
 
 
 def cmd_audit():
-    """收盘后盯盘自审计：规则审计 + AI 审计 + 改进建议推送"""
+    """审计：规则审计 + AI 审计 + 改进建议推送。用法: python main.py audit [--domain watcher|strategy] [--rule-only|--ai-only] [--apply N|--list]"""
     import sys
     from datetime import datetime
 
     if "--help" in sys.argv:
         print("用法: python main.py audit [选项]")
+        print("  --domain X    审计域: watcher(默认)/strategy")
         print("  --rule-only   仅规则审计")
-        print("  --ai-only     仅 AI 审计（需已有 audit_findings）")
-        print("  --apply N     应用第 N 条改进建议")
-        print("  --list        列出待处理的改进建议")
+        print("  --ai-only     仅 AI 审计")
+        print("  --apply N     应用第 N 条改进")
+        print("  --list        列出待处理改进")
         return
 
+    from audit import AuditPipeline, apply_improvement, list_pending
     from data.repo import TradeRepository
-    from system.config.settings import TELEGRAM_REPORT_CHAT_ID
 
     repo = TradeRepository()
     trade_date = datetime.now().strftime("%Y-%m-%d")
+    domain = "watcher"
+    for i, a in enumerate(sys.argv):
+        if a == "--domain" and i + 1 < len(sys.argv):
+            domain = sys.argv[i + 1]
 
     if "--list" in sys.argv:
-        imps = repo.get_pending_watcher_improvements()
-        if imps:
-            print(f"待处理改进建议 ({len(imps)} 条):")
-            for imp in imps:
-                print(
-                    f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
-                )
-        else:
+        for imp in list_pending(repo):
+            print(
+                f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
+            )
+        if not list_pending(repo):
             print("无待处理改进建议")
         return
 
@@ -652,58 +570,27 @@ def cmd_audit():
     for i, arg in enumerate(sys.argv):
         if arg == "--apply" and i + 1 < len(sys.argv):
             apply_idx = int(sys.argv[i + 1])
-            break
-
     if apply_idx:
-        from trade.monitor.audit.watcher_improvement import ImprovementApplier
-
-        applier = ImprovementApplier(repo)
-        result = applier.apply(apply_idx)
-        print(result)
-        try:
-            from system.message import MessageSender
-
-            MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(result)
-        except Exception:
-            pass
+        print(apply_improvement(repo, apply_idx))
         return
 
     rule_only = "--rule-only" in sys.argv
     ai_only = "--ai-only" in sys.argv
 
-    if not ai_only:
-        from trade.monitor.audit.watcher_rule_auditor import RuleAuditor
+    if domain == "strategy":
+        from audit.strategy_ai_auditor import AIAuditor as SAI
+        from audit.strategy_rule_auditor import RuleAuditor as SRule
 
-        print(f"规则审计 {trade_date} ...")
-        rule = RuleAuditor(repo=repo)
-        n = len(rule.run_and_save(trade_date))
-        print(f"  完成: {n} 条发现")
+        pipeline = AuditPipeline("strategy", SRule(), SAI(), repo=repo)
+    else:
+        from audit.watcher_ai_auditor import AIAuditor as WAI
+        from audit.watcher_rule_auditor import RuleAuditor as WRule
 
-    if not rule_only:
-        from trade.monitor.audit.watcher_ai_auditor import AIAuditor
+        pipeline = AuditPipeline("watcher", WRule(repo=repo), WAI(repo=repo), repo=repo)
 
-        print(f"AI 审计 {trade_date} ...")
-        ai = AIAuditor(repo=repo)
-        result = ai.run_and_save(trade_date)
-        if result:
-            n_imps = len(result.get("improvements", []))
-            print(f"  完成: {n_imps} 条改进建议")
-            imps = repo.get_pending_watcher_improvements()
-            for imp in imps[-3:]:
-                from trade.monitor.audit.watcher_improvement import (
-                    format_improvement_card,
-                )
-
-                card = format_improvement_card(imp)
-                print(card)
-                try:
-                    from system.message import MessageSender
-
-                    MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(card)
-                except Exception:
-                    pass
-        else:
-            print("  AI 审计无输出")
+    result = pipeline.run(trade_date, rule_only=rule_only, ai_only=ai_only)
+    print(f"  规则发现: {len(result['findings'])} 条")
+    print(f"  改进建议: {len(result['improvements'])} 条")
 
 
 def cmd_verify_predictions():
@@ -711,10 +598,10 @@ def cmd_verify_predictions():
     import sys
     from datetime import datetime
 
-    from analysis.review.prediction_verifier import PredictionVerifier
+    from review.prediction_verifier import PredictionVerifier
     from system.config.trading_calendar import get_previous_trading_day
-    from system.utils.logger import get_task_logger, set_current_task
     from system.message import MessageSender
+    from system.utils.logger import get_task_logger, set_current_task
 
     set_current_task("verify_predictions")
     logger = get_task_logger("verify_predictions")
@@ -790,7 +677,7 @@ def cmd_stock():
         print("用法: python main.py stock <股票代码> [--quick|--deep]")
         sys.exit(1)
 
-    from analysis.stock import StockAnalyzer
+    from stock import StockAnalyzer
 
     analyzer = StockAnalyzer()
     mode = "quick" if "--deep" not in sys.argv else "deep"

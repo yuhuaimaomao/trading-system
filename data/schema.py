@@ -31,6 +31,7 @@ def ensure_tables():
             reason TEXT,
             status TEXT DEFAULT 'pending',
             executed_at TEXT,
+            account TEXT DEFAULT 'real',
             UNIQUE(trade_date, stock_code, account)
         );
 
@@ -325,6 +326,19 @@ def ensure_tables():
             occurrence_count INTEGER DEFAULT 1,
             first_date DATE NOT NULL,
             last_date DATE NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(lesson_type, lesson_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS review_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lesson_type TEXT NOT NULL,
+            lesson_key TEXT NOT NULL,
+            lesson_content TEXT NOT NULL,
+            occurrence_count INTEGER DEFAULT 1,
+            first_date TEXT NOT NULL,
+            last_date TEXT NOT NULL,
             is_active INTEGER DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(lesson_type, lesson_key)

@@ -34,11 +34,22 @@ DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
-# ===== AI 模型统一配置 =====
-# 全局默认模型，所有 AI 调用（复盘/早报/审计/电报/盯盘）都从此处取。
-# .env 中设置 AI_MODEL，例: AI_MODEL=deepseek-v4-pro
-# 默认值由环境变量强控，不设默认模型名——未配置则启动报错。
+# ===== AI 模型多业务配置 =====
+# 每个业务可独立设模型，不设则用 AI_MODEL
+# .env 示例: AI_MODEL=deepseek-v4-pro  AI_MODEL_REVIEW=qwen3.6-plus
 AI_MODEL = os.environ.get("AI_MODEL", "")
+AI_MODEL_DEFAULT = os.environ.get("AI_MODEL_DEFAULT", AI_MODEL)
+AI_MODEL_REVIEW = os.environ.get("AI_MODEL_REVIEW", "")  # 复盘报告
+AI_MODEL_SCREENING = os.environ.get("AI_MODEL_SCREENING", "")  # 趋势筛选
+AI_MODEL_MORNING = os.environ.get("AI_MODEL_MORNING", "")  # 早盘简报
+AI_MODEL_WATCHER = os.environ.get("AI_MODEL_WATCHER", "")  # 盯盘通用
+AI_MODEL_WATCHER_CHASE = os.environ.get("AI_MODEL_WATCHER_CHASE", "")  # 追高二判
+AI_MODEL_WATCHER_SWAP = os.environ.get("AI_MODEL_WATCHER_SWAP", "")  # 换仓评估
+AI_MODEL_WATCHER_INDEX = os.environ.get("AI_MODEL_WATCHER_INDEX", "")  # 指数波动
+AI_MODEL_WATCHER_TRAPPED = os.environ.get("AI_MODEL_WATCHER_TRAPPED", "")  # 被套离场
+AI_MODEL_AUDIT = os.environ.get("AI_MODEL_AUDIT", "")  # 审计
+# 向后兼容
+AI_MODEL_STRATEGY = os.environ.get("AI_MODEL_STRATEGY", AI_MODEL_SCREENING)
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
 
 # Provider 端点

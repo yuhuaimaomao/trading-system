@@ -793,6 +793,41 @@ class SectorReader:
         return result
 
     @staticmethod
+    def get_sector_stats(conn, trade_date: str) -> dict | None:
+        """查询行业板块统计数据。"""
+        rows = conn.execute(
+            """SELECT sector_name as name, change_percent as change,
+                      up_count, main_force_net, super_large_net
+               FROM sector_industry WHERE trade_date = ?""",
+            (trade_date,),
+        ).fetchall()
+        if not rows:
+            return None
+        return {row["name"]: dict(row) for row in rows}
+
+    @staticmethod
+    def get_sector_change(conn, sector_code: str, trade_date: str) -> float | None:
+        """查询板块涨跌幅。"""
+        row = conn.execute(
+            "SELECT change_percent FROM sector_industry WHERE sector_code=? AND trade_date=?",
+            (sector_code, trade_date),
+        ).fetchone()
+        return row["change_percent"] if row else None
+
+    @staticmethod
+    def get_concept_stats(conn, trade_date: str) -> dict | None:
+        """查询概念板块统计数据。"""
+        rows = conn.execute(
+            """SELECT sector_name as name, change_percent as change,
+                      up_count, main_force_net, super_large_net
+               FROM sector_concept WHERE trade_date = ?""",
+            (trade_date,),
+        ).fetchall()
+        if not rows:
+            return None
+        return {row["name"]: dict(row) for row in rows}
+
+    @staticmethod
     def _calc_sector_ma(
         conn, trade_date: str, sector_codes: list, sector_table: str
     ) -> dict:

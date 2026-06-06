@@ -35,18 +35,33 @@ repos:
     hooks:
       - id: no-magic-numbers
         name: 禁止魔法数字（仅检查变更行）
-        entry: python scripts/pre_commit/check_magic_numbers.py
+        entry: python ops/pre_commit/check_magic_numbers.py
         language: python
-        files: '^(analysis|trade|system|data)/.*\.py$'
+        files: '^(strategy|trade|review|audit|stock|data|system)/.*\.py$'
         pass_filenames: true
         additional_dependencies: []
 
       - id: no-hardcoded-config
         name: 禁止新增配置硬编码
-        entry: python scripts/pre_commit/check_hardcoded_config.py
+        entry: python ops/pre_commit/check_hardcoded_config.py
         language: python
-        files: '^(analysis|trade|system|data)/.*\.py$'
+        files: '^(strategy|trade|review|audit|stock|data|system)/.*\.py$'
         pass_filenames: true
+
+  # ══════════════════════════════════════════════
+  # 第2.5级: 测试检查 — 运行快速测试
+  # ══════════════════════════════════════════════
+
+  - repo: local
+    hooks:
+      - id: pytest-quick
+        name: 快速测试检查
+        entry: python -m pytest tests/ -m "not e2e and not qmt and not slow" --tb=short -x --no-header -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        # 通过 pip install pytest pytest-cov pytest-timeout 安装依赖
+        # 跳过: SKIP=pytest-quick git commit (紧急情况)
 
   # ══════════════════════════════════════════════
   # 第3级: 架构规则 — 仅新文件 ★现在生效★
@@ -56,13 +71,20 @@ repos:
     hooks:
       - id: file-size-new
         name: 新文件不超过 400 行
-        entry: python scripts/pre_commit/check_file_size_new.py
+        entry: python ops/pre_commit/check_file_size_new.py
         language: python
         pass_filenames: true
 
       - id: domain-purity-new
         name: 新文件禁止 domain 依赖 IO
-        entry: python scripts/pre_commit/check_domain_purity_new.py
+        entry: python ops/pre_commit/check_domain_purity_new.py
         language: python
-        files: '^(analysis|trade|system|data)/.*\.py$'
+        files: '^(strategy|trade|review|audit|stock|data|system)/.*\.py$'
+        pass_filenames: true
+
+      - id: naming-conventions
+        name: 命名规范检查（全量，snake_case/PascalCase/UPPER_SNAKE）
+        entry: python ops/pre_commit/check_naming_conventions.py
+        language: python
+        files: '\.py$'
         pass_filenames: true

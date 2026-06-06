@@ -1,8 +1,8 @@
 """trade/scenario/ 模块测试"""
 
-from trade.monitor.state import MicroSignals
+from trade.core.scan_state import MicroSignals
+from trade.scenario.scenario_defs import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 from trade.scenario.scenario_engine import ScenarioEngine
-from trade.scenario.definitions import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 
 class TestScenarioEngine:
@@ -21,8 +21,10 @@ class TestScenarioEngine:
     def test_update_bearish(self):
         engine = ScenarioEngine()
         micro = MicroSignals(
-            price_velocity=-0.05, price_accel=-0.03,
-            ema12_pos="below", breadth_trend="deteriorating",
+            price_velocity=-0.05,
+            price_accel=-0.03,
+            ema12_pos="below",
+            breadth_trend="deteriorating",
             lower_highs=True,
         )
         outlook = engine.update(micro)
@@ -32,9 +34,12 @@ class TestScenarioEngine:
     def test_update_bullish(self):
         engine = ScenarioEngine()
         micro = MicroSignals(
-            price_velocity=0.05, price_accel=0.01,
-            ema12_pos="above", breadth_trend="improving",
-            higher_lows=True, higher_highs=True,
+            price_velocity=0.05,
+            price_accel=0.01,
+            ema12_pos="above",
+            breadth_trend="improving",
+            higher_lows=True,
+            higher_highs=True,
         )
         outlook = engine.update(micro)
         assert outlook.bias in ("bullish", "neutral")

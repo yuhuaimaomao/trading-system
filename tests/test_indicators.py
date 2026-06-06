@@ -1,6 +1,6 @@
 """analysis/indicators.py 纯函数测试"""
 
-from analysis.indicators import (
+from stock.indicators import (
     calc_atr,
     calc_bollinger,
     calc_kdj,
@@ -19,8 +19,24 @@ from analysis.indicators import (
 class TestRSI:
     def test_normal(self):
         # 带波动的上涨：有涨有跌
-        prices = [10.0, 10.2, 9.9, 10.3, 10.1, 10.5, 10.2, 10.6, 10.3, 10.8,
-                  10.5, 10.9, 10.6, 11.0, 10.8, 11.2]
+        prices = [
+            10.0,
+            10.2,
+            9.9,
+            10.3,
+            10.1,
+            10.5,
+            10.2,
+            10.6,
+            10.3,
+            10.8,
+            10.5,
+            10.9,
+            10.6,
+            11.0,
+            10.8,
+            11.2,
+        ]
         rsi = calc_rsi(prices, 14)
         assert 40 < rsi < 80
 

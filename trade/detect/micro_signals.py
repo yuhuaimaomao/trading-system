@@ -3,8 +3,8 @@
 纯计算函数，不依赖 Watcher state。
 """
 
-from analysis.indicators import calc_rsi
-from trade.monitor.state import MicroSignals
+from stock.indicators import calc_rsi
+from trade.core.scan_state import MicroSignals
 
 
 def extract(
@@ -95,9 +95,13 @@ def extract(
     bounce_quality = ""
     if bounce_pct > 0 and len(px) >= 5:
         recent_5 = px[-5:]
-        up_count = sum(1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i - 1])
+        up_count = sum(
+            1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i - 1]
+        )
         day_open = px[0] if len(px) > 30 else hi
-        day_direction_up = (cur - day_open) / day_open > 0.001 if day_open > 0 else False
+        day_direction_up = (
+            (cur - day_open) / day_open > 0.001 if day_open > 0 else False
+        )
         if up_count >= 4 and bounce_pct > 0.3:
             bounce_quality = "strong"
         elif up_count >= 3 and not day_direction_up:
@@ -133,7 +137,9 @@ def extract(
                     rsi_signal = "overbought"
                 if len(closes) >= 20:
                     prev_closes = closes[:-5]
-                    prev_rsi = calc_rsi(prev_closes, 6) if len(prev_closes) >= 14 else 50
+                    prev_rsi = (
+                        calc_rsi(prev_closes, 6) if len(prev_closes) >= 14 else 50
+                    )
                     if closes[-1] < prev_closes[-1] and rsi6 > prev_rsi:
                         rsi_signal = "divergence_up"
                     elif closes[-1] > prev_closes[-1] and rsi6 < prev_rsi:
@@ -163,16 +169,24 @@ def extract(
     testing_resistance = any(abs(cur - r) / r < 0.003 for r in resistance)
 
     return MicroSignals(
-        price_velocity=velocity, price_accel=accel,
-        ema12_pos=ema12_pos, ema12_just_crossed=ema12_crossed,
-        vol_pulse=vol_pulse, vol_price_confirm=vol_confirm,
-        breadth_pct=breadth_pct, breadth_trend=breadth_trend,
+        price_velocity=velocity,
+        price_accel=accel,
+        ema12_pos=ema12_pos,
+        ema12_just_crossed=ema12_crossed,
+        vol_pulse=vol_pulse,
+        vol_price_confirm=vol_confirm,
+        breadth_pct=breadth_pct,
+        breadth_trend=breadth_trend,
         higher_highs=higher_highs,
-        bounce_from_low=bounce_pct, bounce_quality=bounce_quality,
-        lower_highs=lower_highs, higher_lows=higher_lows,
+        bounce_from_low=bounce_pct,
+        bounce_quality=bounce_quality,
+        lower_highs=lower_highs,
+        higher_lows=higher_lows,
         rsi_signal=rsi_signal,
-        testing_support=testing_support, testing_resistance=testing_resistance,
-        range_expanding=range_expanding, range_contracting=range_contracting,
+        testing_support=testing_support,
+        testing_resistance=testing_resistance,
+        range_expanding=range_expanding,
+        range_contracting=range_contracting,
     )
 
 

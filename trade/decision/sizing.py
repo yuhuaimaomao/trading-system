@@ -14,15 +14,25 @@ def calculate_position_size(
 ) -> tuple[int, str]:
     """根据盘面动态计算买入金额（0-16000），返回 (金额, 决策理由)。"""
     BLOCKED = (
-        "panic", "one_sided", "dead_cat", "inverted_v",
-        "m_top", "gap_up_fade", "late_dump", "fishing_line",
+        "panic",
+        "one_sided",
+        "dead_cat",
+        "inverted_v",
+        "m_top",
+        "gap_up_fade",
+        "late_dump",
+        "fishing_line",
     )
     if pattern in BLOCKED:
         return 0, f"市场{pattern}模式，暂停买入"
 
     CAUTIOUS = (
-        "v_reversal", "w_bottom", "melt_up", "late_rally",
-        "wide_choppy", "gap_down_recover",
+        "v_reversal",
+        "w_bottom",
+        "melt_up",
+        "late_rally",
+        "wide_choppy",
+        "gap_down_recover",
     )
     if pattern in CAUTIOUS:
         base = 8000
@@ -85,8 +95,12 @@ def calculate_position_size(
 
 
 def calc_dynamic_buy_zone(
-    code: str, price: float, buy_min: float, buy_max: float,
-    trend: str = "", market_adjustment: dict | None = None,
+    code: str,
+    price: float,
+    buy_min: float,
+    buy_max: float,
+    trend: str = "",
+    market_adjustment: dict | None = None,
 ) -> tuple[float, float, str]:
     """动态买入区修正：市场偏空+板块弱 → 买入区整体下移。返回 (new_min, new_max, reason)。"""
     if not market_adjustment:
@@ -105,3 +119,104 @@ def calc_dynamic_buy_zone(
         new_max = round(new_min + zone_width * 0.5, 2)
 
     return new_min, new_max, ""
+
+
+def calc_unified_stop_loss(
+    code: str,
+    price: float,
+    trend: str = "",
+    daily_indicators: dict | None = None,
+    strategy_type: str = "standard",
+) -> float:
+    """统一止损计算 — 所有买入来源共用。
+
+    策略:
+    1. ATR 动态宽度（默认 2x ATR，波动大的票给更宽的止损）
+    2. 策略类型修正：trend=趋势票放宽(1.2x)，chase=追高票收紧(0.8x)
+    3. 板块趋势修正：走强放宽(1.1x)，走弱收紧(0.85x)
+    4. 支撑位约束：止损不低于最近支撑下方 1%
+    5. 硬地板：不低于现价的 93%
+
+    Returns: 止损价（float，保留 2 位小数）
+    """
+    ind = daily_indicators or {}
+    # 1. ATR 宽度（默认 3% 如果无数据）
+    atr = ind.get("atr14", price * 0.03) if ind else price * 0.03
+    atr_pct = atr / price if price > 0 else 0.03
+
+    # 2. 策略类型修正
+    strategy_mult = {"trend": 1.2, "chase": 0.8}.get(strategy_type, 1.0)
+
+    # 3. 板块修正
+    sector_mult = 1.0
+    if "持续走强" in trend:
+        sector_mult = 1.1
+    elif "持续走弱" in trend:
+        sector_mult = 0.85
+    elif "走弱" in trend:
+        sector_mult = 0.92
+
+    # 4. 计算原始止损（2x ATR × 策略 × 板块）
+    raw_sl = price * (1 - atr_pct * 2 * strategy_mult * sector_mult)
+
+    # 5. 支撑位约束（从 indicators 获取）
+    supports = ind.get("_supports", []) if ind else []
+    if supports:
+        nearest_support = (
+            supports[0][0] if isinstance(supports[0], tuple) else supports[0]
+        )
+        raw_sl = max(raw_sl, nearest_support * 0.99)
+
+    # 6. 硬地板（不低于 93%）
+    sl = max(raw_sl, round(price * 0.93, 2))
+
+    return round(sl, 2)
+
+
+def calc_unified_take_profit(
+    code: str,
+    price: float,
+    trend: str = "",
+    daily_indicators: dict | None = None,
+    strategy_type: str = "standard",
+) -> float:
+    """统一止盈计算 — 所有买入来源共用。
+
+    策略:
+    1. ATR 动态宽度（默认 3x ATR）
+    2. 阻力位约束：止盈不高于最近阻力
+    3. 硬天花板：不高于现价的 112%
+
+    Returns: 止盈价（float，保留 2 位小数）
+    """
+    ind = daily_indicators or {}
+    atr = ind.get("atr14", price * 0.03) if ind else price * 0.03
+    atr_pct = atr / price if price > 0 else 0.03
+
+    # 策略类型修正
+    strategy_mult = {"trend": 1.3, "chase": 0.7}.get(strategy_type, 1.0)
+
+    # 板块修正
+    sector_mult = 1.0
+    if "持续走强" in trend:
+        sector_mult = 1.15
+    elif "走强" in trend:
+        sector_mult = 1.05
+    elif "持续走弱" in trend:
+        sector_mult = 0.85
+
+    # 原始止盈
+    raw_tp = price * (1 + atr_pct * 3 * strategy_mult * sector_mult)
+
+    # 阻力位约束
+    resistances = ind.get("_resistances", []) if ind else []
+    if resistances:
+        nearest_resistance = (
+            resistances[0][0] if isinstance(resistances[0], tuple) else resistances[0]
+        )
+        raw_tp = min(raw_tp, nearest_resistance)
+
+    # 硬天花板
+    tp = min(raw_tp, round(price * 1.12, 2))
+
+    return round(tp, 2)
