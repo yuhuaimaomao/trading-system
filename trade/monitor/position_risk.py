@@ -813,6 +813,7 @@ class PositionRiskMixin:
             bought_watch=self._bought_watch,
             signal_id=meta.get("signal_id"),
         )
+        if result["success"]:
             # 卖出冷却：防止同一轮或短期内重新买入
             recently_sold = getattr(self, "_recently_sold", {})
             recently_sold[code] = self._scan_count
