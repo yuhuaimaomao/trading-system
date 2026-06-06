@@ -241,6 +241,23 @@ class Watcher(
         # 健康检查告警指纹：{fingerprint: last_scan_count} 抑制重复告警
         self._health_alert_seen: dict[str, int] = {}
 
+        # 运行时动态状态（getattr 防御的对象 — 现在全部显式初始化）
+        self._breadth_block_alerted: bool = False
+        self._last_abnormal_alert: int = 0
+        self._last_index_alert_scan: int = 0
+        self._last_index_alert_advice: str = ""
+        self._last_logged_pattern: str = ""
+        self._last_resonance_labels: dict[str, str] = {}
+        self._pattern_last_alert: dict[str, int] = {}
+        self._prev_con_amounts: dict[str, float] = {}
+        self._prev_ind_amounts: dict[str, float] = {}
+        self._regime_confirm_count: int = 0
+        self._regime_pending_pattern: str = ""
+        self._regime_switch_times: list[float] = []
+        self._holding_batch: dict = {}
+        self._scenario_engine = None  # 惰性初始化，getattr 仍需检查 None
+        self._scenario_prev_outlook = None
+
     def build_state(self) -> ScanState:
         """构建当前运行时状态快照，传递给各领域模块。"""
         return ScanState(
