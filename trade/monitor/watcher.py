@@ -33,6 +33,7 @@ from trade.monitor.sector_resonance import (
     INDEX_VOLATILITY_THRESHOLD,
     SectorResonanceAnalyzer,
 )
+from trade.message import AlertRouter
 from trade.monitor.state import ScanState
 from trade.paper.account import PaperAccount
 from trade.risk.risk_engine import RiskEngine
@@ -76,6 +77,10 @@ class Watcher(
         self.telegram = telegram_bot
         self._private_telegram = None
         self._init_private_telegram()
+        self.alerter = AlertRouter(
+            group_bot=self.telegram,
+            private_bot=self._private_telegram,
+        )
         self.qmt = qmt_quote
         self.db_path = db_path or settings.DATABASE_PATH
         self.repo = TradeRepository(db_path=self.db_path)
@@ -494,6 +499,7 @@ class Watcher(
                 continue
 
             self._scan_count += 1
+            self.alerter.new_round(self._scan_count)
             logger.info(f"扫描 #{self._scan_count}")
             try:
                 self._scan()
@@ -2070,81 +2076,33 @@ class Watcher(
     def _should_throttle(
         self, code: str, price: float, cooldown_scans: int = 15
     ) -> bool:
-        """推送冷却：同票同价区间内抑制重复推送。返回 True 表示应跳过。"""
-        if code in self._push_cooldown:
-            last_scan, last_price = self._push_cooldown[code]
-            price_chg = abs(price - last_price) / last_price if last_price > 0 else 999
-            if self._scan_count - last_scan < cooldown_scans and price_chg < 0.02:
-                return True
-        self._push_cooldown[code] = (self._scan_count, price)
-        return False
+        """委托至 AlertRouter.is_cooling。"""
+        return self.alerter.is_cooling(code, cooldown_scans)
 
     def _alert(self, msg: str):
-        # ── 消息去重：同指纹 N 轮内不重复推送 ──
-        fp = self._alert_fingerprint(msg)
-        if fp:
-            last = self._alert_fingerprints.get(fp, -999)
-            cooldown = self._alert_cooldown(msg)
-            if self._scan_count - last < cooldown:
-                return  # 冷却中，跳过
-            self._alert_fingerprints[fp] = self._scan_count
-            # 定期清理过期指纹（每100轮）
-            if self._scan_count % 100 == 0:
-                stale = [
-                    k
-                    for k, v in self._alert_fingerprints.items()
-                    if self._scan_count - v > 200
-                ]
-                for k in stale:
-                    del self._alert_fingerprints[k]
-
-        if self.telegram:
-            try:
-                self.telegram.send(msg)
-            except Exception as e:
-                logger.error(f"Telegram推送失败: {e}")
-        logger.info(f"📤 Telegram: {msg}")
-
-    def _alert_fingerprint(self, msg: str) -> str:
-        """提取消息指纹：首行类型 + 股票代码（如有）"""
+        """委托至 AlertRouter。"""
         import re
 
+        # 提取指纹
         first_line = msg.split("\n")[0] if msg else ""
-        # 提取股票代码（6位数字）
         m = re.search(r"\b(\d{6})\b", first_line)
         if m:
-            # 股票相关消息：类型+代码去重（不同股票不互斥）
             prefix = re.sub(r"\d{6}", "XXXXXX", first_line)
-            return f"{prefix}:{m.group(1)}"
-        # 大盘/板块消息：首行前40字符作为指纹
-        return first_line[:40]
+            fp = f"{prefix}:{m.group(1)}"
+        else:
+            fp = first_line[:40]
 
-    def _alert_cooldown(self, msg: str) -> int:
-        """不同类型消息的冷却轮数（~15s/轮）"""
-        first_line = msg.split("\n")[0] if msg else ""
-        if "大盘偏弱" in first_line:
-            return 30  # 7.5分钟
-        if "暂停买入" in first_line:
-            return 20  # 5分钟
-        if "追高提醒" in first_line:
-            return 15  # 同只股票3.75分钟内不重复
-        if "暂不买入" in first_line or "暂缓买入" in first_line:
-            return 10
-        if "逼近涨停" in first_line:
-            return 12  # 3分钟
-        if "板块热度" in first_line or "板块急" in first_line:
-            return 20  # 5分钟
-        if "止损未触发" in first_line:
-            return 40  # 10分钟（健康检查已有自己的去重）
-        return 3  # 默认45秒
+        # 冷却轮数
+        if "大盘偏弱" in first_line: cd = 30
+        elif "暂停买入" in first_line: cd = 20
+        elif "追高提醒" in first_line: cd = 15
+        elif "暂不买入" in first_line or "暂缓买入" in first_line: cd = 10
+        elif "逼近涨停" in first_line: cd = 12
+        elif "板块热度" in first_line or "板块急" in first_line: cd = 20
+        elif "止损未触发" in first_line: cd = 40
+        else: cd = 3
+
+        self.alerter.alert(msg, fingerprint=fp, fingerprint_rounds=cd)
 
     def _alert_private(self, msg: str):
-        """推送消息到私聊（实盘交易信息）"""
-        if self._private_telegram:
-            try:
-                self._private_telegram.send(msg)
-            except Exception as e:
-                logger.error(f"私聊推送失败: {e}")
-            logger.info(f"📤 Telegram私聊: {msg}")
-        else:
-            self._alert(msg)  # fallback
+        self.alerter.send(msg, channel="private")

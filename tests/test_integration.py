@@ -33,8 +33,11 @@ class TestWatcher:
 
     def __init__(self):
         from trade.monitor.watcher import Watcher
+        from trade.message import AlertRouter
         # 拿真正的 MRO 但不真正初始化
         self.__class__ = Watcher  # 借用 MRO
+        self.alerter = AlertRouter()
+        self.alerter.new_round(0)
         # 核心状态
         self.paper_account = FakePaperAccount()
         self.db_path = ":memory:"
