@@ -29,7 +29,7 @@ LATE_SESSION = dt_time(14, 30)  # 尾盘起点
 
 
 from trade.monitor.state import MarketOutlook, MarketRegime, MarketScenario, MicroSignals
-from trade.scenario.signals import PROBABILITY_URGENCY, SCENARIO_SIGNALS
+from trade.scenario.definitions import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 # PATTERN_REGIME/PATTERN_ALERT/assess_regime 已移至 trade/decision/regime.py，方法内惰性导入
 
 

@@ -2,7 +2,7 @@
 
 from trade.monitor.state import MicroSignals
 from trade.scenario.engine import ScenarioEngine
-from trade.scenario.signals import PROBABILITY_URGENCY, SCENARIO_SIGNALS
+from trade.scenario.definitions import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 
 class TestScenarioEngine:

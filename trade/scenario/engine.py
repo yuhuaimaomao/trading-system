@@ -4,7 +4,7 @@
 """
 
 from trade.monitor.state import MarketOutlook, MarketScenario, MicroSignals
-from trade.scenario.signals import PROBABILITY_URGENCY, SCENARIO_SIGNALS
+from trade.scenario.definitions import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 
 class ScenarioEngine:
