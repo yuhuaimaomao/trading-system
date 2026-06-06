@@ -33,7 +33,7 @@ from trade.monitor.sector_resonance import (
     INDEX_VOLATILITY_THRESHOLD,
     SectorResonanceAnalyzer,
 )
-from trade.message import AlertRouter
+from system.message import AlertRouter
 from trade.monitor.state import ScanState
 from trade.paper.account import PaperAccount
 from trade.risk.risk_engine import RiskEngine
