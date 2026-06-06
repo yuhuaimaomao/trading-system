@@ -5,7 +5,7 @@
 """
 
 from trade.scenario.templates.breakout import BREAKOUT_TEMPLATE
-from trade.scenario.templates.schemas import PromptTemplate
+from trade.scenario.templates.prompt_model import PromptTemplate
 from trade.scenario.templates.trapped_exit import TRAPPED_EXIT_TEMPLATE
 
 # ── 模板注册表 ──

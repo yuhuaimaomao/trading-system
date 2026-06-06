@@ -4,7 +4,7 @@
 AI 角色：持仓风控分析师，综合考虑个股技术+板块+大盘+消息面。
 """
 
-from trade.scenario.templates.schemas import PromptTemplate
+from trade.scenario.templates.prompt_model import PromptTemplate
 
 TRAPPED_EXIT_TEMPLATE = PromptTemplate(
     scenario="trapped_exit",

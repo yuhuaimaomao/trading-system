@@ -654,7 +654,7 @@ def cmd_audit():
             break
 
     if apply_idx:
-        from trade.monitor.audit.improvement_applier import ImprovementApplier
+        from trade.monitor.audit.watcher_improvement import ImprovementApplier
 
         applier = ImprovementApplier(repo)
         result = applier.apply(apply_idx)
@@ -671,7 +671,7 @@ def cmd_audit():
     ai_only = "--ai-only" in sys.argv
 
     if not ai_only:
-        from trade.monitor.audit.rule_auditor import RuleAuditor
+        from trade.monitor.audit.watcher_rule_auditor import RuleAuditor
 
         print(f"规则审计 {trade_date} ...")
         rule = RuleAuditor(repo=repo)
@@ -679,7 +679,7 @@ def cmd_audit():
         print(f"  完成: {n} 条发现")
 
     if not rule_only:
-        from trade.monitor.audit.ai_auditor import AIAuditor
+        from trade.monitor.audit.watcher_ai_auditor import AIAuditor
 
         print(f"AI 审计 {trade_date} ...")
         ai = AIAuditor(repo=repo)
@@ -689,7 +689,7 @@ def cmd_audit():
             print(f"  完成: {n_imps} 条改进建议")
             imps = repo.get_pending_watcher_improvements()
             for imp in imps[-3:]:
-                from trade.monitor.audit.improvement_applier import (
+                from trade.monitor.audit.watcher_improvement import (
                     format_improvement_card,
                 )
 

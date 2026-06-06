@@ -35,7 +35,7 @@ from trade.monitor.sector_resonance import (
 )
 from trade.monitor.state import ScanState
 from trade.paper.account import PaperAccount
-from trade.risk.engine import RiskEngine
+from trade.risk.risk_engine import RiskEngine
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:

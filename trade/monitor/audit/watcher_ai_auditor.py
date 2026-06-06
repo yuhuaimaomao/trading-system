@@ -6,7 +6,7 @@ import re
 import sqlite3
 from datetime import datetime
 
-from trade.monitor.audit.prompts import WATCHER_AUDIT_SYSTEM, WATCHER_AUDIT_USER
+from trade.monitor.audit.watcher_prompts import WATCHER_AUDIT_SYSTEM, WATCHER_AUDIT_USER
 
 
 class AIAuditor:

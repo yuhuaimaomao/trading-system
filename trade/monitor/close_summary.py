@@ -177,14 +177,14 @@ class CloseSummaryMixin:
         try:
             logger.info("开始收盘审计...")
 
-            from trade.monitor.audit.rule_auditor import RuleAuditor
+            from trade.monitor.audit.watcher_rule_auditor import RuleAuditor
 
             rule = RuleAuditor(repo=self.repo)
             n_findings = len(rule.run_and_save(self._trade_date))
             logger.info(f"规则审计完成: {n_findings} 条发现")
 
             if n_findings > 0:
-                from trade.monitor.audit.ai_auditor import AIAuditor
+                from trade.monitor.audit.watcher_ai_auditor import AIAuditor
 
                 ai = AIAuditor(repo=self.repo)
                 result = ai.run_and_save(self._trade_date)
@@ -195,7 +195,7 @@ class CloseSummaryMixin:
 
                     imps = self.repo.get_pending_watcher_improvements()
                     if imps:
-                        from trade.monitor.audit.improvement_applier import (
+                        from trade.monitor.audit.watcher_improvement import (
                             format_improvement_card,
                         )
 

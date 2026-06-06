@@ -155,7 +155,7 @@ class TestWatcher:
     def _get_index_quote(self): return {"price": 3420, "pre_close": 3400}
     def _check_multi_day_downtrend(self): return False
     def _init_scenario_state(self):
-        from trade.scenario.engine import ScenarioEngine
+        from trade.scenario.scenario_engine import ScenarioEngine
         self._scenario_engine = ScenarioEngine()
         self._scenario_probs = self._scenario_engine.probs
         self._scenario_scan_count = self._scenario_engine.scan_count

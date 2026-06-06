@@ -507,7 +507,7 @@ class MarketStateMixin:
 
     def _init_scenario_state(self):
         """初始化情景引擎。"""
-        from trade.scenario.engine import ScenarioEngine
+        from trade.scenario.scenario_engine import ScenarioEngine
 
         self._scenario_engine = ScenarioEngine()
         self._scenario_prev_velocity: float = 0.0

@@ -362,7 +362,7 @@ def main():
     if AUDIT_ENABLED:
         try:
             from data.repo import TradeRepository
-            from trade.monitor.audit.rule_auditor import RuleAuditor
+            from trade.monitor.audit.watcher_rule_auditor import RuleAuditor
 
             repo = TradeRepository(db_path=DB)
             rule = RuleAuditor(repo=repo)
@@ -370,7 +370,7 @@ def main():
             print(f"  规则审计: {n} 条发现")
 
             if n > 0:
-                from trade.monitor.audit.ai_auditor import AIAuditor
+                from trade.monitor.audit.watcher_ai_auditor import AIAuditor
 
                 ai = AIAuditor(repo=repo)
                 result = ai.run_and_save(TODAY)

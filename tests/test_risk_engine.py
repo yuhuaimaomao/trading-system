@@ -2,7 +2,7 @@
 
 import pytest
 from trade.paper.portfolio import Portfolio, Position
-from trade.risk.engine import RiskEngine
+from trade.risk.risk_engine import RiskEngine
 from trade.risk.rules.stop_loss import check_stop_loss, check_time_stop
 from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop
 from trade.risk.rules.concentration import check_concentration

@@ -257,7 +257,7 @@ class TestScenarioEngineReplay:
     @pytest.mark.parametrize("trade_date", ["2026-06-03", "2026-06-04", "2026-06-05"])
     def test_scenario_engine_with_real_data(self, trade_date):
         """验证情景引擎多轮运行不崩溃、概率归一化。"""
-        from trade.scenario.engine import ScenarioEngine
+        from trade.scenario.scenario_engine import ScenarioEngine
         from trade.monitor.state import MicroSignals
 
         conn = _get_conn()
@@ -411,7 +411,7 @@ class TestEndToEndReplay:
     def test_multiday_consistency(self):
         """跨日验证：三天数据都能正常走通。"""
         from trade.detect.market_pattern import classify_market_pattern
-        from trade.scenario.engine import ScenarioEngine
+        from trade.scenario.scenario_engine import ScenarioEngine
         from trade.monitor.state import MicroSignals
 
         conn = _get_conn()
@@ -500,7 +500,7 @@ class TestEdgeCases:
 
     def test_scenario_engine_convergence(self):
         """连续相同信号 → 概率应收敛到主情景。"""
-        from trade.scenario.engine import ScenarioEngine
+        from trade.scenario.scenario_engine import ScenarioEngine
         from trade.monitor.state import MicroSignals
 
         engine = ScenarioEngine()

@@ -1,7 +1,7 @@
 """trade/scenario/ 模块测试"""
 
 from trade.monitor.state import MicroSignals
-from trade.scenario.engine import ScenarioEngine
+from trade.scenario.scenario_engine import ScenarioEngine
 from trade.scenario.definitions import PROBABILITY_URGENCY, SCENARIO_SIGNALS
 
 
