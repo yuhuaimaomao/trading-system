@@ -408,10 +408,14 @@ def _do_evaluate_swaps(
     sell_price = sell_price.current_price if sell_price else (buy_cand.get("price", 0))
     logger.info(f"换仓: 卖出 {sell_code} → 买入 {buy_code} {buy_cand.get('name', '')}")
 
-    result = self.paper_account.sell(sell_code, sell_price, f"主动换仓→{buy_code}")
-    if result.success:
-        self._pos_meta.pop(sell_code, None)
-    else:
+    from trade.paper.executor import execute_paper_sell
+    result = execute_paper_sell(
+        sell_code, "", sell_price, f"主动换仓→{buy_code}",
+        paper_account=self.paper_account,
+        pos_meta=self._pos_meta,
+        bought_watch=self._bought_watch,
+    )
+    if not result["success"]:
         return False
 
     price = buy_cand["price"]

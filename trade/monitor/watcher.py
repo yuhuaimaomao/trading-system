@@ -1861,17 +1861,16 @@ class Watcher(
         sell_pos = self.paper_account.positions.get(sell_code)
         sell_price = sell_pos.current_price if sell_pos else (buy_cand.get("price", 0))
 
+        from trade.paper.executor import execute_paper_sell
         sell_meta = self._pos_meta.get(sell_code, {})
-        sell_result = self.paper_account.sell(
-            sell_code,
-            sell_price,
-            f"AI异步换仓→{buy_code}",
+        result = execute_paper_sell(
+            sell_code, "", sell_price, f"AI异步换仓→{buy_code}",
+            paper_account=self.paper_account,
+            pos_meta=self._pos_meta,
+            bought_watch=self._bought_watch,
             signal_id=sell_meta.get("signal_id"),
         )
-        if sell_result.success:
-            self._pos_meta.pop(sell_code, None)
-            self._bought_watch.pop(sell_code, None)
-        else:
+        if not result["success"]:
             return
 
         price = buy_cand["price"]

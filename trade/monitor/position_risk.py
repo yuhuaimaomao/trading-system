@@ -54,12 +54,16 @@ class PositionRiskMixin:
                             blocked_t1.append(f"{code} {pos.stock_name}")
                             continue
                         price = prices.get(code) or pos.current_price
-                        result = pa.sell(
-                            code, price, f"日内熔断 (日亏损 {loss_ratio:.1%})"
+                        from trade.paper.executor import execute_paper_sell
+                        result = execute_paper_sell(
+                            code, pos.stock_name, price,
+                            f"日内熔断 (日亏损 {loss_ratio:.1%})",
+                            paper_account=pa,
+                            pos_meta=self._pos_meta,
+                            bought_watch=self._bought_watch,
                         )
-                        if result.success:
+                        if result["success"]:
                             closed.append(f"{code} {pos.stock_name}")
-                            self._pos_meta.pop(code, None)
                 msg = f"🚨 日内熔断: 日亏损 {loss_ratio:.1%}，已平仓: {', '.join(closed) if closed else '无'}"
                 if blocked_t1:
                     msg += f"\n🔒 T+1 锁定无法卖出: {', '.join(blocked_t1)}"
@@ -607,8 +611,14 @@ class PositionRiskMixin:
                 self._alert(msg)
 
                 # 模拟盘自动卖出
-                result = pa.sell(code, price, f"主动退出({tags})")
-                if result.success:
+                from trade.paper.executor import execute_paper_sell
+                result = execute_paper_sell(
+                    code, pos.stock_name, price, f"主动退出({tags})",
+                    paper_account=pa,
+                    pos_meta=self._pos_meta,
+                    bought_watch=self._bought_watch,
+                )
+                if result["success"]:
                     self._pos_meta.pop(code, None)
                     self._bought_watch.pop(code, None)
                     recently_sold = getattr(self, "_recently_sold", {})
@@ -843,16 +853,16 @@ class PositionRiskMixin:
                     self._alert(
                         f"🔓 跌停开板 — {code} {rem['name']}\n   现价: {cur_price:.2f}  自动执行卖出"
                     )
+                    from trade.paper.executor import execute_paper_sell
                     meta = self._pos_meta.get(code, {})
-                    result = self.paper_account.sell(
-                        code,
-                        cur_price,
-                        f"跌停开板({rem['type']})",
+                    result = execute_paper_sell(
+                        code, rem["name"], cur_price, f"跌停开板({rem['type']})",
+                        paper_account=self.paper_account,
+                        pos_meta=self._pos_meta,
+                        bought_watch=self._bought_watch,
                         signal_id=meta.get("signal_id"),
                     )
-                    if result.success:
-                        self._pos_meta.pop(code, None)
-                        self._bought_watch.pop(code, None)
+                    if result["success"]:
                         recently_sold = getattr(self, "_recently_sold", {})
                         recently_sold[code] = self._scan_count
                         self._invalidate_watch_codes_cache()
