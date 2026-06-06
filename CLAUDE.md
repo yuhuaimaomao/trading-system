@@ -21,11 +21,9 @@ trade/scenario/               情景概率状态机 + AI模板
     ↓
 trade/decision/               规则判断：买/卖/持
     ↓
-trade/risk/ + trade/execute/  风控约束 → 下单执行
+trade/risk/ + trade/paper/   风控约束 → 模拟盘下单
     ↓
-trade/monitor/watcher.py      编排调度（薄层 ~400行）
-
-trade/message/   ← 任何模块都可以调
+trade/monitor/watcher.py      编排调度（薄层）
 ```
 
 ### 盘中管线（cron: 9:24 → 9:30-15:00）
@@ -40,7 +38,7 @@ Watcher.run()
   ├─ _check_bought_signals()        买入后盯盘（六类状态分类）
   ├─ _scout_intraday()              引擎2：盘中机会发现（3轮一次）
   ├─ _check_review_picks()          复盘精选跟踪
-  └─ message.flush_alerts()         推送去重冷却
+  └─ _alert() / _alert_private()  推送去重冷却
 ```
 
 ### 盘前/盘后管线
@@ -89,13 +87,8 @@ trading-system/
 │   │   ├── sell.py                 离场信号分析 + 持仓状态分类
 │   │   ├── sizing.py               仓位计算 + 买入区修正
 │   │   └── regime.py               MarketRegime 组装
-│   ├── execute/                    执行下单
-│   │   └── buy.py                  模拟盘买入（调 paper_account + 告警）
-│   ├── message/                    消息推送
-│   │   ├── alert.py                AlertManager（路由+去重）
-│   │   └── format.py               消息格式化
 │   ├── risk/                       风控（engine + rules: stop_loss/take_profit/...）
-│   ├── paper/                      模拟盘账户（PaperAccount，纯执行）
+│   ├── paper/                      模拟盘（PaperAccount + buy执行 + 告警）
 │   ├── portfolio/                  持仓数据结构
 │   └── execution/                  手动成交/双线比对（manual/comparator/qmt）
 ├── data/                           【数据访问】
