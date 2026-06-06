@@ -31,7 +31,7 @@ class _MockPA:
     def update_prices(self, prices):
         self._portfolio.update_prices(prices)
 
-    def sell(self, code, price, reason=""):
+    def sell(self, code, price, reason="", signal_id=None):
         self._sold.append({"code": code, "price": price, "reason": reason})
         pos = self._portfolio.positions.get(code)
         if pos:
