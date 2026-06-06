@@ -518,181 +518,39 @@ class MarketStateMixin:
         self._scenario_prev_outlook: MarketOutlook | None = None
 
     def _detect_micro_signals(self) -> MicroSignals:
-        """从当前盘面数据提取微观信号 — 情景引擎的输入层。"""
-        px = self._index_prices
-        if len(px) < 5:
-            return MicroSignals()
+        """委托至 trade.detect.micro_signals.extract。"""
+        from trade.detect.micro_signals import extract
 
-        cur = px[-1]
-        prev = px[-2] if len(px) >= 2 else cur
-        n = len(px)
-
-        # 价格速率（%/scan）和加速度
-        velocity = (cur - prev) / prev * 100 if prev > 0 else 0
-        accel = velocity - self._scenario_prev_velocity
-        self._scenario_prev_velocity = velocity
-
-        # EMA12 关系
-        ema12 = self._calc_intraday_ema(px, 12)
-        ema12_pos = "above" if cur > ema12 else "below" if cur < ema12 else "on"
-        ema12_crossed = ""
-        if len(px) >= 3:
-            prev_cur = px[-2]
-            prev_ema12 = self._calc_intraday_ema(px[:-1], 12)
-            if prev_cur <= prev_ema12 and cur > ema12:
-                ema12_crossed = "crossed_up"
-            elif prev_cur >= prev_ema12 and cur < ema12:
-                ema12_crossed = "crossed_down"
-
-        # 量能脉冲
-        vols = self._market_turnovers
-        vol_pulse = "normal"
-        vol_confirm = "neutral"
-        if len(vols) >= 6:
-            recent_vol = sum(vols[-3:]) / 3 if vols[-3:] else 0
-            prev_vol = sum(vols[-6:-3]) / 3 if len(vols) >= 6 and vols[-6:-3] else 0
-            if prev_vol > 0:
-                vol_ratio = recent_vol / prev_vol
-                if vol_ratio > 1.3:
-                    vol_pulse = "expanding"
-                elif vol_ratio < 0.7:
-                    vol_pulse = "contracting"
-            # 量价配合
-            if vol_pulse == "expanding" and abs(velocity) > 0.02:
-                vol_confirm = "yes"  # 放量同向
-            elif vol_pulse == "contracting" and abs(velocity) > 0.02:
-                vol_confirm = "no"  # 缩量异动=背离
-
-        # 宽度（直接用 watcher 缓存的实时数据）
-        breadth = getattr(self, "_market_breadth", {}) or self._compute_breadth()
-        up, down = breadth.get("up", 0), breadth.get("down", 0)
-        total = up + down
-        breadth_pct = up / total if total > 0 else 0.5
-        breadth_trend = "stable"
-        if self._scenario_prev_breadth > 0:
-            delta = breadth_pct - self._scenario_prev_breadth
-            if delta > 0.05:
-                breadth_trend = "improving"
-            elif delta < -0.05:
-                breadth_trend = "deteriorating"
-        self._scenario_prev_breadth = breadth_pct
-
-        # 反弹质量
-        hi, lo = self._index_high, self._index_low
-        bounce_pct = (cur - lo) / lo * 100 if lo > 0 else 0
-        bounce_quality = ""
-        if bounce_pct > 0:
-            # 跟踪低点序列
-            self._scenario_recent_lows.append(cur)
-            if len(self._scenario_recent_lows) > 30:
-                self._scenario_recent_lows.pop(0)
-            # 反弹持续性评估（最近5个采样点中连续上行的比例）
-            if len(px) >= 5:
-                recent_5 = px[-5:]
-                up_count = sum(
-                    1 for i in range(1, len(recent_5)) if recent_5[i] > recent_5[i - 1]
-                )
-                # 日内涨跌方向：明显上涨时不判为弱反弹
-                day_open = px[0] if len(px) > 30 else hi  # 用早期价格近似开盘价
-                day_direction_up = (
-                    (cur - day_open) / day_open > 0.001 if day_open > 0 else False
-                )
-
-                if up_count >= 4 and bounce_pct > 0.3:
-                    bounce_quality = "strong"
-                elif up_count >= 3 and not day_direction_up:
-                    # 3/4 上行但日内整体不涨 → 弱势反弹
-                    bounce_quality = "weak"
-                elif up_count <= 1 and velocity < 0:
-                    bounce_quality = "failed"
-
-        # 高低点结构
-        lower_highs = False
-        higher_lows = False
-        self._scenario_recent_highs.append(cur)
+        # 状态读取（由 Mixin 维护）
+        self._scenario_recent_lows.append(self._index_prices[-1] if self._index_prices else 0)
+        if len(self._scenario_recent_lows) > 30:
+            self._scenario_recent_lows.pop(0)
+        self._scenario_recent_highs.append(self._index_prices[-1] if self._index_prices else 0)
         if len(self._scenario_recent_highs) > 20:
             self._scenario_recent_highs.pop(0)
-        if len(self._scenario_recent_highs) >= 10:
-            first_half = self._scenario_recent_highs[:5]
-            second_half = self._scenario_recent_highs[-5:]
-            if max(second_half) < max(first_half) * 0.998:
-                lower_highs = True
-            if min(second_half) > min(first_half) * 1.002:
-                higher_lows = True
 
-        # RSI 信号
-        rsi_signal = ""
-        if len(px) >= 30:
-            try:
-                window = 5
-                closes = []
-                for i in range(0, len(px), window):
-                    closes.append(px[i + window - 1])
-                if len(closes) >= 14:
-                    from analysis.indicators import calc_rsi
+        support, resistance = self._compute_key_levels()
+        breadth = getattr(self, "_market_breadth", {}) or self._compute_breadth()
 
-                    rsi6 = calc_rsi(closes, 6)
-                    if rsi6 < 25:
-                        rsi_signal = "oversold"
-                    elif rsi6 > 80:
-                        rsi_signal = "overbought"
-                    # 简易底背离：价格新低但RSI没有新低
-                    if len(closes) >= 20:
-                        prev_closes = closes[:-5]
-                        prev_rsi = (
-                            calc_rsi(prev_closes, 6) if len(prev_closes) >= 14 else 50
-                        )
-                        if closes[-1] < prev_closes[-1] and rsi6 > prev_rsi:
-                            rsi_signal = "divergence_up"
-                        elif closes[-1] > prev_closes[-1] and rsi6 < prev_rsi:
-                            rsi_signal = "divergence_down"
-            except Exception:
-                pass
-
-        # 振幅变化
-        range_expanding = False
-        range_contracting = False
-        if len(px) >= 20 and hi > lo:
-            current_range = (hi - lo) / lo
-            # 比较前后半段
-            mid = len(px) // 2
-            early_hi = max(px[:mid])
-            early_lo = min(px[:mid])
-            if early_hi > early_lo:
-                early_range = (early_hi - early_lo) / early_lo
-                if current_range > early_range * 1.3:
-                    range_expanding = True
-                elif current_range < early_range * 0.7:
-                    range_contracting = True
-
-        # 关键位测试
-        key_support, key_resistance = self._compute_key_levels()
-        testing_support = any(abs(cur - s) / s < 0.003 for s in key_support)
-        testing_resistance = any(abs(cur - r) / r < 0.003 for r in key_resistance)
-
-        # 创新高检测
-        higher_highs = self._detect_higher_highs(self._index_prices)
-
-        return MicroSignals(
-            price_velocity=velocity,
-            price_accel=accel,
-            ema12_pos=ema12_pos,
-            ema12_just_crossed=ema12_crossed,
-            vol_pulse=vol_pulse,
-            vol_price_confirm=vol_confirm,
-            breadth_pct=breadth_pct,
-            breadth_trend=breadth_trend,
-            higher_highs=higher_highs,
-            bounce_from_low=bounce_pct,
-            bounce_quality=bounce_quality,
-            lower_highs=lower_highs,
-            higher_lows=higher_lows,
-            rsi_signal=rsi_signal,
-            testing_support=testing_support,
-            testing_resistance=testing_resistance,
-            range_expanding=range_expanding,
-            range_contracting=range_contracting,
+        result = extract(
+            index_prices=self._index_prices,
+            index_high=self._index_high,
+            index_low=self._index_low,
+            market_turnovers=self._market_turnovers,
+            market_breadth=breadth,
+            prev_velocity=self._scenario_prev_velocity,
+            prev_breadth=self._scenario_prev_breadth,
+            recent_highs=self._scenario_recent_highs,
+            key_support=support,
+            key_resistance=resistance,
+            higher_highs=self._detect_higher_highs(self._index_prices),
         )
+
+        # 更新状态
+        self._scenario_prev_velocity = result.price_velocity
+        self._scenario_prev_breadth = result.breadth_pct
+
+        return result
 
     def _compute_key_levels(self) -> tuple[list[float], list[float]]:
         """计算日内关键支撑/阻力位。

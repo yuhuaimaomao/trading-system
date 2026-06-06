@@ -1644,7 +1644,7 @@ class Watcher(
 
     def _submit_scenario_ai(self, key: str, scenario: str, **fields) -> bool:
         """使用场景模板提交 AI 异步评估。返回 True 表示已入队。"""
-        from trade.monitor.prompts import build_prompt, get_template
+        from trade.scenario.templates import build_prompt, get_template
 
         try:
             system_prompt, user_prompt, max_tokens = build_prompt(scenario, **fields)
