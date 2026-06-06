@@ -162,7 +162,7 @@ class OrderComparator:
         """推送比对报告到 Telegram。"""
         if not self.telegram:
             try:
-                from system.utils.telegram import MessageSender
+                from system.message import MessageSender
 
                 self.telegram = MessageSender()
             except Exception as e:

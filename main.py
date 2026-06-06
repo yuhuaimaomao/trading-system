@@ -46,7 +46,7 @@ def cmd_morning():
     """盘前简报：隔夜宏观 + 候选池确认 + 推送"""
     from analysis.morning import MorningBrief
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
 
     set_current_task("morning")
     logger = get_task_logger("morning")
@@ -84,7 +84,7 @@ def cmd_monitor():
 
     from data.live.quotes import QuoteClient
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
     from trade.monitor.watcher import Watcher
 
     set_current_task("monitor")
@@ -315,7 +315,7 @@ def cmd_strategy():
 
     from analysis.strategy import StrategyPipeline
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
 
     set_current_task("strategy")
     logger = get_task_logger("strategy")
@@ -342,7 +342,7 @@ def cmd_compare():
     from datetime import datetime
 
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
     from trade.execution.comparator import OrderComparator
 
     set_current_task("compare")
@@ -409,7 +409,7 @@ def cmd_listen():
     import time
 
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageReceiver, MessageSender
+    from system.message import MessageReceiver, MessageSender
     from trade.execution.manual import ManualExecutor
 
     set_current_task("listen")
@@ -506,7 +506,7 @@ def cmd_strategy_audit():
     from analysis.audit.improvement_applier import ImprovementApplier
     from analysis.audit.rule_auditor import RuleAuditor
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
 
     set_current_task("strategy_audit")
     logger = get_task_logger("strategy_audit")
@@ -660,7 +660,7 @@ def cmd_audit():
         result = applier.apply(apply_idx)
         print(result)
         try:
-            from system.utils.telegram import MessageSender
+            from system.message import MessageSender
 
             MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(result)
         except Exception:
@@ -696,7 +696,7 @@ def cmd_audit():
                 card = format_improvement_card(imp)
                 print(card)
                 try:
-                    from system.utils.telegram import MessageSender
+                    from system.message import MessageSender
 
                     MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID).send(card)
                 except Exception:
@@ -713,7 +713,7 @@ def cmd_verify_predictions():
     from analysis.review.prediction_verifier import PredictionVerifier
     from system.config.trading_calendar import get_previous_trading_day
     from system.utils.logger import get_task_logger, set_current_task
-    from system.utils.telegram import MessageSender
+    from system.message import MessageSender
 
     set_current_task("verify_predictions")
     logger = get_task_logger("verify_predictions")

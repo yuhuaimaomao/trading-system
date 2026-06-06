@@ -337,7 +337,7 @@ class ReviewService:
             TELEGRAM_REPORT_BOT_TOKEN,
             TELEGRAM_REPORT_CHAT_ID,
         )
-        from system.utils.telegram import MessageSender
+        from system.message import MessageSender
 
         targets = []
         if group and TELEGRAM_REPORT_CHAT_ID:

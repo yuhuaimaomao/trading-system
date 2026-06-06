@@ -957,7 +957,7 @@ class StrategyPipeline:
             TELEGRAM_REPORT_BOT_TOKEN,
             TELEGRAM_REPORT_CHAT_ID,
         )
-        from system.utils.telegram import MessageSender
+        from system.message import MessageSender
 
         pmap = {p.code: p for p in profiles}
         lines = [f"📋 明天交易信号 ({trade_date})", ""]

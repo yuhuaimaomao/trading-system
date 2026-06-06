@@ -338,7 +338,7 @@ class Watcher(
             from system.config.settings import TELEGRAM_PRIVATE_CHAT_ID
 
             if TELEGRAM_PRIVATE_CHAT_ID:
-                from system.utils.telegram import MessageSender
+                from system.message import MessageSender
 
                 self._private_telegram = MessageSender(chat_id=TELEGRAM_PRIVATE_CHAT_ID)
         except Exception:
@@ -1623,7 +1623,7 @@ class Watcher(
     def _get_receiver(self):
         if self._receiver is None:
             try:
-                from system.utils.telegram import MessageReceiver
+                from system.message import MessageReceiver
 
                 self._receiver = MessageReceiver()
             except Exception as e:

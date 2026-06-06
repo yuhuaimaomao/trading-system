@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from system.utils.logger import get_system_logger
-from system.utils.telegram import MessageSender
+from system.message import MessageSender
 
 logger = get_system_logger("collection_stats")
 
