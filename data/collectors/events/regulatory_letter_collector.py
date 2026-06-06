@@ -53,7 +53,7 @@ class RegulatoryLetterCollector:
 
         # 分析服务（懒加载，避免反向依赖）
         try:
-            from system.services.regulatory_analysis_service import (
+            from system.utils.regulatory_analysis import (
                 RegulatoryAnalysisService,
             )
 
