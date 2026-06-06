@@ -169,29 +169,36 @@ class StockReader:
 
     @staticmethod
     def get_daily_indicators(conn, code: str) -> dict | None:
-        """查询个股最新日线技术指标（stock_indicators 表）。"""
+        """查询个股最新日线技术指标（stock_indicators JOIN stock_basic）。
+
+        stock_indicators 有 MACD/KDJ/RSI/布林/BBI，
+        stock_basic 有 ma5/ma10/ma20。
+        """
         row = conn.execute(
-            """SELECT ma5, ma10, ma20, ma60, ma120,
-                      bb_upper, bb_mid, bb_lower, bb_pct_b, bb_width,
-                      macd_dif, macd_dea, macd_bar,
-                      kdj_k, kdj_d, kdj_j,
-                      rsi6, rsi12, rsi24,
-                      bbi_daily, bbi_weekly
-               FROM stock_indicators WHERE stock_code=?
-               ORDER BY trade_date DESC LIMIT 1""",
+            """SELECT sb.ma5, sb.ma10, sb.ma20,
+                      si.ma60, si.ma120,
+                      si.bb_upper, si.bb_mid, si.bb_lower, si.bb_pct_b, si.bb_width,
+                      si.macd_dif, si.macd_dea, si.macd_bar,
+                      si.kdj_k, si.kdj_d, si.kdj_j,
+                      si.rsi6, si.rsi12, si.rsi24,
+                      si.bbi_daily, si.bbi_weekly
+               FROM stock_indicators si
+               JOIN stock_basic sb ON si.stock_code=sb.stock_code AND si.trade_date=sb.trade_date
+               WHERE si.stock_code=?
+               ORDER BY si.trade_date DESC LIMIT 1""",
             (code,),
         ).fetchone()
         if not row:
             return None
         return {
-            "ma5": row[0], "ma10": row[1], "ma20": row[2],
-            "ma60": row[3], "ma120": row[4],
-            "bb_upper": row[5], "bb_mid": row[6], "bb_lower": row[7],
-            "bb_pct_b": row[8], "bb_width": row[9],
-            "macd_dif": row[10], "macd_dea": row[11], "macd_bar": row[12],
-            "kdj_k": row[13], "kdj_d": row[14], "kdj_j": row[15],
-            "rsi6": row[16], "rsi12": row[17], "rsi24": row[18],
-            "bbi_daily": row[19], "bbi_weekly": row[20],
+            "ma5": row[0] or 0, "ma10": row[1] or 0, "ma20": row[2] or 0,
+            "ma60": row[3] or 0, "ma120": row[4] or 0,
+            "bb_upper": row[5] or 0, "bb_mid": row[6] or 0, "bb_lower": row[7] or 0,
+            "bb_pct_b": row[8], "bb_width": row[9] or 0,
+            "macd_dif": row[10] or 0, "macd_dea": row[11] or 0, "macd_bar": row[12] or 0,
+            "kdj_k": row[13] or 50, "kdj_d": row[14] or 50, "kdj_j": row[15] or 50,
+            "rsi6": row[16] or 50, "rsi12": row[17] or 50, "rsi24": row[18] or 50,
+            "bbi_daily": row[19] or 0, "bbi_weekly": row[20] or 0,
         }
 
     @staticmethod
