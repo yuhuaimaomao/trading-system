@@ -10,14 +10,15 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入 PDF 解析库
-try:
-    import pdfplumber
 
-    HAS_PDFPLUMBER = True
-except ImportError:
-    HAS_PDFPLUMBER = False
-    logger.warning("⚠️ pdfplumber 未安装，无法解析 PDF")
+def _get_pdfplumber():
+    """懒加载 pdfplumber，只在真正需要解析 PDF 时才导入和报错。"""
+    try:
+        import pdfplumber
+        return pdfplumber
+    except ImportError:
+        logger.warning("⚠️ pdfplumber 未安装，无法解析 PDF")
+        return None
 
 
 class RegulatoryAnalysisService:
@@ -176,7 +177,8 @@ class RegulatoryAnalysisService:
         Returns:
             文本内容，失败返回 None
         """
-        if not HAS_PDFPLUMBER:
+        plumber = _get_pdfplumber()
+        if not plumber:
             return None
 
         if not pdf_filepath or not os.path.exists(pdf_filepath):
@@ -186,7 +188,7 @@ class RegulatoryAnalysisService:
         try:
             text_content = ""
 
-            with pdfplumber.open(pdf_filepath) as pdf:
+            with plumber.open(pdf_filepath) as pdf:
                 # 提取前 N 页文本（通常关键信息在前几页）
                 for page in pdf.pages[:max_pages]:
                     text = page.extract_text()
