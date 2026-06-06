@@ -37,9 +37,10 @@ class _MockPA:
         if pos:
             pos.update_price(price)
             self._portfolio.cash += price * pos.volume
+            pnl = (price - pos.avg_cost) * pos.volume
             del self._portfolio.positions[code]
-            return type("SellResult", (), {"success": True})()
-        return type("SellResult", (), {"success": False})()
+            return type("SellResult", (), {"success": True, "pnl": pnl, "pnl_pct": pnl / (pos.avg_cost * pos.volume) if pos.avg_cost > 0 else 0, "proceeds": price * pos.volume, "commission": 5})()
+        return type("SellResult", (), {"success": False, "pnl": 0, "pnl_pct": 0, "reason": "not found"})()
 
 
 def _make_pa(cash=200000, daily_loss=0):
