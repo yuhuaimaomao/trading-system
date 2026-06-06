@@ -1,8 +1,13 @@
-"""模拟盘买入执行 — 纯执行逻辑：计算股数、调 paper_account.buy、更新信号状态。"""
+"""模拟盘买卖执行 — 纯执行逻辑：计算股数、调 paper_account、更新状态。"""
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 买入
+# ═══════════════════════════════════════════════════════════════
 
 
 def calculate_buy_volume(
@@ -68,4 +73,35 @@ def execute_paper_buy(
         "commission": result.commission,
         "reason": result.reason,
         "pnl_meta": pnl_meta,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 卖出
+# ═══════════════════════════════════════════════════════════════
+
+
+def execute_paper_sell(
+    code: str,
+    name: str,
+    price: float,
+    stype: str,
+    paper_account,
+    pos_meta: dict,
+    bought_watch: dict,
+    signal_id: int | None = None,
+) -> dict:
+    """执行模拟盘卖出。返回 {success, pnl, pnl_pct, reason}。
+
+    卖出成功后自动清理 pos_meta 和 bought_watch。
+    """
+    result = paper_account.sell(code, price, stype, signal_id=signal_id)
+    if result.success:
+        pos_meta.pop(code, None)
+        bought_watch.pop(code, None)
+    return {
+        "success": result.success,
+        "pnl": result.pnl,
+        "pnl_pct": result.pnl_pct,
+        "reason": result.reason,
     }

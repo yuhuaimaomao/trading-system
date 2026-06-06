@@ -803,13 +803,16 @@ class PositionRiskMixin:
         }
 
         # 模拟盘直接执行（实盘等用户确认）
+        from trade.paper.executor import execute_paper_sell
+
         meta = self._pos_meta.get(code, {})
-        result = self.paper_account.sell(
-            code, price, stype, signal_id=meta.get("signal_id")
+        result = execute_paper_sell(
+            code, name, price, stype,
+            paper_account=self.paper_account,
+            pos_meta=self._pos_meta,
+            bought_watch=self._bought_watch,
+            signal_id=meta.get("signal_id"),
         )
-        if result.success:
-            self._pos_meta.pop(code, None)
-            self._bought_watch.pop(code, None)  # 卖出成功才清理盯盘
             # 卖出冷却：防止同一轮或短期内重新买入
             recently_sold = getattr(self, "_recently_sold", {})
             recently_sold[code] = self._scan_count
