@@ -22,6 +22,7 @@ COMMANDS = [
     "track",
     "listen",
     "qmt-collect",
+    "stock",
     "strategy-audit",
     "audit",
     "verify-predictions",
@@ -782,6 +783,21 @@ def cmd_test():
     print("  OK")
 
 
+def cmd_stock():
+    """个股综合分析。用法: python main.py stock 600519 [--quick|--deep]"""
+    code = sys.argv[2] if len(sys.argv) > 2 else None
+    if not code:
+        print("用法: python main.py stock <股票代码> [--quick|--deep]")
+        sys.exit(1)
+
+    from analysis.stock import StockAnalyzer
+
+    analyzer = StockAnalyzer()
+    mode = "quick" if "--deep" not in sys.argv else "deep"
+    report = analyzer.quick(code) if mode == "quick" else analyzer.deep(code)
+    print(analyzer.format_cli(report))
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python main.py <command> [options]")
@@ -806,6 +822,7 @@ def main():
         "strategy-audit": cmd_strategy_audit,
         "audit": cmd_audit,
         "verify-predictions": cmd_verify_predictions,
+        "stock": cmd_stock,
     }.get(cmd, lambda: print(f"Unknown: {cmd}"))()
 
 
