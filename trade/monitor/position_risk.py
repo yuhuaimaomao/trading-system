@@ -70,23 +70,8 @@ class PositionRiskMixin:
                 self._alert(msg)
                 return  # 熔断后本轮不再逐只检查
 
-        # 基础调整因子（每只票从基础值开始，不在循环中累积）
-        if risk_level == "extreme":
-            base_sl_tighten = 0.70  # 止损线上移 30%
-            base_tp_lower = 0.80  # 止盈线下移 20%
-            base_trail_tighten = 0.70  # 移动止盈回撤容忍缩 30%
-        elif risk_level == "dangerous":
-            base_sl_tighten = 0.85
-            base_tp_lower = 0.90
-            base_trail_tighten = 0.85
-        elif risk_level == "cautious":
-            base_sl_tighten = 0.92
-            base_tp_lower = 1.0  # 止盈不动
-            base_trail_tighten = 0.92
-        else:
-            base_sl_tighten = 1.0
-            base_tp_lower = 1.0
-            base_trail_tighten = 1.0
+        from trade.risk.position import adjust_tightening
+        base_sl_tighten, base_tp_lower, base_trail_tighten = adjust_tightening(risk_level, "")
 
         # 自动补全 _pos_meta（买入持久化失败等边缘情况可能导致缺条目）
         for code, pos in self.paper_account.positions.items():
@@ -627,58 +612,32 @@ class PositionRiskMixin:
                     logger.info(f"主动退出卖出: {code} {tags} ({exit_reason})")
 
     def _check_retracement_stop(
-        self,
-        code: str,
-        name: str,
-        price: float,
-        entry_price: float,
-        trend: str,
-        limit_down: bool,
-        risk_level: str = "safe",
+        self, code, name, price, entry_price, trend, limit_down,
+        risk_level="safe",
     ):
-        """分级利润回撤止盈，大盘风险高时更保守（保留更多利润）.
-
-        分级阈值（从 _bought_watch 读取历史最高浮盈）：
-        - 最高浮盈 ≥ 15%: 保留 60% 利润（极端→70%，危险→65%）
-        - 最高浮盈 ≥ 10%: 保留 55% 利润（极端→65%，危险→60%）
-        - 最高浮盈 ≥ 5%:  保留 50% 利润（极端→60%，危险→55%）
-        返回 (key, kwargs) 或 (None, None) 表示未触发.
-        """
-        if entry_price <= 0:
-            return None, None
+        """委托至 trade.risk.position.check_retracement_stop。"""
+        from trade.risk.position import check_retracement_stop
 
         watch = self._bought_watch.get(code, {})
+        meta = self._pos_meta.get(code, {})
+        # 最高价：优先 pos_meta（盯盘维护），其次 bought_watch
+        highest = meta.get("highest_price", 0) or watch.get("highest_price", 0) or price
+        triggered = check_retracement_stop(price, highest, entry_price, risk_level)
+        if not triggered:
+            return None, None
+
         max_profit = watch.get("max_profit_pct", 0)
-        if max_profit < 0.05:
-            return None, None
-
-        current_profit = (price - entry_price) / entry_price
-
-        # 基础保留比例 + 大盘风险加成
-        if risk_level == "extreme":
-            bonus = 0.10  # 多保留 10% 利润
-        elif risk_level == "dangerous":
-            bonus = 0.05
-        else:
-            bonus = 0.0
-
-        if max_profit >= 0.15:
-            keep_ratio = min(0.60 + bonus, 0.75)
-        elif max_profit >= 0.10:
-            keep_ratio = min(0.55 + bonus, 0.70)
-        else:
-            keep_ratio = min(0.50 + bonus, 0.65)
-
+        current_profit = (price - entry_price) / entry_price if entry_price > 0 else 0
+        # 计算保留比例（仅用于消息显示）
+        if risk_level == "extreme": bonus = 0.10
+        elif risk_level == "dangerous": bonus = 0.05
+        else: bonus = 0.0
+        if max_profit >= 0.15: keep_ratio = min(0.60 + bonus, 0.75)
+        elif max_profit >= 0.10: keep_ratio = min(0.55 + bonus, 0.70)
+        else: keep_ratio = min(0.50 + bonus, 0.65)
         threshold = max_profit * keep_ratio
-        if current_profit >= threshold:
-            return None, None
-
-        tier_label = (
-            "T1" if max_profit >= 0.15 else "T2" if max_profit >= 0.10 else "T3"
-        )
-        risk_note = (
-            f" 大盘{risk_level}" if risk_level in ("extreme", "dangerous") else ""
-        )
+        tier_label = "T1" if max_profit >= 0.15 else "T2" if max_profit >= 0.10 else "T3"
+        risk_note = f" 大盘{risk_level}" if risk_level in ("extreme", "dangerous") else ""
         key = f"{code}:retrace"
         extra = (
             f"{tier_label}{risk_note} 最高浮盈{max_profit * 100:.1f}% → 当前{current_profit * 100:.1f}%"
