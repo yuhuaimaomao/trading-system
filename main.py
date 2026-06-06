@@ -301,7 +301,7 @@ def cmd_cleanup():
 
 def cmd_portfolio():
     """持仓查询"""
-    from trade.portfolio.portfolio import Portfolio
+    from trade.paper.portfolio import Portfolio
 
     p = Portfolio()
     print(

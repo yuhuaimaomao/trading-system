@@ -1,6 +1,6 @@
 """集中度控制"""
 
-from trade.portfolio.portfolio import Portfolio
+from trade.paper.portfolio import Portfolio
 
 
 def check_concentration(

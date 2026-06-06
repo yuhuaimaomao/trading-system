@@ -63,7 +63,7 @@ class TestRecomputeAdjustment:
 
     def test_divergence_detected(self):
         """系统用了错误值 → 应该告警"""
-        from trade.portfolio.portfolio import Position
+        from trade.paper.portfolio import Position
         ctx = CheckContext(
             risk_level="extreme",
             sector_trends={"000001": "横盘"},

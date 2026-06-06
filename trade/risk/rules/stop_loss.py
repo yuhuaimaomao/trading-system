@@ -1,6 +1,6 @@
 """止损规则"""
 
-from trade.portfolio.portfolio import Position
+from trade.paper.portfolio import Position
 
 
 def check_stop_loss(pos: Position) -> str:

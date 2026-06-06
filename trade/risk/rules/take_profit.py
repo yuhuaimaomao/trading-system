@@ -1,6 +1,6 @@
 """止盈规则"""
 
-from trade.portfolio.portfolio import Position
+from trade.paper.portfolio import Position
 
 
 def check_take_profit(pos: Position) -> str:

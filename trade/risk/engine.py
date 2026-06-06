@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
-from trade.portfolio.portfolio import Portfolio
+from trade.paper.portfolio import Portfolio
 from trade.risk.rules.blacklist import is_blacklisted, is_risk_suspect
 from trade.risk.rules.concentration import check_concentration
 from trade.risk.rules.market_env import get_market_environment, get_max_position

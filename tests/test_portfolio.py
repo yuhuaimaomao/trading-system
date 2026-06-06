@@ -1,7 +1,7 @@
 """Portfolio 单元测试 — 开仓/平仓/盈亏/回撤"""
 
 import pytest
-from trade.portfolio.portfolio import Portfolio, Position
+from trade.paper.portfolio import Portfolio, Position
 
 
 class TestPosition:

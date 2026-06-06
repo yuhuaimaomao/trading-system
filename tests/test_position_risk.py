@@ -2,7 +2,7 @@
 
 import pytest
 from trade.monitor.position_risk import PositionRiskMixin
-from trade.portfolio.portfolio import Portfolio
+from trade.paper.portfolio import Portfolio
 
 
 class _MockPA:
@@ -54,7 +54,7 @@ def _add_position(pa, code, name, volume, avg_cost, entry_date="2026-05-30", loc
     """直接写入 Portfolio，同时扣现金模拟真实买入。
     默认 locked=0（非当日买入，可卖出）。测试 T+1 时传 locked=volume。
     """
-    from trade.portfolio.portfolio import Position
+    from trade.paper.portfolio import Position
     cost = avg_cost * volume
     pa._portfolio.cash -= cost
     pa._portfolio.positions[code] = Position(

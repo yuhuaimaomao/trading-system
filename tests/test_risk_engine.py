@@ -1,7 +1,7 @@
 """RiskEngine 单元测试 — 开仓检查/持仓巡检/止损止盈"""
 
 import pytest
-from trade.portfolio.portfolio import Portfolio, Position
+from trade.paper.portfolio import Portfolio, Position
 from trade.risk.engine import RiskEngine
 from trade.risk.rules.stop_loss import check_stop_loss, check_time_stop
 from trade.risk.rules.take_profit import check_take_profit, check_trailing_stop

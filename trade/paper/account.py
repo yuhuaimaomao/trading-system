@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from data.repo import TradeRepository
 from system.config import settings
-from trade.portfolio.portfolio import Portfolio
+from trade.paper.portfolio import Portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +304,7 @@ class PaperAccount:
         """启动时从 DB 恢复状态：快照→现金，持仓表→持仓。
 
         每笔买卖实时落库，所以直接读最新快照就是当前状态，无需重放订单。"""
-        from trade.portfolio.portfolio import Position
+        from trade.paper.portfolio import Position
 
         snap = self.repo.get_latest_snapshot(account="paper")
         snap_valid = False
