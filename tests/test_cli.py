@@ -445,7 +445,7 @@ class TestMorningDate:
     def test_morning_runs_without_date(self):
         """morning 命令不带参数时正常执行"""
         with patch("system.message.MessageSender"):
-            with patch("strategy.morning.MorningBrief") as mock_mb:
+            with patch("strategy.morning_brief.MorningBrief") as mock_mb:
                 mock_mb.return_value.generate_and_send.return_value = None
 
                 import main
@@ -459,7 +459,7 @@ class TestMorningDate:
     def test_morning_with_date_arg(self):
         """morning 命令带日期参数时正常执行（当前代码不解析日期参数）"""
         with patch("system.message.MessageSender"):
-            with patch("strategy.morning.MorningBrief") as mock_mb:
+            with patch("strategy.morning_brief.MorningBrief") as mock_mb:
                 mock_mb.return_value.generate_and_send.return_value = None
 
                 import main
@@ -525,11 +525,11 @@ class TestPortfolioCommand:
 
 
 class TestTrackCommand:
-    """track 命令初始化 StockTracker"""
+    """track 命令初始化  StockTracker"""
 
     def test_track_initializes_tracker(self):
-        """track → 创建 StockTracker 实例"""
-        with patch("review.tracker.StockTracker") as mock_tracker:
+        """track → 创建  StockTracker 实例"""
+        with patch("review.stock_tracker.StockTracker") as mock_tracker:
             mock_tracker.return_value.update_daily_data.return_value = None
             mock_tracker.return_value.update_next_day_data.return_value = None
             mock_tracker.return_value.get_statistics.return_value = {

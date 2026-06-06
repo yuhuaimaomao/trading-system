@@ -45,7 +45,7 @@ def cmd_review():
 
 def cmd_morning():
     """盘前简报：隔夜宏观 + 候选池确认 + 推送"""
-    from strategy.morning import MorningBrief
+    from strategy.morning_brief import MorningBrief
     from system.message import MessageSender
     from system.utils.logger import get_task_logger, set_current_task
 
@@ -58,7 +58,7 @@ def cmd_morning():
     except Exception as e:
         logger.warning(f"Telegram 初始化失败（将只输出日志）: {e}")
 
-    brief = MorningBrief(telegram_bot=telegram)
+    brief =  MorningBrief(telegram_bot=telegram)
     brief.generate_and_send()
 
 
@@ -384,13 +384,13 @@ def cmd_track():
     """股票追踪：更新当日行情 + 次日表现 + 统计"""
     from datetime import datetime, timedelta
 
-    from review.tracker import StockTracker
+    from review.stock_tracker import StockTracker
     from system.utils.logger import get_task_logger, set_current_task
 
     set_current_task("track")
     logger = get_task_logger("track")
 
-    tracker = StockTracker()
+    tracker =  StockTracker()
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 

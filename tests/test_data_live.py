@@ -1,6 +1,6 @@
 """data/live/ 模块测试"""
 
-from data.collect.live.cache import DailyFactorCache, InstrumentCache, IntradayCache
+from data.collect.live.live_cache import DailyFactorCache, InstrumentCache, IntradayCache
 from data.collect.live.order_book import (
     get_big_order_direction,
     get_instrument_info,

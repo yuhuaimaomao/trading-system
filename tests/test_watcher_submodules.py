@@ -22,7 +22,7 @@ from trade.core.scan_state import (
     MicroSignals,
 )
 from trade.decision.buy_decision import BuyDecisionMixin
-from trade.risk.position_monitor import PositionRiskMixin
+from trade.risk.position_risk import PositionRiskMixin
 from trade.scenario.market_state import MarketStateMixin
 from trade.sector.sector_context import SectorContextMixin
 
@@ -979,7 +979,7 @@ class TestPositionRiskMixin:
         watcher.paper_account.positions = {}
         state = MagicMock()
         with (
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
         ):
             mock_s.MAX_DAILY_LOSS = 0.03
             watcher._check_positions(state, {})
@@ -1005,17 +1005,17 @@ class TestPositionRiskMixin:
         state = MagicMock()
         with (
             patch(
-                "trade.risk.position_monitor.should_stop_loss", return_value=(False, 0)
+                "trade.risk.position_risk.should_stop_loss", return_value=(False, 0)
             ) as mock_sl,
             patch(
-                "trade.risk.position_monitor.should_take_profit",
+                "trade.risk.position_risk.should_take_profit",
                 return_value=(False, 0),
             ) as mock_tp,
             patch(
-                "trade.risk.position_monitor.should_trailing_stop",
+                "trade.risk.position_risk.should_trailing_stop",
                 return_value=(False, 0),
             ) as mock_trail,
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
         ):
             mock_s.MAX_DAILY_LOSS = 0.03
             watcher._check_positions(state, {"000001": 11.0})
@@ -1044,14 +1044,14 @@ class TestPositionRiskMixin:
         state = MagicMock()
         with (
             patch(
-                "trade.risk.position_monitor.should_stop_loss", return_value=(True, 9.5)
+                "trade.risk.position_risk.should_stop_loss", return_value=(True, 9.5)
             ) as mock_sl,
             patch(
-                "trade.risk.position_monitor.should_take_profit",
+                "trade.risk.position_risk.should_take_profit",
                 return_value=(False, 0),
             ),
             patch(
-                "trade.risk.position_monitor.should_trailing_stop",
+                "trade.risk.position_risk.should_trailing_stop",
                 return_value=(False, 0),
             ),
             patch(
@@ -1059,7 +1059,7 @@ class TestPositionRiskMixin:
                 return_value={"success": True},
             ) as mock_sell,
             patch.object(watcher, "_log_stop_trigger"),
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
         ):
             mock_s.MAX_DAILY_LOSS = 0.03
             watcher._check_positions(state, {"000001": 9.5})
@@ -1087,14 +1087,14 @@ class TestPositionRiskMixin:
         state = MagicMock()
         with (
             patch(
-                "trade.risk.position_monitor.should_stop_loss", return_value=(False, 0)
+                "trade.risk.position_risk.should_stop_loss", return_value=(False, 0)
             ),
             patch(
-                "trade.risk.position_monitor.should_take_profit",
+                "trade.risk.position_risk.should_take_profit",
                 return_value=(True, 12.0),
             ) as mock_tp,
             patch(
-                "trade.risk.position_monitor.should_trailing_stop",
+                "trade.risk.position_risk.should_trailing_stop",
                 return_value=(False, 0),
             ),
             patch(
@@ -1102,7 +1102,7 @@ class TestPositionRiskMixin:
                 return_value={"success": True},
             ),
             patch.object(watcher, "_log_tp_trigger"),
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
             # Avoid _is_limit_down check
             patch.object(watcher, "_is_limit_down", return_value=False),
         ):
@@ -1131,14 +1131,14 @@ class TestPositionRiskMixin:
         state = MagicMock()
         with (
             patch(
-                "trade.risk.position_monitor.should_stop_loss", return_value=(False, 0)
+                "trade.risk.position_risk.should_stop_loss", return_value=(False, 0)
             ),
             patch(
-                "trade.risk.position_monitor.should_take_profit",
+                "trade.risk.position_risk.should_take_profit",
                 return_value=(False, 0),
             ),
             patch(
-                "trade.risk.position_monitor.should_trailing_stop",
+                "trade.risk.position_risk.should_trailing_stop",
                 return_value=(True, 11.5),
             ) as mock_trail,
             patch(
@@ -1146,7 +1146,7 @@ class TestPositionRiskMixin:
                 return_value={"success": True},
             ),
             patch.object(watcher, "_log_stop_trigger"),
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
             patch.object(watcher, "_is_limit_down", return_value=False),
         ):
             mock_s.MAX_DAILY_LOSS = 0.03
@@ -1180,7 +1180,7 @@ class TestPositionRiskMixin:
                 "trade.exec.paper.executor.execute_paper_sell",
                 return_value={"success": True},
             ),
-            patch("trade.risk.position_monitor.settings") as mock_s,
+            patch("trade.risk.position_risk.settings") as mock_s,
         ):
             mock_s.REAL_TRADE_ENABLED = False
             watcher._check_sl_reminders()

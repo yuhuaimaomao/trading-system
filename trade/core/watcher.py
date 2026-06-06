@@ -26,7 +26,7 @@ from trade.decision.late_session import ClosingDecisionMixin
 from trade.detect.intraday_scout import IntradayScoutMixin
 from trade.detect.market_anomaly import AbnormalMonitorMixin
 from trade.exec.paper.account import PaperAccount
-from trade.risk.position_monitor import PositionRiskMixin
+from trade.risk.position_risk import PositionRiskMixin
 from trade.risk.risk_engine import RiskEngine
 from trade.scenario.market_state import MarketStateMixin
 from trade.sector.sector_context import SectorContextMixin

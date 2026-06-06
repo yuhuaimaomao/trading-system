@@ -353,7 +353,7 @@ class FullTradingDaySimulator:
 
     def _check_positions(self, timestamp: float, prices: dict[str, float]):
         """检查持仓的止损/止盈/移动止盈，模拟 PositionRiskMixin._check_positions。"""
-        from trade.risk.position import adjust_tightening
+        from trade.risk.position_rules import adjust_tightening
 
         risk_level = self._regime.risk_level if self._regime else "safe"
         base_sl_tighten, base_tp_lower, base_trail_tighten = adjust_tightening(

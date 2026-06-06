@@ -3,7 +3,7 @@
 import pytest
 
 from trade.exec.paper.portfolio import Portfolio
-from trade.risk.position_monitor import PositionRiskMixin
+from trade.risk.position_risk import PositionRiskMixin
 
 
 class _MockPA:

@@ -26,7 +26,7 @@ from trade.decision.buy_decision import BuyDecisionMixin
 from trade.decision.late_session import ClosingDecisionMixin
 from trade.detect.intraday_scout import IntradayScoutMixin
 from trade.detect.market_anomaly import AbnormalMonitorMixin
-from trade.risk.position_monitor import PositionRiskMixin
+from trade.risk.position_risk import PositionRiskMixin
 from trade.scenario.market_state import MarketStateMixin
 from trade.sector.sector_context import SectorContextMixin
 
@@ -51,7 +51,7 @@ MIXIN_MODULE_MAP = {
     "DecisionLoggerMixin": "audit.watcher_decision_logger",
     "MarketStateMixin": "trade.scenario.market_state",
     "BuyDecisionMixin": "trade.decision.buy_decision",
-    "PositionRiskMixin": "trade.risk.position_monitor",
+    "PositionRiskMixin": "trade.risk.position_risk",
     "SectorContextMixin": "trade.sector.sector_context",
     "AbnormalMonitorMixin": "trade.detect.market_anomaly",
     "IntradayScoutMixin": "trade.detect.intraday_scout",
@@ -973,7 +973,7 @@ class TestAllMixinsTogetherOneScan:
         patch_targets = [
             "trade.scenario.market_state.settings",
             "trade.decision.buy_decision.settings",
-            "trade.risk.position_monitor.settings",
+            "trade.risk.position_risk.settings",
             "trade.sector.sector_context.settings",
             "trade.detect.market_anomaly.settings",
             "trade.core.closeout.settings",

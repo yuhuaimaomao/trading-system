@@ -9,7 +9,7 @@ import pytest
 
 from trade.core.scan_state import MarketRegime
 from trade.exec.paper.portfolio import Portfolio
-from trade.risk.position import adjust_tightening, check_retracement_stop
+from trade.risk.position_rules import adjust_tightening, check_retracement_stop
 from trade.risk.risk_engine import RiskEngine
 from trade.risk.rules.blacklist import (
     check_listed_days,

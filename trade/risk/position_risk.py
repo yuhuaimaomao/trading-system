@@ -72,7 +72,7 @@ class PositionRiskMixin:
                 self._alert(msg)
                 return  # 熔断后本轮不再逐只检查
 
-        from trade.risk.position import adjust_tightening
+        from trade.risk.position_rules import adjust_tightening
 
         base_sl_tighten, base_tp_lower, base_trail_tighten = adjust_tightening(
             risk_level, ""
@@ -630,8 +630,8 @@ class PositionRiskMixin:
         limit_down,
         risk_level="safe",
     ):
-        """委托至 trade.risk.position.check_retracement_stop。"""
-        from trade.risk.position import check_retracement_stop
+        """委托至 trade.risk.position_rules.check_retracement_stop。"""
+        from trade.risk.position_rules import check_retracement_stop
 
         watch = self._bought_watch.get(code, {})
         meta = self._pos_meta.get(code, {})

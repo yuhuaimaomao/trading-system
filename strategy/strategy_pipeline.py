@@ -23,7 +23,7 @@ from stock.signals import (
     StockProfile,
     StockScore,
 )
-from strategy.advisor import AIAdvisor
+from strategy.ai_advisor import AIAdvisor
 from strategy.screening.breadth import MarketBreadth
 from strategy.screening.profiles import ProfileBuilder
 from strategy.screening.trend import TrendScreener

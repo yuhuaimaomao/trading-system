@@ -407,10 +407,10 @@ class ReviewService:
             # 股票追踪更新：无论数据是否完整都要跑，补上之前遗漏的 t_open
             logger.info("\n【阶段 2/4】股票追踪数据更新")
             try:
-                from review.tracker import StockTracker
+                from review.stock_tracker import  StockTracker
                 from system.config.trading_calendar import get_previous_trading_day
 
-                tracker = StockTracker()
+                tracker =  StockTracker()
                 tracker.update_daily_data(trade_date)
                 logger.info("✅ 当日行情数据已补充")
 
@@ -440,9 +440,9 @@ class ReviewService:
             # 记录复盘推荐的股票到追踪表（AI 成功后才有的数据）
             if stock_pool:
                 try:
-                    from review.tracker import StockTracker
+                    from review.stock_tracker import  StockTracker
 
-                    tracker = StockTracker()
+                    tracker =  StockTracker()
                     stocks = tracker.enrich_stock_pool(stock_pool)
                     if stocks:
                         tracker.record_stocks(

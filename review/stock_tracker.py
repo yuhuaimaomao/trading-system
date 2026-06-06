@@ -29,7 +29,7 @@ BASE_DIR = PROJECT_ROOT
 EXCEL_PATH = BASE_DIR / "docs/股票追踪表.xlsx"
 
 
-class StockTracker:
+class  StockTracker:
     """股票追踪记录器"""
 
     # 推荐理由关键词
@@ -1324,5 +1324,5 @@ class StockTracker:
 
 
 if __name__ == "__main__":
-    tracker = StockTracker()
-    print("✅ StockTracker 初始化成功")
+    tracker =  StockTracker()
+    print("✅  StockTracker 初始化成功")

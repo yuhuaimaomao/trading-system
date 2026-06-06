@@ -17,7 +17,7 @@ from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_task_logger
 
 
-class MorningBrief:
+class  MorningBrief:
     """早盘简报：AI 驱动的盘前校准"""
 
     def __init__(self, telegram_bot=None):
