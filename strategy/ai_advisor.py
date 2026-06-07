@@ -26,9 +26,9 @@ from stock.signals import (
 )
 from system.ai.prompts.strategy import AI_ADVISOR_PROMPT
 from system.config import settings
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_strategy_logger
 
-logger = get_system_logger("ai_advisor")
+logger = get_strategy_logger("pipeline")
 
 # ============================================================
 # 模型配置

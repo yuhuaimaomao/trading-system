@@ -15,9 +15,9 @@ from typing import Dict, List, Optional
 
 import requests
 
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
-logger = get_collector_logger("regulatory_letter")
+logger = get_collect_logger("events")
 
 
 # 搜索关键词

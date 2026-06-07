@@ -42,7 +42,7 @@ class SuspendResumeCollector(ProxyBaseCollector):
 
     def __init__(self, trade_date: str = None, task_mgr=None):
         super().__init__(
-            logger_name="SuspendResumeCollector",
+            logger_name="market",
             trade_date=trade_date,
             task_mgr=task_mgr,
         )

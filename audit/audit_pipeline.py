@@ -8,9 +8,9 @@
 
 import sqlite3
 
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_audit_logger
 
-logger = get_system_logger("audit_pipeline")
+logger = get_audit_logger("pipeline")
 
 TELEGRAM_REPORT_CHAT_ID = None
 TELEGRAM_REPORT_BOT_TOKEN = None

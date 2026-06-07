@@ -1,11 +1,11 @@
 """trade_signals 表数据访问"""
 
-import logging
 from datetime import datetime
 
 from data.repo.repo_base import BaseRepository, _cols_from_str
+from system.utils.logger import get_system_logger
 
-logger = logging.getLogger(__name__)
+logger = get_system_logger("data")
 
 _SIGNAL_COLS = frozenset(
     {

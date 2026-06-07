@@ -7,13 +7,13 @@
     print(c.format_report(report))
 """
 
-import logging
 from datetime import datetime
 from typing import Optional
 
 from data.repo import TradeRepository
+from system.utils.logger import get_trade_logger
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("exec")
 
 
 class OrderComparator:

@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from system.config.akshare_config import get_akshare
 
 # 使用项目的日志系统（采集器日志）
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 
 class LHBCollector:
@@ -24,7 +24,7 @@ class LHBCollector:
         Args:
             db_path: 数据库路径（默认：~/quant-system/storage/stock_market.db）
         """
-        self.logger = get_collector_logger("lhb")
+        self.logger = get_collect_logger("events")
         if db_path is None:
             from system.config.settings import DATABASE_PATH
 

@@ -1,11 +1,12 @@
 """非阻塞 TCP 客户端，连接 QMT Collector 接收实时市场数据。"""
 
 import json
-import logging
 import socket
 import time
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_collect_logger
+
+logger = get_collect_logger("live")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 15555

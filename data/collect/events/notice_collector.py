@@ -21,7 +21,7 @@ from typing import Dict, List
 
 from system.config.akshare_config import get_akshare, get_random_user_agent
 from system.config.settings import DATABASE_PATH
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 # 公告类型分类（用于重要性评分）
 HIGH_IMPORTANCE = [
@@ -214,7 +214,7 @@ class NoticeCollector:
     """A 股公告采集器"""
 
     def __init__(self):
-        self.logger = get_collector_logger("notice_collector")
+        self.logger = get_collect_logger("events")
         self.trade_date = datetime.now().strftime("%Y%m%d")
         self.logger.info("公告采集器初始化完成")
 

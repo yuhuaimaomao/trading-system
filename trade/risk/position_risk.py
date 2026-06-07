@@ -3,16 +3,16 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性.
 """
 
-import logging
 import time
 from datetime import datetime
 from datetime import time as dt_time
 
 from system.config import settings
+from system.utils.logger import get_trade_logger
 from trade.risk.rules.stop_loss import should_stop_loss
 from trade.risk.rules.take_profit import should_take_profit, should_trailing_stop
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("risk")
 
 
 class PositionRiskMixin:

@@ -3,9 +3,9 @@
 import re
 
 from data.repo import TradeRepository
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_audit_logger
 
-logger = get_system_logger("improvement_applier")
+logger = get_audit_logger("strategy")
 
 
 class ImprovementApplier:

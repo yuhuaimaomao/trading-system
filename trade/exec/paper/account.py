@@ -3,7 +3,6 @@
 不参与任何决策（仓位计算/止损止盈/换仓评估均由盯盘系统负责）。
 """
 
-import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,9 +10,10 @@ from functools import lru_cache
 
 from data.repo import TradeRepository
 from system.config import settings
+from system.utils.logger import get_trade_logger
 from trade.exec.paper.portfolio import Portfolio
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("exec")
 
 # 费率
 COMMISSION_RATE = 0.000085  # 万0.85

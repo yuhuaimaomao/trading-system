@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from system.ai.stock_tools import TOOLS_DEFINITION, StockTools
 from system.utils.logger import get_system_logger
 
-logger = get_system_logger("function_calling")
+logger = get_system_logger("ai")
 
 
 class FunctionCallingEngine:

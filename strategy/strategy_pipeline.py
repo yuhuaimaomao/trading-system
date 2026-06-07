@@ -28,9 +28,9 @@ from strategy.screening.breadth import MarketBreadth
 from strategy.screening.profiles import ProfileBuilder
 from strategy.screening.trend import TrendScreener
 from system.config import settings
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_strategy_logger
 
-logger = get_system_logger("strategy")
+logger = get_strategy_logger("pipeline")
 
 
 class StrategyPipeline:

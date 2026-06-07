@@ -568,7 +568,7 @@ class TestProxyBaseCollector:
         # ProxyManager is created by ProxyRequester.__init__, patch it there
         with patch(f"{self.BASE_PATH}.curl_requests.Session"):
             with patch(f"{self.REQ_PATH}.ProxyManager"):
-                with patch(f"{self.BASE_PATH}.get_collector_logger"):
+                with patch(f"{self.BASE_PATH}.get_collect_logger"):
                     from data.collect.proxy.proxy_base_collector import (
                         ProxyBaseCollector,
                     )
@@ -956,7 +956,7 @@ class TestTelegraphCollector:
 
     def _make_tc(self, db_path=":memory:"):
         with patch(f"{self.TEL_PATH}.requests.Session"):
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -969,7 +969,7 @@ class TestTelegraphCollector:
 
     def test_fetch_telegraph_list(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -993,7 +993,7 @@ class TestTelegraphCollector:
 
     def test_fetch_telegraph_list_exception(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1008,7 +1008,7 @@ class TestTelegraphCollector:
 
     def test_fetch_article_detail(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1026,7 +1026,7 @@ class TestTelegraphCollector:
 
     def test_fetch_article_detail_no_match(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1148,7 +1148,7 @@ class TestTelegraphCollector:
         conn.close()
 
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1189,7 +1189,7 @@ class TestTelegraphCollector:
 
     def test_collect_empty_list(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1207,7 +1207,7 @@ class TestTelegraphCollector:
 
     def test_collect_fetch_exception(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
-            with patch(f"{self.TEL_PATH}.get_collector_logger"):
+            with patch(f"{self.TEL_PATH}.get_collect_logger"):
                 from data.collect.events.telegraph_collector import (
                     TelegraphCollector,
                 )
@@ -1472,7 +1472,7 @@ class TestMacroCollector:
 
     def test_init(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mc = MacroCollector(timeout=15)
@@ -1480,7 +1480,7 @@ class TestMacroCollector:
 
     def test_collect_all_structure(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mc = MacroCollector()
@@ -1509,7 +1509,7 @@ class TestMacroCollector:
 
     def test_get_us_market(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1563,7 +1563,7 @@ class TestMacroCollector:
 
     def test_get_us_market_exception(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1576,7 +1576,7 @@ class TestMacroCollector:
 
     def test_get_exchange_rate_akshare(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mc = MacroCollector()
@@ -1603,7 +1603,7 @@ class TestMacroCollector:
 
     def test_get_exchange_rate_fallback(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mc = MacroCollector()
@@ -1616,7 +1616,7 @@ class TestMacroCollector:
 
     def test_get_a50_futures_success(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1634,7 +1634,7 @@ class TestMacroCollector:
 
     def test_get_a50_futures_tencent_fallback(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1653,7 +1653,7 @@ class TestMacroCollector:
 
     def test_get_crude_oil(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1675,7 +1675,7 @@ class TestMacroCollector:
 
     def test_get_crude_oil_fallback(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1689,7 +1689,7 @@ class TestMacroCollector:
 
     def test_get_gold_yfinance(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mc = MacroCollector()
@@ -1727,7 +1727,7 @@ class TestMacroCollector:
 
     def test_get_gold_fallback(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 mock_sess = MagicMock()
@@ -1748,7 +1748,7 @@ class TestMacroCollector:
 
     def test_save_to_db(self, tmp_path):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 db_file = str(tmp_path / "test_macro.db")
@@ -1789,7 +1789,7 @@ class TestMacroCollector:
 
     def test_fetch_and_save(self, tmp_path):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collector_logger"):
+            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
                 from data.collect.macro.macro_collector import MacroCollector
 
                 db_file = str(tmp_path / "test_fs.db")

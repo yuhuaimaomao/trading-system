@@ -1,17 +1,17 @@
 """QMT HTTP 客户端 — 封装对 Windows QMT Server 的请求"""
 
-import logging
 import time
 
 import requests
 
 from system.config.settings import QMT_BASE_URL
+from system.utils.logger import get_system_logger
 
 QMT_SERVER = QMT_BASE_URL
 CONNECT_TIMEOUT = 5
 READ_TIMEOUT = 120
 
-logger = logging.getLogger(__name__)
+logger = get_system_logger("qmt")
 
 
 def strip_suffix(code):

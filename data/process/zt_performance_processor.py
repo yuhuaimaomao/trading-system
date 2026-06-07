@@ -16,9 +16,9 @@ from typing import Dict, List
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import logging
+from system.utils.logger import get_collect_logger
 
-logger = logging.getLogger(__name__)
+logger = get_collect_logger("process")
 
 
 class ZTPerformanceProcessor:

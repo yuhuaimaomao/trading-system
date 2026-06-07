@@ -3,14 +3,14 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import logging
 import sqlite3
 from collections import defaultdict
 from datetime import datetime
 
 from system.config import settings
+from system.utils.logger import get_trade_logger
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("sector")
 
 
 class SectorContextMixin:

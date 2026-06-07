@@ -3,11 +3,12 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import logging
 from datetime import datetime
 from datetime import time as dt_time
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_trade_logger
+
+logger = get_trade_logger("decision")
 
 
 class ClosingDecisionMixin:

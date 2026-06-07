@@ -16,7 +16,7 @@ from curl_cffi import requests as curl_requests
 
 from data.collect.proxy.proxy_manager import ProxyManager
 from system.config.proxy_config import REQUEST_TIMEOUT
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 try:
     from data.collect.proxy.ip_stats import record_ip_usage
@@ -26,7 +26,7 @@ except ImportError:
     record_ip_usage = None
     IP_STATS_ENABLED = False
 
-logger = get_collector_logger("proxy_requester")
+logger = get_collect_logger("proxy")
 
 # ==================== UA 伪装池（18 个 Profile）====================
 # 每个 profile 四元组: UA + Client Hints + impersonate 绑定一致

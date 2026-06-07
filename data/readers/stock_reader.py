@@ -5,9 +5,9 @@
 纯数据查询，不做格式化。
 """
 
-import logging
+from system.utils.logger import get_system_logger
 
-logger = logging.getLogger(__name__)
+logger = get_system_logger("data")
 
 
 class StockReader:

@@ -48,7 +48,7 @@ class ShareHolderChangeCollector(ProxyBaseCollector):
 
     def __init__(self, trade_date: str = None, task_mgr=None):
         super().__init__(
-            logger_name="ShareHolderChangeCollector",
+            logger_name="events",
             trade_date=trade_date,
             task_mgr=task_mgr,
         )

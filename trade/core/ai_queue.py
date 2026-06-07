@@ -1,9 +1,10 @@
 """AI 异步调用队列 — 委托给 infra.ai.ai_service，保持向后兼容。"""
 
-import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_trade_logger
+
+logger = get_trade_logger("core")
 
 
 class AIQueue:

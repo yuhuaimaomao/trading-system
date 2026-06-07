@@ -11,9 +11,9 @@ from datetime import datetime
 from typing import Any, Dict
 
 from system.message import MessageSender
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_review_logger
 
-logger = get_system_logger("collection_stats")
+logger = get_review_logger("analyzer")
 
 
 class CollectionStatsService:

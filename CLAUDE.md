@@ -67,7 +67,7 @@ trading-system/
 │   ├── message/                    消息收发
 │   ├── config/                     配置
 │   ├── qmt/                        QMT 客户端
-│   └── utils/                      工具（日志/DNS/股票代码）
+│   └── utils/                      工具（日志v4.0/DNS/股票代码）
 ├── tests/                          测试
 ├── ops/                            运维（scheduler/tools/pre_commit）
 └── storage/                        运行时数据（DB/日志/PID/缓存）
@@ -84,7 +84,7 @@ ai.chat_with_tools_raw(msgs, model="review")                  # FC原始返回
 ai.submit(key, prompt, model="watcher_chase", system_prompt=) # 异步
 ```
 
-**多模型配置**（`.env`）：`AI_MODEL_REVIEW=qwen3.6-plus` `AI_MODEL_WATCHER=deepseek-v4-pro` 等。不设则回退到 `AI_MODEL`。
+**多模型配置**（`.env`）：`AI_MODEL_REVIEW=qwen3.7-plus` `AI_MODEL_WATCHER=deepseek-v4-pro` 等。不设则回退到 `AI_MODEL`。
 
 **Prompt 模版**：全部在 `system/ai/prompts/`，不允许散落其他地方。
 
@@ -178,20 +178,59 @@ ai.submit(key, prompt, model="watcher_chase", system_prompt=) # 异步
 
 `tests/` 测试，`ops/` 运维脚本，`storage/` 运行时数据，`docs/` 文档。
 
-### 日志
+### 文档规范
 
-**禁止裸用 `logging.getLogger(__name__)`。** 必须用项目统一工具：
+- **所有设计文档必须放在 `docs/`**，中文文件名，不得散落在 `.claude/plans/` 或桌面
+- **文件命名**：描述其内容的中文短语，如 `盯盘管线领域化重构方案.md`、`动态竞价判断逻辑.md`
+- **禁止**：`docs/README.md`、`docs/设计文档.md` 之类不传信息的名
+- 设计文档是项目的一部分，需要 git 版本管理
+
+### 日志 v4.0
+
+**唯一入口**：`from system.utils.logger import get_xxx_logger`
+
+按业务线分目录，按功能组分文件（非按单文件）。同一组共用日志，`[文件名:行号]` 区分来源。
 
 ```python
-# 顶层任务               → get_task_logger("name")       → logs/{date}/tasks/name.log
-# 采集器                 → get_collector_logger("name")  → logs/{date}/collectors/name.log
-# 系统工具               → get_core_logger("name")       → logs/{date}/core/name.log
-# 盘中模块（已 setup_root_logger 的上下文）→ logging.getLogger(__name__) 可用
+# 任务入口 (INFO, 不冒泡)
+get_task_logger("monitor")      → logs/{date}/tasks/monitor.log
+
+# 业务线 (DEBUG + 冒泡到 task)
+get_collect_logger("market")    → logs/{date}/collect/market.log
+get_collect_logger("events")    → logs/{date}/collect/events.log
+get_collect_logger("live")      → logs/{date}/collect/live.log
+get_collect_logger("proxy")     → logs/{date}/collect/proxy.log
+get_strategy_logger("pipeline") → logs/{date}/strategy/pipeline.log
+get_strategy_logger("screening")→ logs/{date}/strategy/screening.log
+get_trade_logger("core")        → logs/{date}/trade/core.log
+get_trade_logger("decision")    → logs/{date}/trade/decision.log
+get_trade_logger("detect")      → logs/{date}/trade/detect.log
+get_trade_logger("exec")        → logs/{date}/trade/exec.log
+get_trade_logger("risk")        → logs/{date}/trade/risk.log
+get_trade_logger("sector")      → logs/{date}/trade/sector.log
+get_trade_logger("scenario")    → logs/{date}/trade/scenario.log
+get_review_logger("analyzer")   → logs/{date}/review/analyzer.log
+get_review_logger("tracker")    → logs/{date}/review/tracker.log
+get_audit_logger("pipeline")    → logs/{date}/audit/pipeline.log
+get_audit_logger("strategy")    → logs/{date}/audit/strategy.log
+get_audit_logger("watcher")     → logs/{date}/audit/watcher.log
+get_message_logger("receiver")  → logs/{date}/message/receiver.log
+get_message_logger("sender")    → logs/{date}/message/sender.log
+get_system_logger("ai")         → logs/{date}/system/ai.log
+get_system_logger("qmt")        → logs/{date}/system/qmt.log
+get_system_logger("data")       → logs/{date}/system/data.log
+get_system_logger("misc")       → logs/{date}/system/misc.log
 ```
+
+**禁止**：`import logging` + `logging.getLogger(__name__)`。全项目已统一切换，新建文件必须用统一 logger。
+
+**向后兼容**：`get_collector_logger` → `get_collect_logger`，`get_core_logger` → `get_system_logger`。别名保留但新代码用主名。
+
+**冒泡机制**：子模块 DEBUG 写自己的文件，INFO+ 冒泡到父 task。例如 `get_trade_logger("decision")` 的 INFO 会自动出现在 `tasks/monitor.log`（前提是 `set_current_task("monitor")` 已调用）。
 
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -q          # 2028 tests
+python3 -m pytest tests/ -q          # 2153 tests
 E2E_TEST_MODE=1 python3 tests/e2e/verify_comprehensive.py --day 2 --scans 240
 ```

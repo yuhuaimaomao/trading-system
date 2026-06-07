@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """改进建议应用器 — 格式化和推送改进卡片。"""
 
-import logging
 from datetime import date
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_audit_logger
+
+logger = get_audit_logger("watcher")
 
 TYPE_LABELS = {
     "param_tune": "参数调优",

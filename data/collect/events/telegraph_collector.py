@@ -24,7 +24,7 @@ import requests
 
 from system.config.akshare_config import get_headers
 from system.config.settings import DATABASE_PATH
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 # ========== 常量 ==========
 TELEGRAPH_LIST_URL = "https://www.cls.cn/api/cache"
@@ -60,7 +60,7 @@ class TelegraphCollector:
     """财联社电报采集器"""
 
     def __init__(self, db_path: str = None):
-        self.logger = get_collector_logger("telegraph")
+        self.logger = get_collect_logger("events")
         self.db_path = db_path or str(DATABASE_PATH)
         self.session = requests.Session()
         self.session.headers.update(get_headers())

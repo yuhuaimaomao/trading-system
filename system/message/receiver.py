@@ -4,15 +4,16 @@ import os
 
 import requests
 
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_message_logger
 
-logger = get_system_logger("telegram_bot")
+logger = get_message_logger("receiver")
 
 TELEGRAM_UPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"
 
 _proxy_url = os.environ.get("TELEGRAM_PROXY", "http://127.0.0.1:1082")
 _proxy_url = _proxy_url.strip() if _proxy_url else ""
 TELEGRAM_PROXIES = {"http": _proxy_url, "https": _proxy_url} if _proxy_url else None
+
 
 class MessageReceiver:
     """Telegram 消息接收器 — getUpdates 长轮询。
@@ -101,4 +102,3 @@ class MessageReceiver:
         except Exception as e:
             logger.warning(f"getUpdates 异常: {e}")
             return []
-

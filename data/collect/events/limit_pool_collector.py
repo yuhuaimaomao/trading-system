@@ -7,10 +7,10 @@ from datetime import datetime
 from typing import Dict, List
 
 from system.config.akshare_config import get_akshare
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 from system.utils.stock_code_utils import strip_stock_code
 
-logger = get_collector_logger("limit_pool")
+logger = get_collect_logger("events")
 
 
 def format_seal_time(time_str):

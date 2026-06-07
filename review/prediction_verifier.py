@@ -7,9 +7,9 @@ from typing import Optional
 
 from system.config.settings import DATABASE_PATH
 from system.config.trading_calendar import get_next_trading_day
-from system.utils.logger import get_core_logger
+from system.utils.logger import get_review_logger
 
-logger = get_core_logger("prediction_verifier")
+logger = get_review_logger("tracker")
 
 # 指数名称 → index_realtime_data 代码
 INDEX_CODE_MAP = {

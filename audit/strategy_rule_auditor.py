@@ -13,9 +13,9 @@ import sqlite3
 
 from data.repo import TradeRepository
 from system.config.settings import DATABASE_PATH
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_audit_logger
 
-logger = get_system_logger("rule_auditor")
+logger = get_audit_logger("strategy")
 
 
 class RuleAuditor:

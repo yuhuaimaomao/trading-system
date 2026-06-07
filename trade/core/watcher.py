@@ -7,7 +7,6 @@
   额外（每15轮 ~15min）: 主动换仓评估
 """
 
-import logging
 import sys
 import time
 from collections import defaultdict
@@ -18,6 +17,7 @@ from audit.watcher_decision_logger import DecisionLoggerMixin
 from data.repo import TradeRepository
 from system.config import settings
 from system.message import AlertRouter
+from system.utils.logger import get_trade_logger
 from trade.core.ai_queue import AIQueue
 from trade.core.closeout import CloseSummaryMixin
 from trade.core.scan_state import MarketRegime, ScanState
@@ -35,17 +35,7 @@ from trade.sector.sector_resonance import (
     SectorResonanceAnalyzer,
 )
 
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(
-        logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
-        )
-    )
-    logger.addHandler(ch)
+logger = get_trade_logger("core")
 
 MORNING_START = dt_time(9, 30)
 MORNING_END = dt_time(11, 30)
@@ -1289,8 +1279,6 @@ class Watcher(
 
     @staticmethod
     def _python_bin() -> str:
-        import sys
-
         return sys.executable
 
     @staticmethod

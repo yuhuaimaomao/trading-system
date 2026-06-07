@@ -10,9 +10,9 @@ from typing import Dict, List
 
 import requests
 
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
-logger = get_collector_logger("main_index_collector")
+logger = get_collect_logger("market")
 
 
 # 大盘指数列表

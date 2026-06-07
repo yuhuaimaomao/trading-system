@@ -48,14 +48,14 @@ from review.review_formatter import (
 from system.ai import ai
 from system.ai.function_calling import FunctionCallingEngine
 from system.ai.prompts.review import REVIEW_REPORT_PROMPT
-from system.utils.logger import get_core_logger
+from system.utils.logger import get_review_logger
 
 
 class ReviewAnalyzer:
     """复盘 AI 分析器（刺客风格）"""
 
     def __init__(self):
-        self.logger = get_core_logger("review_analyzer")
+        self.logger = get_review_logger("analyzer")
         # 加载板块名称→编码映射（用于 formatter 输出 sector_code）
         self.sector_code_map = {}
         try:

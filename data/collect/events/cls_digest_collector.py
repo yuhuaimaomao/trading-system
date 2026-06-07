@@ -10,14 +10,14 @@ from typing import Dict, Optional
 import requests
 
 # 导入日志系统
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 
 class CLSDigestCollector:
     """财联社汇总文章抓取器"""
 
     def __init__(self):
-        self.logger = get_collector_logger("cls_digest")
+        self.logger = get_collect_logger("events")
         self.session = requests.Session()
         self.session.headers.update(
             {

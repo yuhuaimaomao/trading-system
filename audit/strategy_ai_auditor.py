@@ -6,9 +6,9 @@ from typing import Optional
 
 from data.repo import TradeRepository
 from system.ai.prompts.audit import STRATEGY_AUDIT_PROMPT
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_audit_logger
 
-logger = get_system_logger("ai_auditor")
+logger = get_audit_logger("strategy")
 
 
 class AIAuditor:

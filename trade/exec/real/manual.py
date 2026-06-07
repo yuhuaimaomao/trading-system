@@ -6,7 +6,6 @@
   3. 记录到 trade_orders 表
 """
 
-import logging
 import re
 from datetime import datetime
 from functools import lru_cache
@@ -15,8 +14,9 @@ from typing import Optional
 from data.repo import TradeRepository
 from stock.signals import OrderSignal
 from system.config import settings
+from system.utils.logger import get_trade_logger
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("exec")
 
 # 操作词 + 账户标记（可能被误识别为股票名称的关键词）
 _NON_NAME_KEYWORDS = {

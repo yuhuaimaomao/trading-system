@@ -6,9 +6,9 @@
 
 from typing import Any, Dict
 
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_collect_logger
 
-logger = get_system_logger("sector_info_processor")
+logger = get_collect_logger("process")
 
 
 class SectorInfoProcessor:

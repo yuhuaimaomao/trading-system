@@ -5,12 +5,13 @@
 QMT 不可用时回退到硬编码节假日后排除周末。
 """
 
-import logging
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_system_logger
+
+logger = get_system_logger("misc")
 
 DB_PATH = Path(__file__).parent.parent.parent / "storage" / "stock_market.db"
 

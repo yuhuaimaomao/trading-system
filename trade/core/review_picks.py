@@ -6,11 +6,12 @@
   - 否则 → MA20 回踩买入
 """
 
-import logging
 import sqlite3
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_trade_logger
+
+logger = get_trade_logger("core")
 
 
 class ReviewPickMonitor:

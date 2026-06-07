@@ -633,7 +633,9 @@ class FaultInjectionHarness:
 
         # 日志捕获
         self._log_handler = LogCaptureHandler()
-        self._logger = logging.getLogger("trade.core.watcher")
+        self._logger = logging.getLogger(
+            "core"
+        )  # get_trade_logger("core") used in watcher.py
         self._logger.addHandler(self._log_handler)
         self._logger.setLevel(logging.DEBUG)
 

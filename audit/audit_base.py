@@ -6,9 +6,9 @@
 import json
 import re
 
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_audit_logger
 
-logger = get_system_logger("audit_base")
+logger = get_audit_logger("pipeline")
 
 
 class BaseRuleAuditor:

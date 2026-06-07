@@ -705,13 +705,13 @@ class TestLogger:
         assert isinstance(logger, logging.Logger)
 
     def test_get_core_logger_returns_logger(self):
-        """get_core_logger 返回 Logger 实例"""
-        logger = self.LG.get_core_logger("test_core")
+        """返回 Logger 实例"""
+        logger = self.LG.get_system_logger("test_core")
         assert isinstance(logger, logging.Logger)
 
     def test_get_collector_logger_returns_logger(self):
-        """get_collector_logger 返回 Logger 实例"""
-        logger = self.LG.get_collector_logger("test_collector")
+        """返回 Logger 实例"""
+        logger = self.LG.get_collect_logger("test_collector")
         assert isinstance(logger, logging.Logger)
 
     def test_task_logger_name_format(self):
@@ -719,8 +719,8 @@ class TestLogger:
         logger = self.LG.get_task_logger("review")
         assert logger.name == "task.review"
 
-    def test_core_logger_name_no_context(self):
-        """get_core_logger 无任务上下文时使用原名"""
+    def test_system_logger_name_no_context(self):
+        """get_system_logger 无任务上下文时使用原名"""
         self.LG.set_current_task("")  # 清除上下文
         # 确保当前任务为 None
         orig_task = self.LG.get_current_task()
@@ -730,22 +730,22 @@ class TestLogger:
         self.LG._current_task = contextvars.ContextVar("current_task", default=None)
         self.LG._current_task.set(None)
 
-        logger = self.LG.get_core_logger("analyzer")
+        logger = self.LG.get_system_logger("analyzer")
         assert logger.name == "analyzer"
 
     def test_core_logger_name_with_context(self):
-        """get_core_logger 有任务上下文时使用 task.{task}.core.{name}"""
+        """get_system_logger 有任务上下文时使用 task.{task}.system.{name}"""
         self.LG.set_current_task("review")
-        logger = self.LG.get_core_logger("analyzer")
-        assert logger.name == "task.review.core.analyzer"
+        logger = self.LG.get_system_logger("analyzer")
+        assert logger.name == "task.review.system.analyzer"
         # 清理
         self.LG.set_current_task("")
 
     def test_collector_logger_name_with_context(self):
-        """get_collector_logger 有任务上下文时使用 task.{task}.collectors.{name}"""
+        """get_collect_logger 有任务上下文时使用 task.{task}.collect.{name}"""
         self.LG.set_current_task("review")
-        logger = self.LG.get_collector_logger("fetcher")
-        assert logger.name == "task.review.collectors.fetcher"
+        logger = self.LG.get_collect_logger("fetcher")
+        assert logger.name == "task.review.collect.fetcher"
 
     def test_task_logger_disables_propagation(self):
         """get_task_logger 关闭 propagation"""
@@ -753,8 +753,8 @@ class TestLogger:
         assert logger.propagate is False
 
     def test_core_logger_enables_propagation(self):
-        """get_core_logger 开启 propagation"""
-        logger = self.LG.get_core_logger("prop_test")
+        """开启 propagation"""
+        logger = self.LG.get_system_logger("prop_test")
         assert logger.propagate is True
 
     def test_task_logger_has_handlers(self):
@@ -780,8 +780,8 @@ class TestLogger:
         assert logger.level == logging.DEBUG
 
     def test_core_logger_has_debug_file_handler(self):
-        """get_core_logger 的 FileHandler 级别为 DEBUG"""
-        logger = self.LG.get_core_logger("debug_core")
+        """的 FileHandler 级别为 DEBUG"""
+        logger = self.LG.get_system_logger("debug_core")
         fhs = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
         assert len(fhs) >= 1
         assert fhs[0].level == logging.DEBUG
@@ -817,15 +817,15 @@ class TestLogger:
         assert a is b
 
     def test_get_core_logger_idempotent(self):
-        """get_core_logger 重复调用返回同一实例"""
-        a = self.LG.get_core_logger("idem_core")
-        b = self.LG.get_core_logger("idem_core")
+        """重复调用返回同一实例"""
+        a = self.LG.get_system_logger("idem_core")
+        b = self.LG.get_system_logger("idem_core")
         assert a is b
 
     def test_system_logger_delegates_to_core(self):
         """get_system_logger(name) 等于 get_core_logger(name)"""
         s = self.LG.get_system_logger("sys_test")
-        c = self.LG.get_core_logger("sys_test")
+        c = self.LG.get_system_logger("sys_test")
         assert s is c
 
 

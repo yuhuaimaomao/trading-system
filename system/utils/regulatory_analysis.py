@@ -3,18 +3,20 @@
 功能：解析 PDF 内容，提取摘要，风险审计
 """
 
-import logging
 import os
 import re
 from typing import Dict, Optional
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_system_logger
+
+logger = get_system_logger("misc")
 
 
 def _get_pdfplumber():
     """懒加载 pdfplumber，只在真正需要解析 PDF 时才导入和报错。"""
     try:
         import pdfplumber
+
         return pdfplumber
     except ImportError:
         logger.warning("⚠️ pdfplumber 未安装，无法解析 PDF")

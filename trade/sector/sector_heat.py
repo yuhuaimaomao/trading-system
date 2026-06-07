@@ -1,10 +1,11 @@
 """板块热度监控 — 每 5 轮用全市场快照算板块涨跌排名"""
 
-import logging
 import sqlite3
 from collections import defaultdict
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_trade_logger
+
+logger = get_trade_logger("sector")
 
 
 class SectorHeatMonitor:

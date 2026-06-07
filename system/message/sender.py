@@ -4,9 +4,9 @@ import os
 
 import requests
 
-from system.utils.logger import get_system_logger
+from system.utils.logger import get_message_logger
 
-logger = get_system_logger("telegram_bot")
+logger = get_message_logger("sender")
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 TELEGRAM_UPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"

@@ -7,14 +7,14 @@
 - 大盘↑ + 板块↓ = 逆势走弱
 """
 
-import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Callable
 
 from system.config import settings
+from system.utils.logger import get_trade_logger
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("sector")
 
 # 从配置读取阈值（保留模块级别名供外部引用）
 DIRECTION_THRESHOLD = settings.RESONANCE_INDEX_DIRECTION_THRESHOLD

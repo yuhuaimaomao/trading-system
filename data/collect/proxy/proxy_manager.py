@@ -16,7 +16,7 @@ from system.config.proxy_config import (
     TIANQI_API_PARAMS,
     TIANQI_API_URL,
 )
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 # IP 统计（可选导入）
 try:
@@ -42,7 +42,7 @@ class ProxyManager:
             trade_date: 交易日期（用于 IP 统计）
             collector_name: 采集器名称（用于 IP 统计）
         """
-        self.logger = get_collector_logger("proxy_manager")
+        self.logger = get_collect_logger("proxy")
         self.trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
         self.collector_name = collector_name or "unknown"
 

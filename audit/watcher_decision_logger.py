@@ -4,10 +4,11 @@
 每笔关键决策写入 watcher_decision_log，供收盘后 RuleAuditor 回溯验证。
 """
 
-import logging
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_audit_logger
+
+logger = get_audit_logger("watcher")
 
 
 class DecisionLoggerMixin:

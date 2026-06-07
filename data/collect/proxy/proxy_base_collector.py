@@ -29,7 +29,7 @@ try:
         REQUEST_TIMEOUT,
         RETRY_DELAY,
     )
-    from system.utils.logger import get_collector_logger
+    from system.utils.logger import get_collect_logger
 except ImportError:
     from proxy_config import (
         CACHE_DIR,
@@ -40,13 +40,12 @@ except ImportError:
         RETRY_DELAY,
     )
 
-    get_collector_logger = None
+    get_collect_logger = None
 
 from curl_cffi import requests as curl_requests
 
 from data.collect.proxy.proxy_requester import (
     UA_PROFILES,
-    USER_AGENTS,
     ProxyRequester,
 )
 
@@ -86,8 +85,8 @@ class ProxyBaseCollector(ProxyRequester):
         )
 
         # 日志系统
-        if get_collector_logger:
-            self.logger = get_collector_logger(
+        if get_collect_logger:
+            self.logger = get_collect_logger(
                 collector_name=self.collector_name or logger_name,
                 trade_date=self.trade_date,
             )

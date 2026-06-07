@@ -62,9 +62,7 @@ class StockBasicCollector(ProxyBaseCollector):
             trade_date: 交易日期 (默认今天)
             task_mgr: 任务状态管理器
         """
-        super().__init__(
-            logger_name="StockBasicCollector", trade_date=trade_date, task_mgr=task_mgr
-        )
+        super().__init__(logger_name="market", trade_date=trade_date, task_mgr=task_mgr)
         self.logger.info("个股行情采集器初始化完成")
         self.logger.info(f"交易日期:{self.trade_date}")
 

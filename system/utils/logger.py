@@ -1,23 +1,29 @@
 """
-日志工具 v3.2
+日志工具 v4.0
 
-Logger 层级 + 传播机制：
-  task.review                            → tasks/review.log (INFO)
-    ├── task.review.collector.xxx        → collectors/xxx.log (DEBUG, 冒泡)
-    ├── task.review.core.analyzer        → core/analyzer.log (DEBUG, 冒泡)
-    └── task.review.core.telegram        → core/telegram_bot.log (DEBUG, 冒泡)
+按业务线分目录，按功能组分文件：
+
+  tasks/       — 任务入口 (INFO, 不冒泡)
+  collect/     — 数据采集 (DEBUG, 冒泡到 task)
+  strategy/    — 策略+选股 (DEBUG, 冒泡到 task)
+  trade/       — 盯盘+交易 (DEBUG, 冒泡到 task)
+  review/      — 复盘 (DEBUG, 冒泡到 task)
+  audit/       — 审计 (DEBUG, 冒泡到 task)
+  message/     — 消息通信 (DEBUG, 冒泡到 task)
+  system/      — 基础设施 (DEBUG, 冒泡到 task)
 
 用法：
-  Service:
-    set_current_task('review')
-    logger = get_task_logger('review')
+  # 任务入口
+  set_current_task('monitor')
+  logger = get_task_logger('monitor')
 
-  采集器 __init__:
-    self.logger = get_collector_logger('xxx')
+  # 功能组（同一组共用，日志内[文件名:行号]区分来源）
+  logger = get_trade_logger('decision')     # → trade/decision.log
+  logger = get_collect_logger('market')     # → collect/market.log
+  logger = get_strategy_logger('screening') # → strategy/screening.log
 """
 
 import logging
-import os
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +35,6 @@ _current_task: ContextVar[Optional[str]] = ContextVar("current_task", default=No
 
 
 def set_current_task(task_name: str):
-    """设置当前任务上下文，子模块 logger 自动获得 task.{task}.collector/core.{name} 层级名"""
     _current_task.set(task_name)
 
 
@@ -38,7 +43,6 @@ def get_current_task() -> Optional[str]:
 
 
 def _build_name(name: str, category: str) -> str:
-    """有任务上下文时返回 task.{task}.{category}.{name}，否则返回原名"""
     task = _current_task.get()
     if task:
         return f"task.{task}.{category}.{name}"
@@ -46,17 +50,14 @@ def _build_name(name: str, category: str) -> str:
 
 
 def get_task_logger(task_name: str, trade_date: str = None) -> logging.Logger:
-    """
-    任务日志 → logs/{date}/tasks/{task_name}.log
-    INFO 级别写入文件，冒泡关闭（任务 logger 是层级终点）
-    """
+    """任务日志 → logs/{date}/tasks/{task_name}.log (INFO, 不冒泡)"""
     if trade_date is None:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     name = f"task.{task_name}"
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)  # logger 自身设 DEBUG，由 handler 控制级别
-    logger.propagate = False  # 任务 logger 不往上冒泡
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
 
     if logger.handlers:
         return logger
@@ -65,20 +66,19 @@ def get_task_logger(task_name: str, trade_date: str = None) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = str(log_dir / f"{task_name}.log")
 
-    detailed_fmt = logging.Formatter(
+    fmt = logging.Formatter(
         "%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.INFO)
-    fh.setFormatter(detailed_fmt)
+    fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # 始终添加 StreamHandler → stderr，被重定向捕获后写入日志文件
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-    ch.setFormatter(detailed_fmt)
+    ch.setFormatter(fmt)
     logger.addHandler(ch)
 
     return logger
@@ -89,38 +89,32 @@ def _get_module_logger(
     category: str,
     trade_date: str = None,
 ) -> logging.Logger:
-    """
-    子模块日志（采集器/core）
-    DEBUG 级别写入模块文件，INFO+ 冒泡到父 task logger
-    """
+    """功能组日志 → logs/{date}/{category}/{name}.log (DEBUG, INFO+ 冒泡到 task)"""
     if trade_date is None:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     full_name = _build_name(name, category)
     logger = logging.getLogger(full_name)
     logger.setLevel(logging.DEBUG)
-    logger.propagate = True  # 冒泡到父 task logger
+    logger.propagate = True
 
     if logger.handlers:
         return logger
 
-    # 文件路径：用最后的短名
-    short_name = name.split(".")[-1]
     log_dir = Path(LOGS_DIR) / trade_date / category
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = str(log_dir / f"{short_name}.log")
+    log_file = str(log_dir / f"{name}.log")
 
-    detailed_fmt = logging.Formatter(
+    file_fmt = logging.Formatter(
         "%(asctime)s.%(msecs)03d - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
-    fh.setFormatter(detailed_fmt)
+    fh.setFormatter(file_fmt)
     logger.addHandler(fh)
 
-    # 终端只打 WARNING+，避免子模块噪音淹没终端
     ch = logging.StreamHandler()
     ch.setLevel(logging.WARNING)
     ch.setFormatter(
@@ -133,35 +127,52 @@ def _get_module_logger(
     return logger
 
 
-def get_collector_logger(collector_name: str, trade_date: str = None) -> logging.Logger:
-    """
-    采集器日志 → logs/{date}/collectors/{name}.log (DEBUG)
-    有任务上下文时 INFO+ 自动冒泡到 task log
-    """
-    return _get_module_logger(
-        collector_name, category="collectors", trade_date=trade_date
-    )
+# ── 业务线 logger ──────────────────────────────────────────
 
 
-def get_core_logger(name: str, trade_date: str = None) -> logging.Logger:
-    """
-    核心模块日志 → logs/{date}/core/{name}.log (DEBUG)
-    有任务上下文时 INFO+ 自动冒泡到 task log
-    """
-    return _get_module_logger(name, category="core", trade_date=trade_date)
+def get_collect_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """数据采集 → logs/{date}/collect/{name}.log"""
+    return _get_module_logger(name, category="collect", trade_date=trade_date)
 
 
-def get_system_logger(name: str) -> logging.Logger:
-    """基础设施日志（保持兼容）"""
-    return get_core_logger(name)
+def get_strategy_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """策略+选股 → logs/{date}/strategy/{name}.log"""
+    return _get_module_logger(name, category="strategy", trade_date=trade_date)
+
+
+def get_trade_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """盯盘+交易 → logs/{date}/trade/{name}.log"""
+    return _get_module_logger(name, category="trade", trade_date=trade_date)
+
+
+def get_review_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """复盘 → logs/{date}/review/{name}.log"""
+    return _get_module_logger(name, category="review", trade_date=trade_date)
+
+
+def get_audit_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """审计 → logs/{date}/audit/{name}.log"""
+    return _get_module_logger(name, category="audit", trade_date=trade_date)
+
+
+def get_message_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """消息通信 → logs/{date}/message/{name}.log"""
+    return _get_module_logger(name, category="message", trade_date=trade_date)
+
+
+def get_system_logger(name: str, trade_date: str = None) -> logging.Logger:
+    """基础设施 → logs/{date}/system/{name}.log"""
+    return _get_module_logger(name, category="system", trade_date=trade_date)
+
+
+# ── 向后兼容别名 ─────────────────────────────────────────────
+
+get_collector_logger = get_collect_logger
+get_core_logger = get_system_logger
 
 
 def setup_root_logger(task_name: str, trade_date: str = None):
-    """将 root logger 统一指向任务日志文件。
-
-    调用一次后，所有 logging.getLogger(__name__) 的日志都会自动写入
-    tasks/{task_name}.log。必须在 stdout 重定向前调用。
-    """
+    """root logger → tasks/{task_name}.log（必须在 stdout 重定向前调用）"""
     if trade_date is None:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -179,20 +190,18 @@ def setup_root_logger(task_name: str, trade_date: str = None):
 
     for h in root.handlers:
         if isinstance(h, logging.FileHandler) and h.baseFilename == log_file:
-            return  # 已安装，幂等
+            return
 
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
-    # 确保 trade / data / system 层级不阻塞冒泡
-    for name in ("trade", "data", "system"):
-        lg = logging.getLogger(name)
+    for pkg in ("trade", "data", "system"):
+        lg = logging.getLogger(pkg)
         lg.setLevel(logging.DEBUG)
         lg.propagate = True
 
-    # 已有的 StreamHandler 保留但设为 WARNING+
     for h in root.handlers:
         if isinstance(h, logging.StreamHandler):
             h.setLevel(logging.WARNING)

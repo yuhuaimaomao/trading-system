@@ -6,7 +6,6 @@
 """
 
 import json
-import logging
 import select
 import socket
 import sqlite3
@@ -16,8 +15,9 @@ from datetime import time as dt_time
 
 from system.config import settings
 from system.qmt.client import QMTClient
+from system.utils.logger import get_collect_logger
 
-logger = logging.getLogger(__name__)
+logger = get_collect_logger("live")
 
 PORT = 15555
 # 采集循环不停轮询，select 超时 2s，无 watcher 连接时不停拉取

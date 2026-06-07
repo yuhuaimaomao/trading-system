@@ -13,7 +13,7 @@ from typing import Dict, List
 
 from system.config.akshare_config import get_akshare
 from system.config.settings import DATABASE_PATH
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
 
 class StrongStockCollector:
@@ -26,7 +26,7 @@ class StrongStockCollector:
         Args:
             trade_date: 交易日期（默认今天）
         """
-        self.logger = get_collector_logger("strong_stock")
+        self.logger = get_collect_logger("events")
         if trade_date is None:
             self.trade_date = datetime.now().strftime("%Y-%m-%d")
         else:

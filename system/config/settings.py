@@ -36,7 +36,7 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
 # ===== AI 模型多业务配置 =====
 # 每个业务可独立设模型，不设则用 AI_MODEL
-# .env 示例: AI_MODEL=deepseek-v4-pro  AI_MODEL_REVIEW=qwen3.6-plus
+# .env 示例: AI_MODEL=deepseek-v4-pro  AI_MODEL_REVIEW=qwen3.7-plus
 AI_MODEL = os.environ.get("AI_MODEL", "")
 AI_MODEL_DEFAULT = os.environ.get("AI_MODEL_DEFAULT", AI_MODEL)
 AI_MODEL_REVIEW = os.environ.get("AI_MODEL_REVIEW", "")  # 复盘报告

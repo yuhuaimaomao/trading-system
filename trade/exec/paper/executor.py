@@ -1,8 +1,8 @@
 """模拟盘买卖执行 — 纯执行逻辑：计算股数、调 paper_account、更新状态。"""
 
-import logging
+from system.utils.logger import get_trade_logger
 
-logger = logging.getLogger(__name__)
+logger = get_trade_logger("exec")
 
 
 # ═══════════════════════════════════════════════════════════════

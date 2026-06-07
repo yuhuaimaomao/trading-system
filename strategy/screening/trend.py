@@ -7,7 +7,6 @@
   - 大盘状态参数控制策略倾向（恐慌空仓/普跌禁追）
 """
 
-import logging
 import sqlite3
 from typing import Optional
 
@@ -32,8 +31,9 @@ from strategy.screening.factors import (
     check_weekly_bbi,
 )
 from system.config import settings
+from system.utils.logger import get_strategy_logger
 
-logger = logging.getLogger(__name__)
+logger = get_strategy_logger("screening")
 
 _BASE_SQL = """
     SELECT stock_code, stock_name, change_pct, price,

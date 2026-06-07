@@ -4,11 +4,12 @@
 用于 Function Calling，提供股票市值、信息查询等工具
 """
 
-import logging
 import sqlite3
 from typing import Dict, List
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_system_logger
+
+logger = get_system_logger("ai")
 
 # 数据库路径
 from system.config.settings import DATABASE_PATH

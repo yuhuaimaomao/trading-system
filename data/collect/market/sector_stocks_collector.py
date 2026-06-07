@@ -40,7 +40,7 @@ class SectorStocksCollector(ProxyBaseCollector):
             task_mgr: 任务状态管理器
         """
         super().__init__(
-            logger_name="SectorStocksCollector",
+            logger_name="market",
             trade_date=trade_date,
             task_mgr=task_mgr,
         )

@@ -1,10 +1,9 @@
 """QMT 行情接口封装"""
 
-import logging
-
 from system.qmt.client import QMTClient, strip_suffix
+from system.utils.logger import get_collect_logger
 
-logger = logging.getLogger(__name__)
+logger = get_collect_logger("live")
 
 # 沪深后缀列表 — QMT /quotes 端点要求带后缀的完整代码
 _SUFFIXES = [".SH", ".SZ", ".BJ"]

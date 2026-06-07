@@ -7,10 +7,9 @@
 
 模型通过环境变量配置，不在代码里硬编码:
     AI_MODEL_SCREENING=deepseek-v4-pro
-    AI_MODEL_REVIEW=qwen3.6-plus
+    AI_MODEL_REVIEW=qwen3.7-plus
 """
 
-import logging
 import os
 import queue
 import threading
@@ -22,8 +21,9 @@ import requests
 from system.ai.function_calling import FunctionCallingEngine
 from system.ai.stock_tools import TOOLS_DEFINITION
 from system.config import settings
+from system.utils.logger import get_system_logger
 
-logger = logging.getLogger(__name__)
+logger = get_system_logger("ai")
 
 _RETRYABLE = (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
 _MAX_RETRIES = 2

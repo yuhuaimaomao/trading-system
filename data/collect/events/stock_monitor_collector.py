@@ -13,9 +13,9 @@ from typing import Dict, List, Optional
 import requests
 
 from data.collect.proxy.proxy_base_collector import USER_AGENTS
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
-logger = get_collector_logger("stock_monitor")
+logger = get_collect_logger("events")
 
 
 # 反爬配置

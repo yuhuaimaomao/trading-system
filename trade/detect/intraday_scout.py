@@ -6,12 +6,13 @@
 Mixin 方式混入 Watcher。与引擎1（复盘趋势跟踪）互补。
 """
 
-import logging
 import time
 from datetime import datetime
 from datetime import time as dt_time
 
-logger = logging.getLogger(__name__)
+from system.utils.logger import get_trade_logger
+
+logger = get_trade_logger("detect")
 
 # 交易时段
 MORNING_START = dt_time(9, 30)

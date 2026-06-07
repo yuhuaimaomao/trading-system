@@ -1,14 +1,14 @@
 """ProfileBuilder — 将 StockScore 富化为 StockProfile 画像"""
 
 import json
-import logging
 import sqlite3
 from typing import Optional
 
 from stock.signals import StockProfile, StockScore
 from system.config import settings
+from system.utils.logger import get_strategy_logger
 
-logger = logging.getLogger(__name__)
+logger = get_strategy_logger("screening")
 
 
 class ProfileBuilder:

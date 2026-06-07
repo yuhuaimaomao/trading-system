@@ -16,9 +16,9 @@ from typing import Dict, Optional
 from curl_cffi import requests as curl_requests
 
 # 导入日志系统
-from system.utils.logger import get_collector_logger
+from system.utils.logger import get_collect_logger
 
-logger = get_collector_logger("macro")
+logger = get_collect_logger("macro")
 
 
 class MacroCollector:
