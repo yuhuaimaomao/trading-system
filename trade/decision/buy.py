@@ -4,7 +4,7 @@ evaluate_buy: 价格在买入区内的多维评估
 evaluate_below_zone: 价格低于买入区时的回调评估
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -85,7 +85,7 @@ class BuyEvalInput:
     # 板块强弱标记
     sector_strong: bool = False
     sector_very_strong: bool = False
-    ai_bias: str = ""       # "" / "focus" / "avoid"
+    ai_bias: str = ""  # "" / "focus" / "avoid"
     ai_size_mult: float = 1.0
 
 
@@ -103,11 +103,11 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     sector_very_strong = ctx.sector_very_strong
 
     # 1. 板块趋势
-    SECTOR_REJECT_PCT = -1.0
+    sector_reject_pct = -1.0
     if not trend or "数据不足" in trend or "数据积累中" in trend:
         reject_reasons.append(f"板块数据不足，开盘初期暂不买入{trend}")
         size_mul = 0.0
-    elif sector_chg is not None and sector_chg <= SECTOR_REJECT_PCT:
+    elif sector_chg is not None and sector_chg <= sector_reject_pct:
         reject_reasons.append(f"板块跌幅 {sector_chg:+.1f}%，拒绝买入")
         size_mul = 0.0
     elif decline is not None and decline >= 1.5:
@@ -139,7 +139,7 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         size_mul = min(1.0, size_mul * ctx.ai_size_mult)
     elif ctx.ai_bias == "avoid":
         if "持续走弱" in trend:
-            reject_reasons.append(f"AI回避+板块持续走弱")
+            reject_reasons.append("AI回避+板块持续走弱")
             size_mul = 0.0
         else:
             size_mul *= ctx.ai_size_mult
@@ -343,16 +343,20 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     return True, "条件符合", size_mul
 
 
-def evaluate_below_zone(ctx: BuyEvalInput, *, near_support: bool = False,
-                        support_name: str = "",
-                        near_ma60: bool = False,
-                        vol_shrinking: bool = False,
-                        vol_surging: bool = False) -> tuple[str, str, float | None]:
+def evaluate_below_zone(
+    ctx: BuyEvalInput,
+    *,
+    near_support: bool = False,
+    support_name: str = "",
+    near_ma60: bool = False,
+    vol_shrinking: bool = False,
+    vol_surging: bool = False,
+) -> tuple[str, str, float | None]:
     """价格低于买入区时的回调评估。返回 (action, reason, size_mul|None)。
 
     action: "opportunity" / "watching" / "abandon"
     """
-    zone_range = ctx.buy_max - ctx.buy_min if ctx.buy_max > ctx.buy_min else 1
+    _zone_range = ctx.buy_max - ctx.buy_min if ctx.buy_max > ctx.buy_min else 1
     below_pct = (ctx.buy_min - ctx.price) / ctx.buy_min * 100
     score = 0
 

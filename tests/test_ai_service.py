@@ -179,55 +179,61 @@ class TestChat:
         assert result == ""
 
     def test_chat_passes_system_prompt_to_build_payload(self, svc):
-        with patch.object(svc, "_build_payload", return_value={}) as mock_build:
-            with patch.object(
+        with (
+            patch.object(svc, "_build_payload", return_value={}) as mock_build,
+            patch.object(
                 svc,
                 "_request",
                 return_value={"choices": [{"message": {"content": "ok"}}]},
-            ):
-                svc.chat("hello", system_prompt="You are a trader")
+            ),
+        ):
+            svc.chat("hello", system_prompt="You are a trader")
         _, kwargs = mock_build.call_args
         assert kwargs.get("system_prompt") == "You are a trader"
 
     def test_chat_default_system_prompt_is_empty(self, svc):
-        with patch.object(svc, "_build_payload", return_value={}) as mock_build:
-            with patch.object(
+        with (
+            patch.object(svc, "_build_payload", return_value={}) as mock_build,
+            patch.object(
                 svc,
                 "_request",
                 return_value={"choices": [{"message": {"content": "ok"}}]},
-            ):
-                svc.chat("hello")
+            ),
+        ):
+            svc.chat("hello")
         _, kwargs = mock_build.call_args
         assert kwargs.get("system_prompt") == ""
 
     def test_chat_passes_max_tokens_to_build_payload(self, svc):
-        with patch.object(svc, "_build_payload", return_value={}) as mock_build:
-            with patch.object(
+        with (
+            patch.object(svc, "_build_payload", return_value={}) as mock_build,
+            patch.object(
                 svc,
                 "_request",
                 return_value={"choices": [{"message": {"content": "ok"}}]},
-            ):
-                svc.chat("hello", max_tokens=500)
+            ),
+        ):
+            svc.chat("hello", max_tokens=500)
         _, kwargs = mock_build.call_args
         assert kwargs.get("max_tokens") == 500
 
     def test_chat_default_max_tokens_is_1000(self, svc):
-        with patch.object(svc, "_build_payload", return_value={}) as mock_build:
-            with patch.object(
+        with (
+            patch.object(svc, "_build_payload", return_value={}) as mock_build,
+            patch.object(
                 svc,
                 "_request",
                 return_value={"choices": [{"message": {"content": "ok"}}]},
-            ):
-                svc.chat("hello")
+            ),
+        ):
+            svc.chat("hello")
         _, kwargs = mock_build.call_args
         assert kwargs.get("max_tokens") == 1000
 
     def test_chat_with_model_override_uses_resolved_model(self, svc):
         """model='review' -> _request receives resolved model as first positional arg."""
         os.environ["AI_MODEL_REVIEW"] = "review-model"
-        with patch.object(
-            svc, "_request", return_value={"choices": [{"message": {"content": "ok"}}]}
-        ) as mock_req:
+        with patch.object(svc, "_request", return_value={"choices": [{"message": {"content": "ok"}}]}) as mock_req:
             svc.chat("hello", model="review")
         # _request(self, model_name, payload) — model_name is first positional arg
         args, _ = mock_req.call_args
@@ -235,21 +241,21 @@ class TestChat:
 
     def test_chat_with_model_override_unknown_falls_back(self, svc):
         """model not in _MODEL_ENV_MAP -> falls to AI_MODEL env."""
-        with patch.object(
-            svc, "_request", return_value={"choices": [{"message": {"content": "ok"}}]}
-        ) as mock_req:
+        with patch.object(svc, "_request", return_value={"choices": [{"message": {"content": "ok"}}]}) as mock_req:
             svc.chat("hello", model="custom_business")
         # Should still complete without error (falls back to AI_MODEL default)
         assert mock_req.called
 
     def test_chat_uses_default_temperature(self, svc):
-        with patch.object(svc, "_build_payload", return_value={}) as mock_build:
-            with patch.object(
+        with (
+            patch.object(svc, "_build_payload", return_value={}) as mock_build,
+            patch.object(
                 svc,
                 "_request",
                 return_value={"choices": [{"message": {"content": "ok"}}]},
-            ):
-                svc.chat("hello")
+            ),
+        ):
+            svc.chat("hello")
         _, kwargs = mock_build.call_args
         assert kwargs.get("temperature") == 0.6
 
@@ -572,7 +578,7 @@ class TestFunctionCallingEngine:
     """Tests for FunctionCallingEngine dispatch and TOOLS_DEFINITION integrity."""
 
     def test_tools_definition_count(self):
-        assert len(TOOLS_DEFINITION) == 19
+        assert len(TOOLS_DEFINITION) == 9
 
     def test_each_tool_has_type_function(self):
         for td in TOOLS_DEFINITION:
@@ -679,7 +685,7 @@ class TestFunctionCallingEngine:
         fc = FunctionCallingEngine(db_path=":memory:")
         result = fc.get_tools_definition()
         assert result is TOOLS_DEFINITION
-        assert len(result) == 19
+        assert len(result) == 9
 
 
 # ═══════════════════════════════════════════════
@@ -718,15 +724,6 @@ class TestPromptTemplates:
             ],
             "审计",
         ),
-        (
-            "system.ai.prompts.telegraph",
-            [
-                "TELEGRAPH_STRUCTURE_PROMPT",
-                "TELEGRAPH_AI_SYSTEM",
-                "TELEGRAPH_FC_TOOLS",
-            ],
-            "电报",
-        ),
     ]
 
     @pytest.mark.parametrize("module_name,constants,_", PROMPT_MODULES)
@@ -754,11 +751,6 @@ class TestPromptTemplates:
                 break
         assert found, f"No constant in {module_name} contains '{expected_keyword}'"
 
-    def test_telegraph_fc_tools_count(self):
-        from system.ai.prompts.telegraph import TELEGRAPH_FC_TOOLS
-
-        assert len(TELEGRAPH_FC_TOOLS) == 2  # search_stock + search_sector
-
     def test_watcher_prompt_template_instances(self):
         from system.ai.prompts.watcher import BREAKOUT_TEMPLATE, TRAPPED_EXIT_TEMPLATE
 
@@ -766,11 +758,5 @@ class TestPromptTemplates:
         assert TRAPPED_EXIT_TEMPLATE.scenario == "trapped_exit"
         assert BREAKOUT_TEMPLATE.max_tokens == 80
         assert TRAPPED_EXIT_TEMPLATE.max_tokens == 80
-        assert (
-            "动量交易" in BREAKOUT_TEMPLATE.system_prompt
-            or "突破" in BREAKOUT_TEMPLATE.system_prompt
-        )
-        assert (
-            "被套" in TRAPPED_EXIT_TEMPLATE.system_prompt
-            or "exit" in TRAPPED_EXIT_TEMPLATE.scenario
-        )
+        assert "动量交易" in BREAKOUT_TEMPLATE.system_prompt or "突破" in BREAKOUT_TEMPLATE.system_prompt
+        assert "被套" in TRAPPED_EXIT_TEMPLATE.system_prompt or "exit" in TRAPPED_EXIT_TEMPLATE.scenario

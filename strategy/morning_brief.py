@@ -17,7 +17,7 @@ from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_task_logger
 
 
-class  MorningBrief:
+class MorningBrief:
     """早盘简报：AI 驱动的盘前校准"""
 
     def __init__(self, telegram_bot=None):
@@ -32,9 +32,7 @@ class  MorningBrief:
         if trade_date is None:
             trade_date = datetime.now().strftime("%Y-%m-%d")
 
-        yesterday = (
-            datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=1)
-        ).strftime("%Y-%m-%d")
+        yesterday = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
         # 1. 加载昨日复盘报告
         review_text = self._load_review_report(yesterday)
@@ -66,8 +64,8 @@ class  MorningBrief:
             risk_warnings=risk_text if risk_text else "（今日无避雷针内容）",
         )
 
-        # 7. 调用 AI（支持 FC，AI 自行决定是否调用 get_pending_signals）
-        brief, adjustments = self._call_ai_with_fc(prompt, yesterday)
+        # 7. 调用 AI（预计算模式，pending 信号已嵌入 prompt）
+        brief, adjustments = self._call_ai_precomputed(prompt, yesterday)
 
         if not brief:
             self.logger.error("AI 生成早盘简报失败")
@@ -112,9 +110,7 @@ class  MorningBrief:
         conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute(
-                "SELECT * FROM macro_daily ORDER BY trade_date DESC LIMIT 1"
-            ).fetchone()
+            row = conn.execute("SELECT * FROM macro_daily ORDER BY trade_date DESC LIMIT 1").fetchone()
             if not row:
                 return ""
             d = dict(row)
@@ -124,25 +120,13 @@ class  MorningBrief:
             if d.get("kweb_change") is not None:
                 lines.append(f"中概股KWEB: {d['kweb_change']:+.2f}%")
             if d.get("a50_price") is not None:
-                chg = (
-                    f" ({d['a50_change']:+.2f}%)"
-                    if d.get("a50_change") is not None
-                    else ""
-                )
+                chg = f" ({d['a50_change']:+.2f}%)" if d.get("a50_change") is not None else ""
                 lines.append(f"A50期货: {d['a50_price']:.2f}{chg}")
             if d.get("crude_oil_price") is not None:
-                chg = (
-                    f" ({d['crude_oil_change']:+.2f}%)"
-                    if d.get("crude_oil_change") is not None
-                    else ""
-                )
+                chg = f" ({d['crude_oil_change']:+.2f}%)" if d.get("crude_oil_change") is not None else ""
                 lines.append(f"WTI原油: {d['crude_oil_price']:.2f}{chg}")
             if d.get("gold_price") is not None:
-                chg = (
-                    f" ({d['gold_change']:+.2f}%)"
-                    if d.get("gold_change") is not None
-                    else ""
-                )
+                chg = f" ({d['gold_change']:+.2f}%)" if d.get("gold_change") is not None else ""
                 lines.append(f"黄金: {d['gold_price']:.2f}{chg}")
             if d.get("usd_cny_rate") is not None:
                 lines.append(f"美元/人民币: {d['usd_cny_rate']:.4f}")
@@ -165,10 +149,10 @@ class  MorningBrief:
             return {}
 
     def _get_overnight_telegraphs(self, yesterday: str) -> str:
-        """查询隔夜重要电报（昨日15:00后，按 AI 重要度排序）"""
-        cutoff_dt = datetime.strptime(yesterday, "%Y-%m-%d").replace(
-            hour=15, minute=0, second=0
-        )
+        """查询隔夜重要电报（昨日15:00后，按评分排序）"""
+        import json as _json
+
+        cutoff_dt = datetime.strptime(yesterday, "%Y-%m-%d").replace(hour=15, minute=0, second=0)
         cutoff_ts = int(cutoff_dt.timestamp())
 
         try:
@@ -176,12 +160,11 @@ class  MorningBrief:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
-                SELECT ai_summary, ai_importance, ai_sectors, ai_sentiment, title, ctime
+                SELECT title, score, plate_tags, subject_tags, ctime
                 FROM cls_telegraph
                 WHERE trade_date = ? AND ctime >= ?
-                  AND ai_status != 'skipped'
-                  AND ai_importance >= 3
-                ORDER BY ai_importance DESC, ctime DESC
+                  AND score >= 3
+                ORDER BY score DESC, ctime DESC
                 LIMIT 30
             """,
                 (yesterday, cutoff_ts),
@@ -193,17 +176,19 @@ class  MorningBrief:
 
             lines = []
             for r in rows:
-                summary = r["ai_summary"] or r["title"] or ""
-                if not summary:
+                title = r["title"] or ""
+                if not title:
                     continue
-                imp = r["ai_importance"] or 0
-                sentiment = r["ai_sentiment"] or ""
-                sentiment_tag = {"利好": "🟢", "利空": "🔴", "中性": "⚪"}.get(
-                    sentiment, ""
-                )
-                sectors = r["ai_sectors"] or ""
-                sector_tag = f" [{sectors}]" if sectors else ""
-                lines.append(f"• {sentiment_tag}[P{imp}]{sector_tag} {summary}")
+                score = r["score"] or 0
+                # plate_tags 提取板块名
+                plate_names = []
+                try:
+                    plates = _json.loads(r["plate_tags"]) if r["plate_tags"] else []
+                    plate_names = [p for p in plates if isinstance(p, str)]
+                except (_json.JSONDecodeError, TypeError):
+                    pass
+                sector_tag = f" [{','.join(plate_names[:2])}]" if plate_names else ""
+                lines.append(f"• [P{score}]{sector_tag} {title}")
 
             return "\n".join(lines)
         except Exception as e:
@@ -259,40 +244,36 @@ class  MorningBrief:
         return risk_text
 
     # ================================================================
-    # AI 调用（支持 FC）
+    # AI 调用（预计算模式，数据已嵌入 prompt）
     # ================================================================
 
-    def _call_ai_with_fc(self, prompt: str, yesterday: str) -> tuple:
-        """调用 AI 生成早报，支持 FC 自主判断是否校准。返回 (文本, adjustments列表)。"""
+    def _call_ai_precomputed(self, prompt: str, yesterday: str) -> tuple:
+        """预计算 pending 信号嵌入 prompt，单次 AI 调用生成早报。
+        返回 (文本, adjustments列表)。"""
 
         from system.ai import ai
-        from system.ai.stock_tools import TOOLS_DEFINITION
+        from system.ai.stock_tools import StockTools
+
+        # 预计算：查询昨日 pending 信号
+        tools = StockTools()
+        ps_data = tools.get_pending_signals(yesterday)
+        pending_text = self._fmt_pending_signals(ps_data)
+        self.logger.info(f"预计算 pending 信号: {ps_data.get('total', 0)} 只")
 
         system_prompt = (
             "你是一个顶级游资操盘手，做盘前晨会分析。"
             "风格犀利直接，像交易员之间的对话。"
             "所有数值用阿拉伯数字，不要用中文数字。"
-            "你可以调用 get_pending_signals 工具获取昨日推荐标的的精确列表。"
+            "昨日 pending 买入信号已附在 prompt 末尾，无需调用工具。"
         )
 
-        morning_tools = [
-            t
-            for t in TOOLS_DEFINITION
-            if t["function"]["name"] == "get_pending_signals"
-        ]
+        full_prompt = prompt + "\n\n---\n## 昨日 Pending 买入信号（预计算）\n\n" + pending_text
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-
-        content = ai.chat_with_tools(
-            messages,
+        content = ai.chat(
+            full_prompt,
             model="morning",
-            tools=morning_tools,
-            tool_choice="auto",
+            system_prompt=system_prompt,
             max_tokens=6000,
-            max_rounds=4,
         )
 
         if not content:
@@ -301,6 +282,28 @@ class  MorningBrief:
 
         adjustments = self._parse_adjustments(content)
         return content, adjustments
+
+    @staticmethod
+    def _fmt_pending_signals(ps_data: dict) -> str:
+        """格式化 pending 信号为 prompt 文本"""
+        if ps_data.get("error"):
+            return f"（pending 信号查询失败：{ps_data['error']}）"
+
+        signals = ps_data.get("signals", [])
+        if not signals:
+            return "（昨日无 pending 买入信号）"
+
+        lines = [f"共 {ps_data['total']} 只 pending 标的："]
+        for s in signals:
+            lines.append(
+                f"  {s['stock_code']} {s['stock_name']}"
+                f"（来源:{s.get('source', '?')}，"
+                f"买入区:{s.get('buy_zone', '?')}，"
+                f"止损:{s.get('stop_loss', '?')}，"
+                f"止盈:{s.get('take_profit', '?')}，"
+                f"评分:{s.get('score', '?')}）" + (f" — {s.get('reason', '')}" if s.get("reason") else "")
+            )
+        return "\n".join(lines)
 
     def _parse_adjustments(self, text: str) -> list:
         """从 AI 响应中解析 <<<ADJUSTMENTS>>> 结构化修正指令。"""
@@ -332,9 +335,7 @@ class  MorningBrief:
                     decoder = _json.JSONDecoder()
                     data, _ = decoder.raw_decode(raw)
                     if isinstance(data, list):
-                        self.logger.info(
-                            f"✅ raw_decode 解析到 {len(data)} 条修正指令（忽略尾部文字）"
-                        )
+                        self.logger.info(f"✅ raw_decode 解析到 {len(data)} 条修正指令（忽略尾部文字）")
                         return data
                 except _json.JSONDecodeError:
                     pass
@@ -439,9 +440,7 @@ class  MorningBrief:
                         reason,
                     ),
                 )
-                emoji = {"focus": "🎯", "avoid": "🚫", "selective": "🔍"}.get(
-                    action, ""
-                )
+                emoji = {"focus": "🎯", "avoid": "🚫", "selective": "🔍"}.get(action, "")
                 self.logger.info(
                     f"  {emoji} 板块倾向: {sector} {action} "
                     f"priority={adj.get('priority', 3)} mult={adj.get('size_multiplier', 1.0)} ({reason})"

@@ -1,6 +1,5 @@
 """TradeRepository 单元测试 — 信号/订单 CRUD"""
 
-import pytest
 from data.repo import TradeRepository
 
 
@@ -42,20 +41,22 @@ class TestSignalCRUD:
 class TestOrderCRUD:
     def test_insert_and_get(self, db_path):
         repo = TradeRepository(db_path=db_path)
-        oid = repo.insert_order({
-            "trade_date": "2026-06-01",
-            "order_time": "2026-06-01 10:00:00",
-            "stock_code": "002371",
-            "order_type": "buy",
-            "order_price": 390.0,
-            "order_volume": 100,
-            "filled_price": 390.0,
-            "filled_volume": 100,
-            "filled_amount": 39000.0,
-            "commission": 33.15,
-            "order_status": "filled",
-            "account": "paper",
-        })
+        oid = repo.insert_order(
+            {
+                "trade_date": "2026-06-01",
+                "order_time": "2026-06-01 10:00:00",
+                "stock_code": "002371",
+                "order_type": "buy",
+                "order_price": 390.0,
+                "order_volume": 100,
+                "filled_price": 390.0,
+                "filled_volume": 100,
+                "filled_amount": 39000.0,
+                "commission": 33.15,
+                "order_status": "filled",
+                "account": "paper",
+            }
+        )
         assert oid > 0
 
         orders = repo.get_orders_by_date("2026-06-01", account="paper")
@@ -66,18 +67,20 @@ class TestOrderCRUD:
 class TestSnapshotCRUD:
     def test_insert_and_latest(self, db_path):
         repo = TradeRepository(db_path=db_path)
-        repo.insert_snapshot({
-            "trade_date": "2026-06-01",
-            "total_value": 210000,
-            "cash": 50000,
-            "market_value": 160000,
-            "daily_pnl": 10000,
-            "total_pnl": 10000,
-            "drawdown": 0.0,
-            "position_count": 2,
-            "sector_exposure": "{}",
-            "account": "paper",
-        })
+        repo.insert_snapshot(
+            {
+                "trade_date": "2026-06-01",
+                "total_value": 210000,
+                "cash": 50000,
+                "market_value": 160000,
+                "daily_pnl": 10000,
+                "total_pnl": 10000,
+                "drawdown": 0.0,
+                "position_count": 2,
+                "sector_exposure": "{}",
+                "account": "paper",
+            }
+        )
 
         snap = repo.get_latest_snapshot("paper")
         assert snap is not None
@@ -93,11 +96,22 @@ class TestSnapshotCRUD:
 class TestPositionsCRUD:
     def test_insert_and_get(self, db_path):
         repo = TradeRepository(db_path=db_path)
-        repo.insert_positions("2026-06-01", "paper", [
-            {"stock_code": "002371", "stock_name": "北方华创", "volume": 100,
-             "avg_cost": 390.0, "current_price": 400.0, "market_value": 40000.0,
-             "pnl": 1000.0, "pnl_pct": 0.025},
-        ])
+        repo.insert_positions(
+            "2026-06-01",
+            "paper",
+            [
+                {
+                    "stock_code": "002371",
+                    "stock_name": "北方华创",
+                    "volume": 100,
+                    "avg_cost": 390.0,
+                    "current_price": 400.0,
+                    "market_value": 40000.0,
+                    "pnl": 1000.0,
+                    "pnl_pct": 0.025,
+                },
+            ],
+        )
         positions = repo.get_positions_by_date("2026-06-01", "paper")
         assert len(positions) == 1
         assert positions[0]["stock_code"] == "002371"
@@ -105,6 +119,7 @@ class TestPositionsCRUD:
 
 class TestDeletedMethods:
     """验证已删除的方法确实不存在"""
+
     def test_no_factor_values_methods(self, db_path):
         repo = TradeRepository(db_path=db_path)
         assert not hasattr(repo, "save_factor_values")

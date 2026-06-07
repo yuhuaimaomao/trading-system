@@ -6,10 +6,12 @@
 Mixin 方式混入 Watcher。与引擎1（复盘趋势跟踪）互补。
 """
 
+import sqlite3
 import time
 from datetime import datetime
 from datetime import time as dt_time
 
+from system.config import settings
 from system.utils.logger import get_trade_logger
 
 logger = get_trade_logger("detect")
@@ -47,6 +49,8 @@ class IntradayScoutMixin:
     _scout_ai_pending: dict[str, dict] = {}  # AI 待处理
     _scout_recent_sectors: dict[str, int] = {}  # 板块→最近推送 scan_count
     _scout_positions: set[str] = set()  # 引擎2当前持仓 code
+    _scout_daily_bars: dict[str, list[dict]] = {}  # 前2-3天日线数据缓存
+    _scout_pretrend_loaded: bool = False  # 预趋势数据是否已加载
 
     # ═══════════════════════════════════════════════════════════════
     # 主入口
@@ -59,6 +63,9 @@ class IntradayScoutMixin:
         snapshot = getattr(self, "_market_snapshot", None)
         if not snapshot:
             return
+
+        # ── 加载前2-3天日线数据（整个会话只加载一次）──
+        self._scout_ensure_pretrend_loaded()
 
         # ── 时段门控：只在 10:00-11:30 运行 ──
         now = datetime.now().time()
@@ -76,9 +83,8 @@ class IntradayScoutMixin:
 
         # ── 大盘回撤暂停（日亏损 > 2% → 暂停引擎2）──
         pa = self.paper_account
-        if pa.daily_pnl < 0 and pa.total_value > 0:
-            if abs(pa.daily_pnl) / pa.total_value > 0.02:
-                return
+        if pa.daily_pnl < 0 and pa.total_value > 0 and abs(pa.daily_pnl) / pa.total_value > 0.02:
+            return
 
         # ── 引擎2 仓位已满 ──
         scout_count = self._scout_position_count()
@@ -111,12 +117,8 @@ class IntradayScoutMixin:
         self._scout_process_ai()
 
         # 保存本轮数据供下轮对比
-        self._prev_snapshot_amounts = {
-            code: float(item.get("amount", 0) or 0) for code, item in snapshot.items()
-        }
-        self._prev_snapshot_changes = {
-            code: float(item.get("changePct", 0)) for code, item in snapshot.items()
-        }
+        self._prev_snapshot_amounts = {code: float(item.get("amount", 0) or 0) for code, item in snapshot.items()}
+        self._prev_snapshot_changes = {code: float(item.get("changePct", 0)) for code, item in snapshot.items()}
 
     # ═══════════════════════════════════════════════════════════════
     # 第一层：底部发力硬条件过滤
@@ -179,9 +181,7 @@ class IntradayScoutMixin:
 
             # 4. 量能放大：环比 > 1.2x
             prev_amount = prev_amounts.get(code, 0)
-            vol_expanding = (
-                prev_amount > 0 and amount > prev_amount * self.VOL_EXPAND_RATIO
-            )
+            vol_expanding = prev_amount > 0 and amount > prev_amount * self.VOL_EXPAND_RATIO
 
             # 5. 涨幅加速：chg > prev_chg + 0.3%
             prev_chg = prev_changes.get(code, 0)
@@ -208,6 +208,15 @@ class IntradayScoutMixin:
                 if scan_diff < 60:
                     continue
 
+            # 前2-3天趋势检测：区分「有准备的启动」和「一日游」
+            pretrend = self._scout_check_pretrend(code)
+            # 放量下跌形态 → 排除，不是底部发力
+            if pretrend["form"] == "distributing":
+                continue
+            # 高位加速 → 排除，可能是赶顶而非底部发力
+            if pretrend["position"] == "high":
+                continue
+
             candidates.append(
                 {
                     "code": code,
@@ -218,6 +227,9 @@ class IntradayScoutMixin:
                     "prev_amount": prev_amount,
                     "vol_ratio": amount / prev_amount if prev_amount > 0 else 0,
                     "industry": industry,
+                    "pretrend_form": pretrend["form"],
+                    "pretrend_position": pretrend["position"],
+                    "pretrend_cum_chg": pretrend["cum_chg"],
                 }
             )
 
@@ -228,7 +240,7 @@ class IntradayScoutMixin:
     # ═══════════════════════════════════════════════════════════════
 
     def _scout_layer2_rank(self, candidates: list[dict]) -> list[dict]:
-        """五维打分：加速强度 + 量能爆发 + 板块强度 + 价格位置 + 大盘配合。"""
+        """六维打分：加速强度 + 量能爆发 + 板块强度 + 位置安全 + 前日趋势 + 大盘配合。"""
         sector_stats = getattr(self, "_sector_stats", {}) or {}
         total_sectors = len(sector_stats) if sector_stats else 86
 
@@ -248,22 +260,53 @@ class IntradayScoutMixin:
             sector_info = sector_stats.get(industry, {})
             sector_pct = sector_info.get("change_pct", 0)
             sector_rank = sector_rank_map.get(industry, total_sectors)
+            sector_vol = sector_info.get("vol_ratio", 1.0)  # 板块量比
 
-            # 1. 加速强度分（满分 35）— 加速越快越好
+            # 1. 加速强度分（满分 30）— 加速越快越好
             accel = item["chg_accel"]
-            accel_score = min(35, accel * 8)
+            accel_score = min(30, accel * 7)
 
-            # 2. 量能爆发分（满分 25）— 放量越大越好，但有上限
+            # 2. 量能爆发分（满分 22）— 放量越大越好，但有上限
             vol_ratio = item["vol_ratio"]
-            vol_score = min(25, (vol_ratio - 1.0) * 10) if vol_ratio > 1.0 else 0
+            vol_score = min(22, (vol_ratio - 1.0) * 8) if vol_ratio > 1.0 else 0
 
-            # 3. 板块强度分（满分 20）— 板块排名越靠前越好
-            sector_score = max(0, (1 - sector_rank / total_sectors)) * 20
+            # 3. 板块强度分（满分 18）
+            sector_score = max(0, (1 - sector_rank / total_sectors)) * 18
+            # 板块量价齐升：板块涨 + 板块放量 → 个股有板块级支撑
+            sector_vol_price = sector_pct > 0 and sector_vol > 1.0
+            if sector_vol_price:
+                sector_score += 3  # 板块量价齐升额外加分
 
-            # 4. 价格位置分（满分 10）— 涨幅越低越好（刚启动，安全边际高）
-            position_score = max(0, 10 - item["change_pct"] * 3)
+            # 4. 位置安全分（满分 18）— 低位 > 中位 > 高位
+            pretrend_pos = item.get("pretrend_position", "unknown")
+            if pretrend_pos == "low":
+                position_score = 18
+            elif pretrend_pos == "mid":
+                position_score = 10
+            elif pretrend_pos == "high":
+                position_score = 3  # 高位仍有分，但很低
+            else:
+                # 无预趋势数据时回退：涨幅越低分越高（安全边际）
+                position_score = max(0, 12 - item["change_pct"] * 3)
 
-            # 5. 大盘配合分（满分 10）
+            # 5. 前日趋势质量分（满分 12）
+            pretrend_form = item.get("pretrend_form", "unknown")
+            if pretrend_form == "climbing":
+                # 连续爬升 + 连续放量 → 有准备的启动
+                pretrend_score = 12
+            elif pretrend_form == "oscillating_up":
+                # 震荡向上 + 中心上移 → 温和蓄力
+                pretrend_score = 8
+            elif pretrend_form == "unknown":
+                pretrend_score = 4  # 数据不足，给基准分
+            else:
+                pretrend_score = 0
+
+            # 板块量价齐升 + 个股低位爬升 → 最强组合
+            if sector_vol_price and pretrend_pos == "low" and pretrend_form == "climbing":
+                pretrend_score += 3
+
+            # 6. 大盘配合分（满分 10）
             market_score = 10
             if market_env in ("uptrend", "normal"):
                 market_score = 10
@@ -276,14 +319,13 @@ class IntradayScoutMixin:
             if risk_level in ("cautious",):
                 market_score *= 0.7
 
-            item["score"] = (
-                accel_score + vol_score + sector_score + position_score + market_score
-            )
+            item["score"] = accel_score + vol_score + sector_score + position_score + pretrend_score + market_score
             item["sector_pct"] = sector_pct
             item["sector_rank"] = sector_rank
             item["sector_total"] = total_sectors
             item["market_env"] = market_env
             item["risk_level"] = risk_level
+            item["sector_vol_price"] = sector_vol_price
 
         candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
         return candidates
@@ -381,10 +423,7 @@ class IntradayScoutMixin:
             name = ctx["name"]
 
             decision = self._scout_parse_decision(result)
-            logger.info(
-                f"Scout AI [{code} {name}] 决策={decision} "
-                f"评分={ctx.get('score', 0):.0f} 原话={result[:50]}"
-            )
+            logger.info(f"Scout AI [{code} {name}] 决策={decision} 评分={ctx.get('score', 0):.0f} 原话={result[:50]}")
 
             if decision == "buy":
                 self._scout_execute_buy(ctx)
@@ -411,15 +450,11 @@ class IntradayScoutMixin:
         industry = ctx.get("industry", "")
         same_sector_count = 0
         for held_code in self._scout_positions:
-            held_industry = (getattr(self, "_industry_cache", {}) or {}).get(
-                held_code, ""
-            )
+            held_industry = (getattr(self, "_industry_cache", {}) or {}).get(held_code, "")
             if held_industry == industry:
                 same_sector_count += 1
         if same_sector_count >= self.MAX_SAME_SECTOR:
-            logger.info(
-                f"Scout [{code}] 板块{industry}已达上限{self.MAX_SAME_SECTOR}只，跳过"
-            )
+            logger.info(f"Scout [{code}] 板块{industry}已达上限{self.MAX_SAME_SECTOR}只，跳过")
             return
 
         amount = self.MAX_POSITION_AMOUNT
@@ -438,8 +473,7 @@ class IntradayScoutMixin:
             self._scout_positions.add(code)
             self._scout_recent_sectors[industry] = self._scan_count
             logger.info(
-                f"Scout 买入 [{code} {name}] {volume}股 @{price:.2f} "
-                f"金额{amount} 评分{ctx.get('score', 0):.0f}"
+                f"Scout 买入 [{code} {name}] {volume}股 @{price:.2f} 金额{amount} 评分{ctx.get('score', 0):.0f}"
             )
 
     def _scout_push_alert(self, ctx: dict, ai_text: str, decision: str):
@@ -476,9 +510,131 @@ class IntradayScoutMixin:
     def _scout_cleanup_stale(self):
         """定期清理过期状态。"""
         now_scan = self._scan_count
-        stale_sectors = [
-            s for s, scan in self._scout_recent_sectors.items() if now_scan - scan > 30
-        ]
+        stale_sectors = [s for s, scan in self._scout_recent_sectors.items() if now_scan - scan > 30]
         for s in stale_sectors:
             del self._scout_recent_sectors[s]
         self._scout_position_count()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 前2-3天日线趋势 + 位置检测
+    # ═══════════════════════════════════════════════════════════════
+
+    def _scout_ensure_pretrend_loaded(self):
+        """加载前2-3个交易日的日线数据，整个会话只加载一次。"""
+        if self._scout_pretrend_loaded:
+            return
+        db_path = getattr(settings, "DATABASE_PATH", "")
+        if not db_path:
+            return
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            # 找最近3个交易日（不含今天）
+            recent_dates = conn.execute(
+                """SELECT DISTINCT trade_date FROM stock_basic
+                   WHERE trade_date < date('now')
+                   ORDER BY trade_date DESC LIMIT 3"""
+            ).fetchall()
+            if not recent_dates:
+                conn.close()
+                return
+            dates = [r[0] for r in recent_dates]
+            placeholders = ",".join("?" for _ in dates)
+            rows = conn.execute(
+                f"""SELECT stock_code, trade_date, price, open, high, low,
+                           change_pct, volume_ratio, ma5, ma10, ma20
+                    FROM stock_basic
+                    WHERE trade_date IN ({placeholders})
+                    ORDER BY stock_code, trade_date""",
+                dates,
+            ).fetchall()
+            conn.close()
+
+            for r in rows:
+                code = r["stock_code"]
+                self._scout_daily_bars.setdefault(code, []).append(dict(r))
+
+            self._scout_pretrend_loaded = True
+            logger.info(f"预趋势数据加载完成: {len(self._scout_daily_bars)} 只股票, 日期 {dates}")
+        except Exception as e:
+            logger.warning(f"预趋势数据加载失败: {e}")
+            self._scout_pretrend_loaded = True  # 标记已尝试，不反复重试
+
+    def _scout_check_pretrend(self, code: str) -> dict:
+        """根据前2-3天日线判断个股的趋势形态和位置。
+        返回 {'form': 'climbing'|'oscillating_up'|'weak'|'distributing'|'unknown',
+               'position': 'low'|'mid'|'high'|'unknown',
+               'vol_trend': 'expanding'|'contracting'|'stable'|'unknown',
+               'cum_chg': float}
+        """
+        bars = self._scout_daily_bars.get(code, [])
+        if len(bars) < 2:
+            return {
+                "form": "unknown",
+                "position": "unknown",
+                "vol_trend": "unknown",
+                "cum_chg": 0,
+            }
+
+        changes = [b.get("change_pct") or 0 for b in bars]
+        vol_ratios = [b.get("volume_ratio") or 1.0 for b in bars]
+        cum_chg = sum(changes)
+
+        # 趋势形态判断
+        up_days = sum(1 for c in changes if c > 0)
+        vol_increasing = len(vol_ratios) >= 2 and vol_ratios[-1] > vol_ratios[0] and all(v > 1.0 for v in vol_ratios)
+
+        if up_days == len(changes) and vol_increasing:
+            form = "climbing"  # 连续爬升：每天涨 + 量递增
+        elif up_days >= len(changes) - 1 and cum_chg > 0:
+            # 震荡向上：最多一天跌，整体上涨，中心上移
+            highs = [b.get("high") or 0 for b in bars]
+            lows = [b.get("low") or 0 for b in bars]
+            center_first = (highs[0] + lows[0]) / 2
+            center_last = (highs[-1] + lows[-1]) / 2
+            form = "oscillating_up" if center_last > center_first else "weak"
+        elif cum_chg < -2:
+            form = "distributing"  # 放量下跌
+        else:
+            form = "unknown"
+
+        # 位置判断：用日线高低点算20日近似位置
+        try:
+            all_highs = [b.get("high") or 0 for b in bars]
+            all_lows = [b.get("low") or 0 for b in bars]
+            # 也把今天盘中价格纳入计算
+            snapshot = getattr(self, "_market_snapshot", {}) or {}
+            item = snapshot.get(code, {})
+            today_price = float(item.get("price", 0))
+            if today_price > 0:
+                all_highs.append(today_price)
+                all_lows.append(today_price)
+            hh, ll = max(all_highs), min(all_lows)
+            if hh > ll > 0:
+                last_price = bars[-1].get("price") or today_price
+                pos_pct = (last_price - ll) / (hh - ll) * 100
+                if pos_pct > 75:
+                    position = "high"
+                elif pos_pct < 35:
+                    position = "low"
+                else:
+                    position = "mid"
+            else:
+                position = "unknown"
+        except Exception:
+            position = "unknown"
+
+        # 量能趋势
+        if len(vol_ratios) >= 2 and vol_ratios[-1] > vol_ratios[0] * 1.1:
+            vol_trend = "expanding"
+        elif len(vol_ratios) >= 2 and vol_ratios[-1] < vol_ratios[0] * 0.9:
+            vol_trend = "contracting"
+        else:
+            vol_trend = "stable"
+
+        return {
+            "form": form,
+            "position": position,
+            "vol_trend": vol_trend,
+            "cum_chg": round(cum_chg, 2),
+        }

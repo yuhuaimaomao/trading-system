@@ -4,15 +4,14 @@
 用于 Function Calling，提供股票市值、信息查询等工具
 """
 
+import contextlib
 import sqlite3
 from typing import Dict, List
 
+from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("ai")
-
-# 数据库路径
-from system.config.settings import DATABASE_PATH
 
 
 class StockTools:
@@ -65,13 +64,9 @@ class StockTools:
             if row:
                 stock_name, total_market_cap, trade_date = row
                 # total_market_cap 单位是元，转为亿
-                market_cap_yi = (
-                    total_market_cap / 100000000 if total_market_cap else None
-                )
+                market_cap_yi = total_market_cap / 100000000 if total_market_cap else None
 
-                logger.info(
-                    f"✅ 查询市值成功：{stock_code} - {stock_name} - {market_cap_yi:.1f}亿"
-                )
+                logger.info(f"✅ 查询市值成功：{stock_code} - {stock_name} - {market_cap_yi:.1f}亿")
 
                 return {
                     "code": stock_code,
@@ -152,9 +147,7 @@ class StockTools:
                     "name": stock_name,
                     "industry": industry or "",
                     "concept": concepts or "",
-                    "market_cap": round(total_market_cap / 100000000, 1)
-                    if total_market_cap
-                    else None,
+                    "market_cap": round(total_market_cap / 100000000, 1) if total_market_cap else None,
                     "price": price,
                     "change_pct": change_pct,
                     "update_time": trade_date,
@@ -348,9 +341,7 @@ class StockTools:
                     }
                 )
 
-            logger.info(
-                f"✅ 查询龙虎榜席位成功：{stock_code} {trade_date} - 买{len(buy_seats)}卖{len(sell_seats)}"
-            )
+            logger.info(f"✅ 查询龙虎榜席位成功：{stock_code} {trade_date} - 买{len(buy_seats)}卖{len(sell_seats)}")
             return {
                 "code": stock_code,
                 "trade_date": trade_date,
@@ -594,9 +585,7 @@ class StockTools:
             logger.error(f"❌ 查询异动股失败：{e}")
             return {"trade_date": trade_date, "total": 0, "stocks": [], "error": str(e)}
 
-    def get_sector_zhongjun(
-        self, sector_code: str = None, sector_name: str = None, trade_date: str = None
-    ) -> Dict:
+    def get_sector_zhongjun(self, sector_code: str = None, sector_name: str = None, trade_date: str = None) -> Dict:
         """
         查询指定板块的中军候选（4维打分：市值30% + 流动性25% + 趋势25% + 相对强度20%）
 
@@ -661,25 +650,16 @@ class StockTools:
                 "SELECT sector_code FROM sector_industry WHERE sector_code = ? AND trade_date = ?",
                 (resolved_code, trade_date),
             )
-            if cursor.fetchone():
-                sector_table = "sector_industry"
-            else:
-                sector_table = "sector_concept"
+            sector_table = "sector_industry" if cursor.fetchone() else "sector_concept"
 
-            result = SectorReader.get_sector_zhongjun(
-                conn, trade_date, [resolved_code], sector_table, top_n=5
-            )
+            result = SectorReader.get_sector_zhongjun(conn, trade_date, [resolved_code], sector_table, top_n=5)
 
             conn.close()
 
             stocks = result.get(resolved_code, [])
-            sector_name_out = (
-                stocks[0].get("sector_name", resolved_name) if stocks else resolved_name
-            )
+            sector_name_out = stocks[0].get("sector_name", resolved_name) if stocks else resolved_name
 
-            logger.info(
-                f"✅ 中军候选查询成功：{sector_name_out}({resolved_code}) - {len(stocks)}只"
-            )
+            logger.info(f"✅ 中军候选查询成功：{sector_name_out}({resolved_code}) - {len(stocks)}只")
             return {
                 "sector_code": resolved_code,
                 "sector_name": sector_name_out,
@@ -887,12 +867,8 @@ class StockTools:
             if not result["sections"]:
                 result["warning"] = "新闻数据为空，可能采集失败"
             else:
-                total_chars = sum(
-                    s.get("word_count", 0) for s in result["sections"].values()
-                )
-                result["summary"] = (
-                    f"共 {len(result['sections'])} 篇，约 {total_chars} 字"
-                )
+                total_chars = sum(s.get("word_count", 0) for s in result["sections"].values())
+                result["summary"] = f"共 {len(result['sections'])} 篇，约 {total_chars} 字"
 
             logger.info(f"✅ 读取 CLS 复盘新闻成功：{result.get('summary', '空')}")
             return result
@@ -957,12 +933,7 @@ class StockTools:
             return {"keyword": keyword, "candidates": [], "count": 0, "error": str(e)}
 
     def get_telegraph_news(self, stock_code: str, trade_date: str = None) -> Dict:
-        """
-        查询某只股票在今日盘中电报里是否有相关新闻。
-
-        优先查 ai_stocks 字段（AI 结构化后的标签，覆盖率接近 100%），
-        无 AI 标签时回退查 stock_tags（CLS 原始标签，覆盖率约 15%）。
-        """
+        """查询某只股票在今日电报中的相关新闻（通过 CLS stock_tags 匹配）"""
         import json as _json
         from datetime import datetime as _dt
 
@@ -973,25 +944,15 @@ class StockTools:
             conn = sqlite3.connect(str(self.db_path))
             conn.row_factory = sqlite3.Row
 
-            # 查当日电报：AI 结构化的用 ai_stocks 匹配，否则用 stock_tags
             cursor = conn.execute(
                 """
                 SELECT * FROM cls_telegraph
                 WHERE trade_date = ?
-                  AND (
-                    ai_stocks LIKE ? OR
-                    (ai_stocks IS NULL AND stock_tags LIKE ?) OR
-                    (ai_stocks = '' AND stock_tags LIKE ?)
-                  )
-                ORDER BY COALESCE(ai_importance, score) DESC, reading_num DESC
+                  AND stock_tags LIKE ?
+                ORDER BY score DESC, reading_num DESC
                 LIMIT 200
             """,
-                (
-                    trade_date,
-                    f'%"{stock_code}"%',
-                    f'%"{stock_code}"%',
-                    f'%"{stock_code}"%',
-                ),
+                (trade_date, f'%"{stock_code}"%'),
             )
             rows = [dict(r) for r in cursor.fetchall()]
             conn.close()
@@ -1006,53 +967,32 @@ class StockTools:
                     continue
                 seen_titles.add(title_key)
 
-                source = "ai"
+                # 解析 stock_tags + plate_tags
                 tags = []
-                ai_stocks_raw = r.get("ai_stocks")
-                if ai_stocks_raw:
-                    try:
-                        tags = _json.loads(ai_stocks_raw) if ai_stocks_raw else []
-                        source = "ai"
-                    except (_json.JSONDecodeError, TypeError):
-                        tags = []
+                stock_tags_raw = r.get("stock_tags")
+                with contextlib.suppress(_json.JSONDecodeError, TypeError):
+                    tags = _json.loads(stock_tags_raw) if stock_tags_raw else []
 
-                if not tags:
-                    stock_tags_raw = r.get("stock_tags")
-                    try:
-                        tags = _json.loads(stock_tags_raw) if stock_tags_raw else []
-                        source = "cls"
-                    except (_json.JSONDecodeError, TypeError):
-                        tags = []
-
-                sectors = []
-                ai_sectors_raw = r.get("ai_sectors")
-                if ai_sectors_raw:
-                    try:
-                        sectors = _json.loads(ai_sectors_raw) if ai_sectors_raw else []
-                    except (_json.JSONDecodeError, TypeError):
-                        sectors = []
+                plate_tags_raw = r.get("plate_tags")
+                plates = []
+                with contextlib.suppress(_json.JSONDecodeError, TypeError):
+                    plates = _json.loads(plate_tags_raw) if plate_tags_raw else []
 
                 matched.append(
                     {
                         "level": r.get("level", "C"),
-                        "category": r.get("ai_direction") or r.get("category", ""),
+                        "category": r.get("category", ""),
                         "title": title,
                         "content": (r.get("content") or "")[:200],
                         "reading_num": r.get("reading_num", 0),
-                        "score": r.get("ai_importance") or r.get("score", 0),
-                        "sentiment": r.get("ai_sentiment", ""),
-                        "impact": r.get("ai_impact", ""),
-                        "sectors": sectors,
+                        "score": r.get("score", 0),
+                        "plates": plates,
                         "stock_tags": tags,
-                        "source": source,
                     }
                 )
 
             if matched:
-                ai_count = sum(1 for m in matched if m["source"] == "ai")
-                logger.info(
-                    f"✅ 查询 {stock_code} 电报：{len(matched)} 条匹配（AI:{ai_count} CLS:{len(matched) - ai_count}）"
-                )
+                logger.info(f"查询 {stock_code} 电报：{len(matched)} 条匹配")
                 return {
                     "stock_code": stock_code,
                     "trade_date": trade_date,
@@ -1061,7 +1001,7 @@ class StockTools:
                     "items": matched,
                 }
             else:
-                logger.info(f"✅ 查询 {stock_code} 电报：无相关新闻")
+                logger.info(f"查询 {stock_code} 电报：无相关新闻")
                 return {
                     "stock_code": stock_code,
                     "trade_date": trade_date,
@@ -1071,7 +1011,7 @@ class StockTools:
                 }
 
         except Exception as e:
-            logger.error(f"❌ 查询电报失败：{e}")
+            logger.error(f"查询电报失败：{e}")
             return {
                 "stock_code": stock_code,
                 "trade_date": trade_date,
@@ -1194,17 +1134,11 @@ class StockTools:
                     }
                 )
 
-            avg_chg = sum(
-                s["today_change"] for s in stocks if s["today_change"] is not None
-            )
+            avg_chg = sum(s["today_change"] for s in stocks if s["today_change"] is not None)
             valid = sum(1 for s in stocks if s["today_change"] is not None)
             win_count = sum(1 for s in stocks if (s["today_change"] or 0) > 0)
 
-            logger.info(
-                f"✅ 查询昨日推荐表现：{len(stocks)}只，平均{avg_chg / valid:+.2f}%"
-                if valid > 0
-                else "无数据"
-            )
+            logger.info(f"✅ 查询昨日推荐表现：{len(stocks)}只，平均{avg_chg / valid:+.2f}%" if valid > 0 else "无数据")
             return {
                 "trade_date": trade_date,
                 "yesterday_date": yesterday,
@@ -1352,17 +1286,17 @@ class StockTools:
 
             # 整体诊断
             if avg_return < 0:
-                overall_signal = "🔴 平均收益为负——赚的没有亏的多（盈亏比<1）。今天给每只标的更紧的止损，放弃赌一把的票。"
+                overall_signal = (
+                    "🔴 平均收益为负——赚的没有亏的多（盈亏比<1）。今天给每只标的更紧的止损，放弃赌一把的票。"  # noqa: E501
+                )
             elif profit_loss_ratio < 50:
-                overall_signal = "⚠️ 胜率低于50%，说明你的选股偏向追涨而非预判。今天少选涨停板、少选已连板的票、多从趋势股中找蓄力期品种。"
+                overall_signal = "⚠️ 胜率低于50%，说明你的选股偏向追涨而非预判。今天少选涨停板、少选已连板的票、多从趋势股中找蓄力期品种。"  # noqa: E501
             elif profit_loss_ratio < 50:
                 overall_signal = "⚠️ 胜率不足50%，勉强打平或微亏。控制推荐数量，只在最有把握的方向出票。"
             else:
                 overall_signal = "整体胜率尚可，按正常标准执行。"
 
-            logger.info(
-                f"✅ 历史校准：{total}只，胜率{round(wins / total * 100, 1)}%，平均{avg_return:+.2f}%"
-            )
+            logger.info(f"✅ 历史校准：{total}只，胜率{round(wins / total * 100, 1)}%，平均{avg_return:+.2f}%")
             return {
                 "date_range": f"{recent_days[-1]}~{recent_days[0]}",
                 "num_days": len(recent_days),
@@ -1407,7 +1341,7 @@ class StockTools:
             rows = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT pred_type, target_name, pred_direction, prob, is_correct FROM review_predictions WHERE push_date < ? AND is_correct IS NOT NULL ORDER BY push_date DESC LIMIT 100",
+                    "SELECT pred_type, target_name, pred_direction, prob, is_correct FROM review_predictions WHERE push_date < ? AND is_correct IS NOT NULL ORDER BY push_date DESC LIMIT 100",  # noqa: E501
                     (trade_date,),
                 ).fetchall()
             ]
@@ -1425,7 +1359,7 @@ class StockTools:
                 if r["is_correct"]:
                     by_type[pt]["correct"] += 1
 
-            for pt, s in by_type.items():
+            for _pt, s in by_type.items():
                 s["correct_pct"] = round(s["correct"] / s["total"] * 100, 1)
 
             total = len(rows)
@@ -1434,18 +1368,12 @@ class StockTools:
 
             # 生成校准提示
             signals = []
-            for pt, s in by_type.items():
-                label = {"index": "指数", "sector": "板块", "scenario": "情景"}.get(
-                    pt, pt
-                )
+            for _pt, s in by_type.items():
+                label = {"index": "指数", "sector": "板块", "scenario": "情景"}.get(pt, pt)
                 if s["correct_pct"] < 40:
-                    signals.append(
-                        f"🔴 {label}预测准确率{s['correct_pct']}%——偏差大，需重新审视判断方法"
-                    )
+                    signals.append(f"🔴 {label}预测准确率{s['correct_pct']}%——偏差大，需重新审视判断方法")
                 elif s["correct_pct"] < 60:
-                    signals.append(
-                        f"🟡 {label}预测准确率{s['correct_pct']}%——勉强可用，还有提升空间"
-                    )
+                    signals.append(f"🟡 {label}预测准确率{s['correct_pct']}%——勉强可用，还有提升空间")
                 else:
                     signals.append(f"🟢 {label}预测准确率{s['correct_pct']}%——判断靠谱")
 
@@ -1473,7 +1401,7 @@ class StockTools:
             rows = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT lesson_type, lesson_key, lesson_content, occurrence_count, first_date, last_date FROM review_lessons WHERE is_active=1 ORDER BY lesson_type, occurrence_count DESC"
+                    "SELECT lesson_type, lesson_key, lesson_content, occurrence_count, first_date, last_date FROM review_lessons WHERE is_active=1 ORDER BY lesson_type, occurrence_count DESC"  # noqa: E501
                 ).fetchall()
             ]
             conn.close()
@@ -1496,9 +1424,7 @@ class StockTools:
                         # 高频重复=严重警告
                         "severity": "🔴 屡犯不改"
                         if r["occurrence_count"] >= 3
-                        else (
-                            "🟡 重复出现" if r["occurrence_count"] >= 2 else "🆕 新发现"
-                        ),
+                        else ("🟡 重复出现" if r["occurrence_count"] >= 2 else "🆕 新发现"),
                     }
                 )
 
@@ -1545,9 +1471,7 @@ class StockTools:
                         "stock_code": r["stock_code"],
                         "stock_name": r["stock_name"],
                         "source": r["signal_source"],
-                        "buy_zone": f"{r['buy_zone_min']}-{r['buy_zone_max']}"
-                        if r["buy_zone_min"]
-                        else "",
+                        "buy_zone": f"{r['buy_zone_min']}-{r['buy_zone_max']}" if r["buy_zone_min"] else "",
                         "stop_loss": r["stop_loss"],
                         "take_profit": r["take_profit"],
                         "score": r["signal_score"],
@@ -1575,50 +1499,14 @@ class StockTools:
 
 # 工具定义（用于注册到 AI）
 # 符合 OpenAI Function Calling 格式
+# 注意：复盘 5 必修 + 批量预计算工具（get_cls_digest_news 等）已从定义中移除，
+# 其数据在 AI 调用前本地预计算并嵌入 prompt，无需 FC。
 TOOLS_DEFINITION = [
     {
         "type": "function",
         "function": {
-            "name": "get_cls_digest_news",
-            "description": "【必修工具】读取今日财联社复盘新闻（焦点复盘 + 每日收评）。这是 AI 编辑撰写的高质量盘后总结，包含市场全貌梳理和板块深度解读，比原始数据更有洞察价值。复盘开始时必须首先调用此工具，不可跳过。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    }
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_telegraph_news",
-            "description": "查询某只股票在今日盘中电报里是否有相关新闻。只返回真正涉及该股的新闻（如利好/利空/异动），不返回大盘描述性内容。当你分析某只标的、需要了解盘中有什么消息驱动时使用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "stock_code": {
-                        "type": "string",
-                        "description": "6 位股票代码，如 '688702'",
-                    },
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    },
-                },
-                "required": ["stock_code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_stock",
-            "description": "根据股票简称模糊搜索6位股票代码。传入名称（如'宝鼎科技'），返回候选列表（含code和name）。用于电报AI结构化时精确匹配个股代码。",
+            "description": "根据股票简称模糊搜索6位股票代码。传入名称（如'宝鼎科技'），返回候选列表（含code和name）。用于电报AI结构化时精确匹配个股代码。",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1635,7 +1523,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "search_sector",
-            "description": "根据板块关键词模糊搜索板块编码。传入板块名（如'存储芯片'、'PCB'），在sector_info和sector_concept中匹配，返回候选列表（含sector_name、sector_code、type）。用于电报AI结构化时精确匹配板块编码。",
+            "description": "根据板块关键词模糊搜索板块编码。传入板块名（如'存储芯片'、'PCB'），在sector_info和sector_concept中匹配，返回候选列表（含sector_name、sector_code、type）。用于电报AI结构化时精确匹配板块编码。",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1652,7 +1540,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "get_market_cap",
-            "description": "查询股票实时市值（单位：亿）。返回字段：code, name, market_cap(亿), update_time。\n\n使用场景：\n- 在「核心标的拆解」中，需要确认某只股票的市值规模（中军 vs 小盘弹性票）时使用\n- 当你需要区分市值梯队、判断标的是否为容量中军时使用\n\n单次返回 1 只股票数据，约 80 token",
+            "description": "查询股票实时市值（单位：亿）。返回字段：code, name, market_cap(亿), update_time。\n\n使用场景：\n- 在「核心标的拆解」中，需要确认某只股票的市值规模（中军 vs 小盘弹性票）时使用\n- 当你需要区分市值梯队、判断标的是否为容量中军时使用\n\n单次返回 1 只股票数据，约 80 token",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1669,7 +1557,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "get_stock_info",
-            "description": "查询股票完整信息。返回字段：code, name, industry, concept, market_cap(亿), price, change_pct, update_time。\n\n使用场景：\n- 在「核心标的拆解」中，需要查看某只股票的行业归属和概念标签时使用\n- 当正文数据中某只股票的信息不完整时使用\n\n单次返回 1 只股票数据，约 100 token",
+            "description": "查询股票完整信息。返回字段：code, name, industry, concept, market_cap(亿), price, change_pct, update_time。\n\n使用场景：\n- 在「核心标的拆解」中，需要查看某只股票的行业归属和概念标签时使用\n- 当正文数据中某只股票的信息不完整时使用\n\n单次返回 1 只股票数据，约 100 token",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1686,7 +1574,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "get_sector_stocks",
-            "description": "查询板块成分股（按涨幅排序）。返回每只股票的：code, name, industry, concept, market_cap(亿), price, change_pct。\n\n使用场景：\n- 当正文热点数据只展示了 TOP5 板块的个股明细，你想查看其他板块的个股时使用\n- 当你对某个板块的个股分布有疑问，需要查看完整名单时使用\n- 参数 limit 控制返回数量，默认 10 只\n\n每次调用返回 limit 条，约 50 token/股",
+            "description": "查询板块成分股（按涨幅排序）。返回每只股票的：code, name, industry, concept, market_cap(亿), price, change_pct。\n\n使用场景：\n- 当正文热点数据只展示了 TOP5 板块的个股明细，你想查看其他板块的个股时使用\n- 当你对某个板块的个股分布有疑问，需要查看完整名单时使用\n- 参数 limit 控制返回数量，默认 10 只\n\n每次调用返回 limit 条，约 50 token/股",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1707,50 +1595,8 @@ TOOLS_DEFINITION = [
     {
         "type": "function",
         "function": {
-            "name": "get_lhb_seats",
-            "description": "查询某只股票的龙虎榜买卖席位明细。返回：buy_seats[5](name, buy_万, sell_万, net_万, is_inst, is_hm), sell_seats[5]。\n\n使用场景（重要）：\n- 在「核心标的拆解」中，对高连板（≥3板）标的，**必须**调用此工具查看席位构成\n- 当龙虎榜摘要显示某股资金异常时，调用此工具深入分析\n- 判断资金性质：机构主导 vs 游资接力 vs 合力\n\n单次返回 10 条席位，约 200 token",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "stock_code": {
-                        "type": "string",
-                        "description": "6 位股票代码，如 '001259'、'603005'",
-                    },
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    },
-                },
-                "required": ["stock_code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_regulatory_risks",
-            "description": "查询某只股票的监管风险记录。返回每条的：title, risk_type(财务造假/信息披露等), risk_level(1-5), issuer, summary, date。\n\n使用场景（重要）：\n- 在「核心标的拆解」中，对主板标的（60/00开头），**必须**调用此工具检查监管风险\n- 对近期涨幅异常的标的（连续涨停或换手率异常高），建议调用\n- 低价股（<10元）建议调用\n\n单次返回最多 10 条，约 150 token。无风险时返回空列表",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "stock_code": {
-                        "type": "string",
-                        "description": "6 位股票代码，如 '000608'、'002207'",
-                    },
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认查最近30天全部记录",
-                    },
-                },
-                "required": ["stock_code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_yesterday_limit_ups",
-            "description": "查询昨日涨停股今日表现的全量明细。返回每只股票的：code, name, change(%), boards, industry, today_change, turnover, vol_ratio, amplitude, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, price。\n\n使用场景：\n- 正文只展示了连板成功+亏损TOP10，如需查看全部昨日涨停股表现，调用此工具获取全量\n- 需要分析昨日涨停股的板块分布统计时，调用此工具获取全量数据自行统计\n- 在「风险提示」章节，如需更详细分析亏钱效应分布\n\n默认返回 50 只，约 500-800 token，用 limit 控制",
+            "description": "查询昨日涨停股今日表现的全量明细。返回每只股票的：code, name, change(%), boards, industry, today_change, turnover, vol_ratio, amplitude, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, price。\n\n使用场景：\n- 正文只展示了连板成功+亏损TOP10，如需查看全部昨日涨停股表现，调用此工具获取全量\n- 需要分析昨日涨停股的板块分布统计时，调用此工具获取全量数据自行统计\n- 在「风险提示」章节，如需更详细分析亏钱效应分布\n\n默认返回 50 只，约 500-800 token，用 limit 控制",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1772,7 +1618,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "get_hotspot_stocks",
-            "description": "查询指定板块的完整成分股行情明细（按涨幅排序）。返回每只股票的：code, name, change, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, turnover, vol_ratio, amplitude, price, boards, seal_time。\n\n使用场景：\n- 正文只展示了 TOP5 板块的个股明细（每板块约 10 只），如需查看排名第 6-10 名的板块个股，调用此工具\n- 需要分析某个非 TOP 板块是否有潜伏价值时\n- 传入 sector_code（如 BK1036）精确查询，或 sector_name 模糊匹配\n\n默认返回 15 只，约 300-600 token",
+            "description": "查询指定板块的完整成分股行情明细（按涨幅排序）。返回每只股票的：code, name, change, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, turnover, vol_ratio, amplitude, price, boards, seal_time。\n\n使用场景：\n- 正文只展示了 TOP5 板块的个股明细（每板块约 10 只），如需查看排名第 6-10 名的板块个股，调用此工具\n- 需要分析某个非 TOP 板块是否有潜伏价值时\n- 传入 sector_code（如 BK1036）精确查询，或 sector_name 模糊匹配\n\n默认返回 15 只，约 300-600 token",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1797,7 +1643,7 @@ TOOLS_DEFINITION = [
         "type": "function",
         "function": {
             "name": "get_unusual_stocks",
-            "description": "查询某日异动股全量明细（涨>5%或主力净流入>5000万）。返回每只股票的：code, name, change, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, turnover, vol_ratio, amplitude, industry, price, boards, lhb_net_yi(亿)。\n\n使用场景：\n- 正文只展示了主板 20 只+创业板 20 只（最多 40 只），实际异动可能有 60-80 只，调用此工具获取全量\n- 在「核心标的拆解」中，想从更多个股中筛选被遗漏的潜在标的时使用\n- 需要按板块统计异动分布时使用\n\n默认返回 30 只，约 450-750 token，用 limit 调整",
+            "description": "查询某日异动股全量明细（涨>5%或主力净流入>5000万）。返回每只股票的：code, name, change, mcap(亿), circ_mcap(亿), mf_wan(万), mf_ratio, turnover, vol_ratio, amplitude, industry, price, boards, lhb_net_yi(亿)。\n\n使用场景：\n- 正文只展示了主板 20 只+创业板 20 只（最多 40 只），实际异动可能有 60-80 只，调用此工具获取全量\n- 在「核心标的拆解」中，想从更多个股中筛选被遗漏的潜在标的时使用\n- 需要按板块统计异动分布时使用\n\n默认返回 30 只，约 450-750 token，用 limit 调整",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1818,115 +1664,14 @@ TOOLS_DEFINITION = [
     {
         "type": "function",
         "function": {
-            "name": "get_yesterday_review",
-            "description": "读取昨日复盘报告全文。返回：yesterday_date, content(完整报告), word_count。\n\n使用场景：\n- 生成今日报告前，**必须**调用此工具查看昨天的判断，找出与实际盘面的偏差\n- 在「昨日复盘回顾」章节中引用昨日的核心预测，对比今天的实际盘面\n\n单次返回完整报告（约 2000-5000 字），自我校准用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    }
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_yesterday_picks_performance",
-            "description": "查询昨日 AI 推荐的每只标的今日行情表现。返回每只标的的：code, name, plate, star(P0/P1/P2), today_change, turnover, vol_ratio, amplitude, mcap(亿), mf_wan(万), mf_ratio, is_limit_up。\n\n使用场景：\n- 在「核心标的拆解」选股前，调用此工具查看昨天哪些选对了、哪些选错了\n- 如果昨天推荐的某板块多只股票今天表现好，可以继续关注该板块\n\n单次返回约 6-12 只标的，约 300-600 token",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    }
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_historical_calibration",
-            "description": "查询最近 5 个交易日的 AI 推荐校准统计。返回：total(总推荐数), wins, win_rate(%), avg_return(%), by_priority(P0/P1/P2 各自的胜率和平均收益), by_sector(按板块的平均收益排序)。\n\n使用场景：\n- 在「核心标的拆解」的自我校准步骤中，**必须**调用此工具检查自己的历史表现\n- 如果 P0 标的历史胜率 <50%，降低 P0 仓位；如果某板块历史平均收益为负，避开该板块\n\n单次返回汇总统计，约 200-400 token",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    }
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_sector_zhongjun",
-            "description": "查询指定板块的中军候选标的（4维量化打分：市值30%+流动性25%+趋势25%+相对强度20%，TOP5）。返回每只：code, name, score(综合得分), mcap(亿), turnover_5d(5日均成交额亿), trend(多头排列/MA5>MA20/弱势), rel_strength(相对强度%), change(今日涨幅%), ma5, ma10, ma20, boards(连板数), industry。\n\n使用场景：\n- 在「核心标的拆解」中确定某板块中军时，**必须先调用此工具**，从得分最高的前3名中选取\n- 传入 sector_code 精确查询某个板块（所需板块编码从热点板块数据中获取）\n- **注意：中军选择不能凭感觉，必须参考此工具的4维打分**\n\n单次返回约 200-400 token",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sector_code": {
-                        "type": "string",
-                        "description": "板块编码，如 'BK1036'。优先使用",
-                    },
-                    "sector_name": {
-                        "type": "string",
-                        "description": "板块名称，如 '半导体'。与 sector_code 二选一",
-                    },
-                    "trade_date": {
-                        "type": "string",
-                        "description": "交易日期 YYYY-MM-DD，默认当日",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_learning_lessons",
-            "description": "【必修工具】获取历史经验教训库。返回按类型分组的通用教训（选股角色/板块判断/仓位管理/情绪判断/趋势选股），同类问题合并强化。AI 选股前必须调用，据此规避重复犯错。高频重复的教训标记为🔴屡犯不改。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_prediction_accuracy",
-            "description": "查询复盘预测准确率——历史指数预测、板块预测、情景推演的准确率统计。AI 据此了解自己的预测偏差，调整推演方法。",
+            "description": "查询复盘预测准确率——历史指数预测、板块预测、情景推演的准确率统计。AI 据此了解自己的预测偏差，调整推演方法。",  # noqa: E501
             "parameters": {
                 "type": "object",
                 "properties": {
                     "trade_date": {
                         "type": "string",
                         "description": "交易日期 YYYY-MM-DD，默认当日",
-                    }
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_pending_signals",
-            "description": "获取昨日所有 pending 状态的买入信号清单（复盘精选+趋势筛选AI推荐）。返回每只标的的：stock_code, stock_name, source(REVIEW/AI_ENHANCED), buy_zone, stop_loss, take_profit, score。\n\n使用场景：\n- 早盘校准时，调用此工具获取昨日全部推荐标的的精确列表\n- 对照避雷针/隔夜电报/宏观变化，判断哪些需要修正或移除\n- 输出 <<<ADJUSTMENTS>>> 结构化修正指令\n\n单次返回 5-15 只标的，约 200-500 token",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "trade_date": {
-                        "type": "string",
-                        "description": "上一个交易日 YYYY-MM-DD，默认自动取最近交易日",
                     }
                 },
                 "required": [],
@@ -1961,12 +1706,8 @@ TOOL_FUNCTIONS = {
     "get_unusual_stocks": lambda **kw: _get_tools().get_unusual_stocks(**kw),
     "get_hotspot_stocks": lambda **kw: _get_tools().get_hotspot_stocks(**kw),
     "get_yesterday_review": lambda **kw: _get_tools().get_yesterday_review(**kw),
-    "get_yesterday_picks_performance": lambda **kw: _get_tools().get_yesterday_picks_performance(
-        **kw
-    ),
-    "get_historical_calibration": lambda **kw: _get_tools().get_historical_calibration(
-        **kw
-    ),
+    "get_yesterday_picks_performance": lambda **kw: _get_tools().get_yesterday_picks_performance(**kw),
+    "get_historical_calibration": lambda **kw: _get_tools().get_historical_calibration(**kw),
     "get_sector_zhongjun": lambda **kw: _get_tools().get_sector_zhongjun(**kw),
     "get_prediction_accuracy": lambda **kw: _get_tools().get_prediction_accuracy(**kw),
     "get_learning_lessons": lambda **kw: _get_tools().get_learning_lessons(**kw),

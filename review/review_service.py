@@ -1,17 +1,14 @@
 """
 复盘服务
 
-采集 12 个模块：行业板块、概念板块、个股行情、强势股、龙虎榜、涨跌停、监管函、大盘指数、股票异动、停复牌、股东增减持、隔夜宏观
+采集 12 个模块：行业板块、概念板块、个股行情、强势股、龙虎榜、涨跌停、
+监管函、大盘指数、股票异动、停复牌、股东增减持、隔夜宏观
 """
 
 import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-
-from system.utils.logger import get_task_logger, set_current_task
-
-logger = get_task_logger("review")
 
 from data.collect.events.cls_digest_collector import CLSDigestCollector
 from data.collect.events.lhb_collector import LHBCollector
@@ -31,6 +28,9 @@ from data.collect.market.stock_basic_collector import StockBasicCollector
 from data.collect.market.suspend_resume_collector import SuspendResumeCollector
 from review.review_stats import CollectionStatsService
 from system.config.settings import DATABASE_PATH, LOGS_DIR
+from system.utils.logger import get_task_logger, set_current_task
+
+logger = get_task_logger("review")
 
 
 class ReviewService:
@@ -137,9 +137,7 @@ class ReviewService:
         t0 = time.time()
 
         try:
-            limit_pool_result = self.limit_pool_collector.fetch_and_save(
-                trade_date=trade_date
-            )
+            limit_pool_result = self.limit_pool_collector.fetch_and_save(trade_date=trade_date)
         except Exception as e:
             logger.error(f"❌ 涨跌停采集异常：{e}")
             limit_pool_result = {"success": False, "count": 0, "total": 0, "data": []}
@@ -150,9 +148,7 @@ class ReviewService:
         t0 = time.time()
 
         try:
-            regulatory_letter_result = self.regulatory_letter_collector.fetch_and_save(
-                trade_date=trade_date
-            )
+            regulatory_letter_result = self.regulatory_letter_collector.fetch_and_save(trade_date=trade_date)
         except Exception as e:
             logger.error(f"❌ 监管函采集异常：{e}")
             regulatory_letter_result = {
@@ -168,9 +164,7 @@ class ReviewService:
         t0 = time.time()
 
         try:
-            main_index_result = self.main_index_collector.fetch_and_save(
-                trade_date=trade_date
-            )
+            main_index_result = self.main_index_collector.fetch_and_save(trade_date=trade_date)
         except Exception as e:
             logger.error(f"❌ 大盘指数采集异常：{e}")
             main_index_result = {"success": False, "count": 0, "total": 0, "data": []}
@@ -181,9 +175,7 @@ class ReviewService:
         t0 = time.time()
 
         try:
-            stock_monitor_result = self.stock_monitor_collector.fetch_and_save(
-                trade_date=trade_date
-            )
+            stock_monitor_result = self.stock_monitor_collector.fetch_and_save(trade_date=trade_date)
         except Exception as e:
             logger.error(f"❌ 股票异动采集异常：{e}")
             stock_monitor_result = {
@@ -215,9 +207,7 @@ class ReviewService:
         t0 = time.time()
 
         try:
-            share_holder_change_result = (
-                self.share_holder_change_collector.fetch_and_save()
-            )
+            share_holder_change_result = self.share_holder_change_collector.fetch_and_save()
         except Exception as e:
             logger.error(f"❌ 股东增减持采集异常：{e}")
             share_holder_change_result = {
@@ -265,9 +255,7 @@ class ReviewService:
                     json.dump(news_data, f, ensure_ascii=False, indent=2)
                 sections = [k for k in news_data if news_data[k]]
                 news_result = {"success": True, "sections": sections}
-                logger.info(
-                    f"  ✅ CLS 复盘新闻完成（{sections}），落盘 {news_path}，耗时 {time.time() - t0:.1f}秒"
-                )
+                logger.info(f"  ✅ CLS 复盘新闻完成（{sections}），落盘 {news_path}，耗时 {time.time() - t0:.1f}秒")
             else:
                 logger.warning(f"  ⚠️ CLS 复盘新闻为空，耗时 {time.time() - t0:.1f}秒")
         except Exception as e:
@@ -292,9 +280,7 @@ class ReviewService:
         }
 
         # 生成并推送统计报告
-        self.stats_service.check_and_report(
-            stats_data, trade_date=trade_date, send_to_telegram=True
-        )
+        self.stats_service.check_and_report(stats_data, trade_date=trade_date, send_to_telegram=True)
 
         # 更新板块信息表
         try:
@@ -348,9 +334,7 @@ class ReviewService:
         for chat_id, label in targets:
             logger.info(f"推送复盘报告到 Telegram {label} (chat_id={chat_id})...")
             try:
-                sender = MessageSender(
-                    chat_id=chat_id, bot_token=TELEGRAM_REPORT_BOT_TOKEN
-                )
+                sender = MessageSender(chat_id=chat_id, bot_token=TELEGRAM_REPORT_BOT_TOKEN)
                 sender.send(message)
                 logger.info(f"✅ 复盘报告推送成功 ({label})")
             except Exception as e:
@@ -407,10 +391,10 @@ class ReviewService:
             # 股票追踪更新：无论数据是否完整都要跑，补上之前遗漏的 t_open
             logger.info("\n【阶段 2/4】股票追踪数据更新")
             try:
-                from review.stock_tracker import  StockTracker
+                from review.stock_tracker import StockTracker
                 from system.config.trading_calendar import get_previous_trading_day
 
-                tracker =  StockTracker()
+                tracker = StockTracker()
                 tracker.update_daily_data(trade_date)
                 logger.info("✅ 当日行情数据已补充")
 
@@ -421,7 +405,10 @@ class ReviewService:
                 logger.error(f"⚠️ 股票追踪数据补充失败：{e}")
 
             if missing:
-                msg = f"⚠️ {trade_date} 复盘数据不全，以下模块采集失败：{'、'.join(missing)}\n跳过 AI 复盘分析，请检查后重试。"
+                msg = (
+                    f"⚠️ {trade_date} 复盘数据不全，以下模块采集失败：{'、'.join(missing)}"
+                    "\n跳过 AI 复盘分析，请检查后重试。"
+                )
                 logger.warning(msg)
                 self.send(msg, group=False)
                 return False
@@ -440,14 +427,12 @@ class ReviewService:
             # 记录复盘推荐的股票到追踪表（AI 成功后才有的数据）
             if stock_pool:
                 try:
-                    from review.stock_tracker import  StockTracker
+                    from review.stock_tracker import StockTracker
 
-                    tracker =  StockTracker()
+                    tracker = StockTracker()
                     stocks = tracker.enrich_stock_pool(stock_pool)
                     if stocks:
-                        tracker.record_stocks(
-                            stocks, trade_date, analysis, source="复盘"
-                        )
+                        tracker.record_stocks(stocks, trade_date, analysis, source="复盘")
                         logger.info(f"✅ 已记录 {len(stocks)} 只复盘股票到追踪表")
                 except Exception as e:
                     logger.error(f"⚠️ 股票池记录失败：{e}")
@@ -463,9 +448,7 @@ class ReviewService:
                 from review.prediction_verifier import PredictionVerifier
                 from system.config.trading_calendar import get_previous_trading_day
 
-                prev_prev = get_previous_trading_day(
-                    get_previous_trading_day(trade_date)
-                )
+                prev_prev = get_previous_trading_day(get_previous_trading_day(trade_date))
                 if prev_prev:
                     PredictionVerifier().verify(prev_prev)
                     logger.info("✅ 历史预测自动核验完成")

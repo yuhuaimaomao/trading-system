@@ -140,9 +140,7 @@ def ensure_tables():
 
     # locked_volume 列 — T+1 锁仓持久化（幂等迁移）
     with suppress(sqlite3.OperationalError):
-        cursor.execute(
-            "ALTER TABLE trade_portfolio_positions ADD COLUMN locked_volume INTEGER DEFAULT 0"
-        )
+        cursor.execute("ALTER TABLE trade_portfolio_positions ADD COLUMN locked_volume INTEGER DEFAULT 0")
 
     # 添加 account 字段（幂等迁移）
     for table in [
@@ -151,23 +149,7 @@ def ensure_tables():
         "trade_portfolio_snapshots",
     ]:
         with suppress(sqlite3.OperationalError):
-            cursor.execute(
-                f"ALTER TABLE {table} ADD COLUMN account TEXT DEFAULT 'real'"
-            )
-
-    # cls_telegraph AI 结构化字段（幂等迁移）
-    for col, col_type in [
-        ("ai_summary", "TEXT"),
-        ("ai_sentiment", "TEXT"),
-        ("ai_impact", "TEXT"),
-        ("ai_stocks", "TEXT"),
-        ("ai_sectors", "TEXT"),
-        ("ai_importance", "INTEGER DEFAULT 0"),
-        ("ai_direction", "TEXT"),
-        ("ai_status", "TEXT DEFAULT 'pending'"),
-    ]:
-        with suppress(sqlite3.OperationalError):
-            cursor.execute(f"ALTER TABLE cls_telegraph ADD COLUMN {col} {col_type}")
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN account TEXT DEFAULT 'real'")
 
     # market_breadth 表（涨跌家数 + 大盘状态）
     cursor.execute("""

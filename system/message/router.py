@@ -4,8 +4,6 @@
 morning/strategy/review 用 send() 发一次性报告。
 """
 
-import time
-
 
 class AlertRouter:
     """消息路由器 — 去重、冷却、通道选择。
@@ -41,13 +39,17 @@ class AlertRouter:
 
     # ── 带去重的告警（Watcher 高频场景）──
 
-    def alert(self, msg: str, *,
-              fingerprint: str | None = None,
-              code: str | None = None,
-              price: float = 0,
-              cooldown_rounds: int = 7,
-              fingerprint_rounds: int = 30,
-              channel: str = "group") -> bool:
+    def alert(
+        self,
+        msg: str,
+        *,
+        fingerprint: str | None = None,
+        code: str | None = None,
+        price: float = 0,
+        cooldown_rounds: int = 7,
+        fingerprint_rounds: int = 30,
+        channel: str = "group",
+    ) -> bool:
         """发送告警，自动去重和冷却。
 
         - fingerprint: 消息指纹。相同指纹在 fingerprint_rounds 轮内不重复推送

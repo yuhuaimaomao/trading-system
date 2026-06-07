@@ -1,6 +1,6 @@
 """trade/detect/ 模块测试"""
 
-from trade.detect.market_pattern import classify_market_pattern, _session_phase
+from trade.detect.market_pattern import _session_phase, classify_market_pattern
 from trade.detect.sector_trend import (
     get_concept_trend_score,
     get_sector_change,
@@ -39,8 +39,14 @@ class TestMarketPattern:
     def test_session_phase(self):
         phase = _session_phase()
         assert phase in (
-            "pre_open", "opening", "morning", "late_morning",
-            "lunch", "afternoon", "late_afternoon", "closing",
+            "pre_open",
+            "opening",
+            "morning",
+            "late_morning",
+            "lunch",
+            "afternoon",
+            "late_afternoon",
+            "closing",
         )
 
 
@@ -56,10 +62,15 @@ class TestSectorTrend:
 
     def test_uptrend(self):
         history = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-        stats = {"test_sector": {
-            "trend_history": history, "relative": 0.6,
-            "breadth": 0.5, "vol_ratio": 1.8, "continuity": 4,
-        }}
+        stats = {
+            "test_sector": {
+                "trend_history": history,
+                "relative": 0.6,
+                "breadth": 0.5,
+                "vol_ratio": 1.8,
+                "continuity": 4,
+            }
+        }
         result = get_sector_trend("000001", {"000001": "test_sector"}, stats)
         assert "走强" in result or "持续走强" in result
 

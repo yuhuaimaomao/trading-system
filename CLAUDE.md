@@ -120,6 +120,9 @@ ai.submit(key, prompt, model="watcher_chase", system_prompt=) # 异步
 15. **费率**：佣金万0.85最低5元，印花税万分之五卖出单边
 16. **所有对话中文**，文件修改直接执行
 17. **代码修改后主动更新 CLAUDE.md**
+18. **趋势筛选位置感知（2026-06-07）**：因子 `check_price_position` 按20日高低区间分「高位运行」/「低位启动」。场景匹配中高位缩量回踩→「高位蓄力」（加分），高位放量回踩→扣分。低位量价齐升→「低位启动」（加分最多）。评分函数 `_compute_score` 已加入位置奖惩。
+19. **量价齐升因子（2026-06-07）**：新增 `check_vol_price_rise`（个股当日涨+量比>1.2）和 `check_sector_vol_price`（板块涨+板块主力净流入+个股涨）。`check_volume_expand` 已加价格方向条件（近5日累计涨幅>0），过滤放量下跌。
+20. **盘中机会预趋势检测（2026-06-07）**：`IntradayScoutMixin` 新增 `_scout_ensure_pretrend_loaded`（加载前2-3天日线，整个会话一次）和 `_scout_check_pretrend`（判断 climbing/oscillating_up/weak/distributing 四种形态 + 位置）。Layer1 过滤 distributing 和高位；Layer2 六维打分含位置安全和前日趋势质量。板块量价齐升（板块涨+板块放量）在 Layer2 额外加分。
 
 ## 注意事项/坑
 

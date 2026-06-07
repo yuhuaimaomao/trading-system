@@ -14,9 +14,7 @@ def _sector_tag(name: str, code_map: dict = None) -> str:
     return f"{name}({code})" if code else name
 
 
-def format_chain_ladder(
-    chain_data: dict, promotion_rates: list = None, sector_code_map: dict = None
-) -> str:
+def format_chain_ladder(chain_data: dict, promotion_rates: list = None, sector_code_map: dict = None) -> str:
     """格式化连板梯队（含完整行情数据 + 板块 + 封单比 + 晋级率）"""
     if not chain_data:
         return "今日无连板股（≥2板）"
@@ -29,17 +27,13 @@ def format_chain_ladder(
             parts = []
             if s.get("industry"):
                 parts.append(_sector_tag(s["industry"], sector_code_map))
-            parts.extend(
-                [_sector_tag(c, sector_code_map) for c in s.get("concepts", [])]
-            )
+            parts.extend([_sector_tag(c, sector_code_map) for c in s.get("concepts", [])])
             ind = f" [{', '.join(parts)}]" if parts else ""
             # 封单金额 + 封单比
             seal_amt = s.get("seal_amount", 0) or 0
             turnover_wan = s.get("turnover_wan", 0) or 0
             seal_amt_yi = seal_amt / 100000000
-            seal_ratio = (
-                (seal_amt / 10000 / turnover_wan * 100) if turnover_wan > 0 else 0
-            )
+            seal_ratio = (seal_amt / 10000 / turnover_wan * 100) if turnover_wan > 0 else 0
             seal_str = f" 封板资金{seal_amt_yi:.1f}亿" if seal_amt_yi > 0 else ""
             seal_ratio_str = f" 封单比{seal_ratio:.1f}%" if seal_ratio > 0 else ""
             lines.append(
@@ -47,7 +41,8 @@ def format_chain_ladder(
                 f"换手{s['turnover']:.1f}% 量比{s['vol_ratio']:.1f} 振幅{s['amplitude']:.1f}% "
                 f"市值{s['mcap']:.0f}亿 主力净{s['mf_wan']:+.0f}万({s['mf_ratio']:.1f}%) "
                 f"超大单{s['sl_wan']:+.0f}万 "
-                f"价{s.get('price', 0):.2f} MA5={s.get('ma5', 0):.2f} MA10={s.get('ma10', 0):.2f} MA20={s.get('ma20', 0):.2f} "
+                f"价{s.get('price', 0):.2f} MA5={s.get('ma5', 0):.2f} "
+                f"MA10={s.get('ma10', 0):.2f} MA20={s.get('ma20', 0):.2f} "
                 f"MA5斜率{s.get('ma5_angle', 0):.1f}%"
                 f"{seal}{seal_str}{seal_ratio_str}"
             )
@@ -97,7 +92,7 @@ def format_fund_flow(sectors: list, fund_flow_map: dict, top_n: int = 5) -> str:
 
 
 def format_candidates(candidates: list, sector_code_map: dict = None) -> str:
-    """格式化今日异动股（按驱动逻辑分类折叠，全量明细走 get_unusual_stocks FC）"""
+    """格式化今日异动股（按驱动逻辑分类折叠，全量明细可通过 get_unusual_stocks 工具查询）"""
     if not candidates:
         return "无候选股"
 
@@ -146,12 +141,7 @@ def format_candidates(candidates: list, sector_code_map: dict = None) -> str:
             parts = []
             if c.get("industry"):
                 parts.append(_sector_tag(c["industry"], sector_code_map))
-            parts.extend(
-                [
-                    _sector_tag(concept, sector_code_map)
-                    for concept in c.get("concepts", [])
-                ]
-            )
+            parts.extend([_sector_tag(concept, sector_code_map) for concept in c.get("concepts", [])])
             sector_str = f" ({', '.join(parts)})" if parts else ""
             lines.append(
                 f"  {c['code']} {c['name']}：涨{c['change']:+.1f}% "
@@ -162,9 +152,7 @@ def format_candidates(candidates: list, sector_code_map: dict = None) -> str:
                 f"{sector_str}{extra_str}"
             )
         if len(recs) > 8:
-            lines.append(
-                f"    ...等{len(recs) - 8}只（调用 get_unusual_stocks 查全量）"
-            )
+            lines.append(f"    ...等{len(recs) - 8}只（全量可通过 get_unusual_stocks 工具查询）")
     return "\n".join(lines)
 
 
@@ -201,11 +189,7 @@ def format_strong_stocks(records: list, sector_code_map: dict = None) -> str:
             mf = r.get("mf_wan", 0) or 0
             mf_ratio = r.get("main_force_ratio", 0) or 0
             concepts = r.get("concepts", [])
-            concept_str = (
-                f" [{', '.join(_sector_tag(c, sector_code_map) for c in concepts)}]"
-                if concepts
-                else ""
-            )
+            concept_str = f" [{', '.join(_sector_tag(c, sector_code_map) for c in concepts)}]" if concepts else ""
             extra = []
             if r.get("is_limit_up"):
                 extra.append("涨停")
@@ -241,9 +225,7 @@ def format_trend_stocks(data: dict, sector_code_map: dict = None) -> str:
 
     # --- 5日线强趋势 ---
     lines.append(f"\n【5日线强趋势 — 主升浪追涨型】共 {len(strong)} 只")
-    lines.append(
-        "  （条件：站上MA5, MA5>MA10>MA20, 偏离MA5<5%, MA5-MA20乖离>3%, 量能健康）"
-    )
+    lines.append("  （条件：站上MA5, MA5>MA10>MA20, 偏离MA5<5%, MA5-MA20乖离>3%, 量能健康）")
     if strong:
         for i, r in enumerate(strong, 1):
             parts = []
@@ -252,7 +234,7 @@ def format_trend_stocks(data: dict, sector_code_map: dict = None) -> str:
             sector_str = f" [{', '.join(parts)}]" if parts else ""
             lines.append(
                 f"  {i}. {r['stock_code']} {r['stock_name']}{sector_str}"
-                f"  得分{r['score']:.0f}  涨{r['change_pct']:+.2f}%"
+                f"  涨{r['change_pct']:+.2f}%"
                 f"  价{r.get('price', 0):.2f}  市值{r['mcap']:.0f}亿  换手{r['turnover_rate']:.1f}%"
                 f"  偏离MA5={r['bias_ma5']:+.1f}%"
                 f"  MA5={r['ma5']:.2f} MA10={r['ma10']:.2f} MA20={r['ma20']:.2f}"
@@ -263,9 +245,7 @@ def format_trend_stocks(data: dict, sector_code_map: dict = None) -> str:
 
     # --- 20日线稳健趋势 ---
     lines.append(f"\n【20日线稳健趋势 — 回调低吸型】共 {len(normal)} 只")
-    lines.append(
-        "  （条件：站上MA20, 偏离MA20<10%, MA5斜率>0, 量能健康, 排除已归入强趋势的股票）"
-    )
+    lines.append("  （条件：站上MA20, 偏离MA20<10%, MA5斜率>0, 量能健康, 排除已归入强趋势的股票）")
     if normal:
         for i, r in enumerate(normal, 1):
             parts = []
@@ -274,7 +254,7 @@ def format_trend_stocks(data: dict, sector_code_map: dict = None) -> str:
             sector_str = f" [{', '.join(parts)}]" if parts else ""
             lines.append(
                 f"  {i}. {r['stock_code']} {r['stock_name']}{sector_str}"
-                f"  得分{r['score']:.0f}  涨{r['change_pct']:+.2f}%"
+                f"  涨{r['change_pct']:+.2f}%"
                 f"  价{r.get('price', 0):.2f}  市值{r['mcap']:.0f}亿  换手{r['turnover_rate']:.1f}%"
                 f"  偏离MA20={r['bias_ma20']:+.1f}%"
                 f"  MA5={r['ma5']:.2f} MA10={r['ma10']:.2f} MA20={r['ma20']:.2f}"
@@ -291,18 +271,17 @@ def format_yzt_performance(records: list, sector_code_map: dict = None) -> str:
     if not records:
         return "昨日无涨停股"
     total = len(records)
-    positive = sum(1 for r in records if r.get("change", 0) > 0)
+    positive = sum(1 for r in records if r.get("today_change", 0) > 0)
     positive_rate = positive / total * 100 if total > 0 else 0
-    avg_change = sum(r.get("change", 0) for r in records) / total if total > 0 else 0
+    avg_change = sum(r.get("today_change", 0) for r in records) / total if total > 0 else 0
 
-    lines = [
-        f"  共{total}只，{positive}只溢价（{positive_rate:.0f}%），平均{avg_change:+.2f}%"
-    ]
-    down_5pct = [r for r in records if r.get("change", 0) <= -5]
+    lines = [f"  共{total}只，{positive}只溢价（{positive_rate:.0f}%），平均{avg_change:+.2f}%"]
+    down_5pct = [r for r in records if r.get("today_change", 0) <= -5]
     if down_5pct:
-        worst = min(records, key=lambda r: r.get("change", 0))
+        worst = min(records, key=lambda r: r.get("today_change", 0))
         lines.append(
-            f"  亏钱效应：{len(down_5pct)}只跌超5%，最深{worst['name']}({worst.get('code', '')}) {worst.get('change', 0):+.2f}%"
+            f"  亏钱效应：{len(down_5pct)}只跌超5%，最深{worst['name']}"
+            f"({worst.get('code', '')}) {worst.get('today_change', 0):+.2f}%"
         )
     else:
         lines.append("  亏钱效应：无跌超5%个股，容错率较高")
@@ -310,10 +289,10 @@ def format_yzt_performance(records: list, sector_code_map: dict = None) -> str:
     # 选股：连板成功 + 亏损TOP10（≤-3%），其余略过
     keep = set()
     for r in records:
-        if r.get("boards", 0) >= 2 and r.get("change", 0) > 0:
+        if r.get("boards", 0) >= 2 and r.get("today_change", 0) > 0:
             keep.add(r.get("code", ""))
-    losers = [r for r in records if r.get("change", 0) <= -3]
-    losers.sort(key=lambda r: r.get("change", 0))
+    losers = [r for r in records if r.get("today_change", 0) <= -3]
+    losers.sort(key=lambda r: r.get("today_change", 0))
     for r in losers[:10]:
         keep.add(r.get("code", ""))
 
@@ -322,7 +301,7 @@ def format_yzt_performance(records: list, sector_code_map: dict = None) -> str:
 
     lines.append(
         f"  精选{len(kept)}只（连板成功+亏损≤-3%TOP10），其余{skipped}只略"
-        f"（可调用 get_yesterday_limit_ups 查询全量）\n"
+        f"（全量可通过 get_yesterday_limit_ups 工具查询）\n"
     )
 
     for r in kept:
@@ -335,26 +314,24 @@ def format_yzt_performance(records: list, sector_code_map: dict = None) -> str:
             parts.append(_sector_tag(r["industry"], sector_code_map))
         sector_str = f" ({', '.join(parts)})" if parts else ""
         lines.append(
-            f"  {r['name']}({r.get('code', '')}){board_str} 昨涨今{r['change']:+.2f}% "
+            f"  {r['name']}({r.get('code', '')}){board_str} 昨涨今{r['today_change']:+.2f}% "
             f"换手{r['turnover']:.1f}% 市值{mcap:.0f}亿 "
-            f"主力净{mf_wan:+.0f}万({r['mf_ratio']:.1f}%)"
+            f"主力净{mf_wan:+.0f}万({r.get('mf_ratio', 0):.1f}%)"
             f"{sector_str}"
         )
 
     return "\n".join(lines)
 
 
-def format_hotspot(
-    industries: list, concepts: list, sector_code_map: dict = None
-) -> str:
+def format_hotspot(industries: list, concepts: list, sector_code_map: dict = None) -> str:
     """格式化热点板块数据 — TOP5板块展示个股明细，其余仅摘要（明细走 FC 查询）"""
     lines = []
-    DETAIL_LIMIT = 5
+    detail_limit = 5
 
     def _format_sector_group(sectors, label):
         if not sectors:
             return
-        show_detail = min(DETAIL_LIMIT, len(sectors))
+        show_detail = min(detail_limit, len(sectors))
         lines.append(f"【{label}板块热点 — TOP{show_detail}个股明细，其余摘要】")
         for i, s in enumerate(sectors, 1):
             # 板块总结行
@@ -425,13 +402,13 @@ def format_hotspot(
             )
 
             # 仅 TOP5 展示个股明细
-            if i > DETAIL_LIMIT:
+            if i > detail_limit:
                 continue
 
             stocks = s.get("stocks", [])
             if not stocks:
                 continue
-            lines.append(f"      个股明细（得分排序，共{len(stocks)}只）：")
+            lines.append(f"      个股明细（共{len(stocks)}只）：")
             for j, st in enumerate(stocks, 1):
                 board_str = f" {st['boards']}板" if st.get("boards") else ""
                 seal_str = f" 封{st['first_seal']}" if st.get("first_seal") else ""
@@ -442,8 +419,8 @@ def format_hotspot(
                     f"换手{st['turnover']:.1f}% "
                     f"主力净{st['mf_wan']:+.0f}万({st['mf_ratio']:.1f}%)"
                     f"{seal_str} "
-                    f"MA5={st.get('ma5', 0):.2f} MA10={st.get('ma10', 0):.2f} MA20={st.get('ma20', 0):.2f} MA5斜率{st.get('ma5_angle', 0):.1f}% "
-                    f"得分{st['stock_score']:.1f}"
+                    f"MA5={st.get('ma5', 0):.2f} MA10={st.get('ma10', 0):.2f} "
+                    f"MA20={st.get('ma20', 0):.2f} MA5斜率{st.get('ma5_angle', 0):.1f}%"
                 )
         lines.append("")
 
@@ -451,10 +428,8 @@ def format_hotspot(
     _format_sector_group(concepts, "概念")
 
     # 追加提示
-    if len(industries) > DETAIL_LIMIT or len(concepts) > DETAIL_LIMIT:
-        lines.append(
-            f"  注：仅 TOP{DETAIL_LIMIT} 板块展示个股明细，其余板块个股可调用 get_hotspot_stocks 查询。"
-        )
+    if len(industries) > detail_limit or len(concepts) > detail_limit:
+        lines.append(f"  注：仅 TOP{detail_limit} 板块展示个股明细，其余板块可通过 get_hotspot_stocks 工具查询。")
 
     return "\n".join(lines) if lines else "无热点数据"
 
@@ -496,9 +471,7 @@ def format_index_data(indices: list) -> str:
             elif close > ma20:
                 ma_str = f"  MA5/MA10/MA20：{ma5:.2f}/{ma10:.2f}/{ma20:.2f}（价{above_ma5}MA5, 价{above_ma20}MA20）"
             else:
-                ma_str = (
-                    f"  MA5/MA10/MA20：{ma5:.2f}/{ma10:.2f}/{ma20:.2f}（价低于MA20）"
-                )
+                ma_str = f"  MA5/MA10/MA20：{ma5:.2f}/{ma10:.2f}/{ma20:.2f}（价低于MA20）"
 
         lines.append(
             f"  {name}：收盘{close:.2f} 开{open_p:.2f} 高{high:.2f} 低{low:.2f} "
@@ -570,20 +543,14 @@ def format_risk_flags(items: list, candidates: list = None, label: str = "风险
         if direction in ("减持", "增持"):
             holder = item.get("holder_name", "")
             rate = item.get("change_rate", 0) or 0
-            lines.append(
-                f"  {code} {name}：{holder} {direction}{abs(rate):.2f}%{in_pool}"
-            )
+            lines.append(f"  {code} {name}：{holder} {direction}{abs(rate):.2f}%{in_pool}")
         elif label == "监管":
             title = (item.get("title", "") or "")[:60]
             issuer = item.get("issuer_short", "") or ""
             risk = item.get("risk_level", 0) or 0
             risk_type = item.get("risk_type", "") or ""
-            summary = (
-                item.get("risk_summary", "") or item.get("pdf_summary", "") or ""
-            )[:80]
-            lines.append(
-                f"  {code} {name}：[{risk_type}] {issuer}{'☆' * risk} {title}{in_pool}"
-            )
+            summary = (item.get("risk_summary", "") or item.get("pdf_summary", "") or "")[:80]
+            lines.append(f"  {code} {name}：[{risk_type}] {issuer}{'☆' * risk} {title}{in_pool}")
             if summary:
                 lines.append(f"    摘要：{summary}")
         elif label == "监控":
@@ -637,9 +604,7 @@ def format_three_day_trend(trend: dict) -> str:
     return "\n".join(lines)
 
 
-def format_broken_boards(
-    records: list, broken_trend: dict = None, sector_code_map: dict = None
-) -> str:
+def format_broken_boards(records: list, broken_trend: dict = None, sector_code_map: dict = None) -> str:
     """格式化炸板明细 — 按行业分组展示"""
     if not records:
         return "今日无炸板"
@@ -682,8 +647,7 @@ def format_broken_boards(
             # 其余只列名称
             rest_names = [f"{r['name']}({r['code']})" for r in recs[5:]]
             lines.append(
-                f"    ...等{len(recs) - 5}只：{'、'.join(rest_names[:10])}"
-                + ("..." if len(rest_names) > 10 else "")
+                f"    ...等{len(recs) - 5}只：{'、'.join(rest_names[:10])}" + ("..." if len(rest_names) > 10 else "")
             )
 
     return "\n".join(lines)
@@ -708,9 +672,7 @@ def format_first_boards(records: list, sector_code_map: dict = None) -> str:
         seal_ratio = (seal_amt / 10000 / turnover_wan * 100) if turnover_wan > 0 else 0
         seal_str = f" 封板资金{seal_amt_yi:.1f}亿" if seal_amt_yi > 0 else ""
         seal_ratio_str = f" 封单比{seal_ratio:.1f}%" if seal_ratio > 0 else ""
-        lhb = (
-            f" 龙虎榜净买{r['lhb_net'] / 100000000:+.2f}亿" if r.get("lhb_net") else ""
-        )
+        lhb = f" 龙虎榜净买{r['lhb_net'] / 100000000:+.2f}亿" if r.get("lhb_net") else ""
         extra = f"{seal}{seal_str}{seal_ratio_str}{lhb}"
         lines.append(
             f"  {i}. {r['name']}({r['code']}){ind} {r['change']:+.2f}% "
@@ -718,7 +680,8 @@ def format_first_boards(records: list, sector_code_map: dict = None) -> str:
             f"市值{r['mcap']:.0f}亿（流通{r['circ_mcap']:.0f}） "
             f"主力净{r['mf_wan']:+.0f}万({r['mf_ratio']:.1f}%) "
             f"超大单{r['sl_wan']:+.0f}万 "
-            f"价{r.get('price', 0):.2f} MA5={r.get('ma5', 0):.2f} MA10={r.get('ma10', 0):.2f} MA20={r.get('ma20', 0):.2f}"
+            f"价{r.get('price', 0):.2f} MA5={r.get('ma5', 0):.2f} "
+            f"MA10={r.get('ma10', 0):.2f} MA20={r.get('ma20', 0):.2f}"
         )
         if extra:
             lines.append(f"     [{extra}]")
@@ -764,10 +727,7 @@ def format_lhb_full(lhb_data: list) -> str:
             if "机构专用" in (name or ""):
                 inst_count += 1
                 break
-            elif any(
-                k in (name or "")
-                for k in ("国泰海通", "华泰", "华鑫", "中信", "银河", "国盛")
-            ):
+            elif any(k in (name or "") for k in ("国泰海通", "华泰", "华鑫", "中信", "银河", "国盛")):
                 hm_count += 1
                 break
 
@@ -784,23 +744,18 @@ def format_lhb_full(lhb_data: list) -> str:
         net_ratio = (s.get("net_ratio", 0) or 0) * 100
         turnover_rate = s.get("turnover_rate", 0) or 0
         boards = s.get("boards", 0) or 0
-        reason = s.get("reason", "")
+        _reason = s.get("reason", "")
 
         # 席位特征标签
         buy_seats = s.get("buy_seats", [])
-        inst_buy = sum(
-            seat["buy"] for seat in buy_seats if "机构专用" in (seat.get("name") or "")
-        )
+        inst_buy = sum(seat["buy"] for seat in buy_seats if "机构专用" in (seat.get("name") or ""))
         total_buy = sum(seat["buy"] for seat in buy_seats) or 1
         inst_ratio = inst_buy / total_buy
 
         hm_count_local = sum(
             1
             for seat in buy_seats
-            if any(
-                k in (seat.get("name") or "")
-                for k in ("国泰海通", "华泰", "华鑫", "中信", "银河", "国盛")
-            )
+            if any(k in (seat.get("name") or "") for k in ("国泰海通", "华泰", "华鑫", "中信", "银河", "国盛"))
         )
 
         tags = []
@@ -888,10 +843,7 @@ def calc_position_cap(
 
     # 8. 涨跌>5%分布 (10%)：强势股 vs 弱势股的宽度
     total_strong = up_5pct + down_5pct
-    if total_strong > 0:
-        strong_breadth_score = (up_5pct / total_strong) * 100
-    else:
-        strong_breadth_score = 50  # 无极端波动时中性
+    strong_breadth_score = (up_5pct / total_strong) * 100 if total_strong > 0 else 50
 
     # 9. 指数均线健康度 (10%)：多少个主要指数站稳 MA5/MA20
     ma_health_score = index_ma_health

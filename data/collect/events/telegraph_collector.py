@@ -3,13 +3,13 @@
 
 数据源：财联社 /api/cache（直调 HTTP，不经过 akshare）
 写入表：cls_telegraph
-用途：为复盘提供盘中消息驱动分析
+用途：为复盘/早盘/趋势筛选提供盘中消息
 
 字段维度：
 - level (A/B/C)：财联社编辑标记的重要性
-- category：本地分类器（行业/政策/个股等 20+ 类别）
-- reading_num：市场关注度
-- stock_tags：关联股票（可交叉比对涨跌停池）
+- score：level × reading_num 综合评分
+- stock_tags / subject_tags / plate_tags：CLS 编辑标注，直接可用
+- 盘面直播噪声在采集阶段过滤，不存库
 """
 
 import hashlib
@@ -18,7 +18,7 @@ import re
 import sqlite3
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 
@@ -76,9 +76,7 @@ class TelegraphCollector:
         try:
             params = dict(TELEGRAPH_LIST_PARAMS)
             params["lastTime"] = int(time.time())
-            resp = self.session.get(
-                TELEGRAPH_LIST_URL, params=params, timeout=DEFAULT_TIMEOUT
-            )
+            resp = self.session.get(TELEGRAPH_LIST_URL, params=params, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             items = data.get("data", {}).get("roll_data", [])
@@ -202,7 +200,7 @@ class TelegraphCollector:
 
     def collect(self, trade_date: str = None) -> Dict[str, Any]:
         """
-        采集电报并入库
+        采集电报并入库。盘面直播噪声直接跳过不存。
 
         Args:
             trade_date: 日期 YYYY-MM-DD（用于日志，实际按 ctime 归类）
@@ -228,6 +226,7 @@ class TelegraphCollector:
             records = []
             new_count = 0
             articles_fetched = 0
+            noise_skipped = 0
 
             for item in items:
                 try:
@@ -242,29 +241,29 @@ class TelegraphCollector:
                     ctime = item.get("ctime", 0) or 0
                     reading_num = item.get("reading_num", 0) or 0
 
+                    # 提取原始标签，提前做分类（噪声过滤需要 category）
+                    subject_list = item.get("subjects", []) or []
+                    subject_names = self._format_subject_tags(subject_list)
+                    category = self._derive_category(subject_names)
+
+                    # 盘面直播噪声直接跳过，不存库
+                    if self._is_noise_telegraph(category, title):
+                        noise_skipped += 1
+                        continue
+
                     # 日期归一化
-                    if ctime:
-                        record_date = datetime.fromtimestamp(ctime).strftime("%Y-%m-%d")
-                    else:
-                        record_date = trade_date
+                    record_date = datetime.fromtimestamp(ctime).strftime("%Y-%m-%d") if ctime else trade_date
 
                     # 提取原始标签数据
                     stock_list = item.get("stock_list", []) or []
-                    subject_list = item.get("subjects", []) or []
                     plate_list = item.get("plate_list", []) or []
 
                     # 格式化标签
                     stock_tags = self._format_stock_tags(stock_list)
-                    subject_names = self._format_subject_tags(subject_list)
                     plate_names = self._format_plate_tags(plate_list)
 
-                    # 分类（优先用 CLS 主题标签）
-                    category = self._derive_category(subject_names)
-
                     # content_hash（用于判断是否需要更新）
-                    content_hash = hashlib.md5(
-                        (title + (content or brief)).encode("utf-8")
-                    ).hexdigest()
+                    content_hash = hashlib.md5((title + (content or brief)).encode("utf-8")).hexdigest()
 
                     # A/B 级电报补全完整内容
                     if level in ("A", "B") and not content:
@@ -288,17 +287,9 @@ class TelegraphCollector:
                             "title": title,
                             "content": content,
                             "reading_num": reading_num,
-                            "stock_tags": json.dumps(stock_tags, ensure_ascii=False)
-                            if stock_tags
-                            else None,
-                            "subject_tags": json.dumps(
-                                subject_names, ensure_ascii=False
-                            )
-                            if subject_names
-                            else None,
-                            "plate_tags": json.dumps(plate_names, ensure_ascii=False)
-                            if plate_names
-                            else None,
+                            "stock_tags": json.dumps(stock_tags, ensure_ascii=False) if stock_tags else None,
+                            "subject_tags": json.dumps(subject_names, ensure_ascii=False) if subject_names else None,
+                            "plate_tags": json.dumps(plate_names, ensure_ascii=False) if plate_names else None,
                             "category": category,
                             "score": score,
                             "content_hash": content_hash,
@@ -314,11 +305,9 @@ class TelegraphCollector:
             if records:
                 new_telegraph_ids = self._save_to_db(records)
 
-            # AI 结构化：新入库 + 之前 pending/failed 的一起处理
-            self._ai_structure_batch(new_telegraph_ids, trade_date)
-
             self.logger.info(
-                f"采集完成：{len(records)} 条，新增 {len(new_telegraph_ids)} 条，补全 {articles_fetched} 篇"
+                f"采集完成：{len(records)} 条（跳过 {noise_skipped} 条噪声），"
+                f"新增 {len(new_telegraph_ids)} 条，补全 {articles_fetched} 篇"
             )
 
             return {
@@ -412,9 +401,7 @@ class TelegraphCollector:
         # 清理 72 小时前的旧电报（独立事务，不影响已提交的插入）
         try:
             conn = sqlite3.connect(self.db_path)
-            cutoff = (datetime.now() - timedelta(hours=RETENTION_HOURS)).strftime(
-                "%Y-%m-%d"
-            )
+            cutoff = (datetime.now() - timedelta(hours=RETENTION_HOURS)).strftime("%Y-%m-%d")
             conn.execute("DELETE FROM cls_telegraph WHERE trade_date < ?", (cutoff,))
             conn.commit()
         except Exception as e:
@@ -424,380 +411,20 @@ class TelegraphCollector:
 
         return new_ids
 
-    # ========== AI 结构化 ==========
+    # ========== 过滤 ==========
 
     @staticmethod
-    def _is_noise_telegraph(row: Dict) -> bool:
-        """判断电报是否为盘面直播噪声（不需要 AI 结构化）"""
-        if row.get("category") != "盘面直播":
+    def _is_noise_telegraph(category: str, title: str) -> bool:
+        """盘面直播噪声：收评/午评/指数播报/成交额/资金监控，采集时直接跳过不存"""
+        if category != "盘面直播":
             return False
-        title = row.get("title", "")
-        # 保留：涨停分析、连板分析、竞价看龙头、舆情热点
         if any(kw in title for kw in _TELEGRAPH_KEEP_PATTERNS):
             return False
-        # 过滤：收评、午评、指数涨跌描述、成交额播报、主力资金监控
-        if any(kw in title for kw in _TELEGRAPH_NOISE_PATTERNS):
-            return True
-        return False
-
-    def _ai_structure_batch(self, new_ids: List[str], trade_date: str = None):
-        """
-        对新入库 + 之前 pending/failed 的电报做 AI 结构化。
-
-        处理所有新采集的电报 + 之前遗留的 pending/failed，不做数量限制。
-        盘面直播的噪声电报（收评/指数播报等）跳过。
-        使用 Function Calling 让 AI 精确匹配个股代码和板块编码。
-
-        Args:
-            new_ids: 新入库的 telegraph_id 列表
-            trade_date: 交易日期，默认今天
-        """
-        import json as _json
-        from datetime import datetime as _dt
-
-        if trade_date is None:
-            trade_date = _dt.now().strftime("%Y-%m-%d")
-
-        # 1. 收集待处理电报
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        pending_rows = []
-        seen = set()
-        skipped_ids = []
-
-        # 先查新增的
-        if new_ids:
-            placeholders = ",".join("?" * len(new_ids))
-            cursor = conn.execute(
-                f"""
-                SELECT telegraph_id, title, content, level, category, trade_date
-                FROM cls_telegraph
-                WHERE telegraph_id IN ({placeholders})
-                  AND trade_date = ?
-            """,
-                new_ids + [trade_date],
-            )
-            for row in cursor.fetchall():
-                tid = row["telegraph_id"]
-                if tid in seen:
-                    continue
-                r = dict(row)
-                if self._is_noise_telegraph(r):
-                    skipped_ids.append(tid)
-                    continue
-                pending_rows.append(r)
-                seen.add(tid)
-
-        # 再补上之前遗留的 pending/failed（不限数量，全部处理）
-        exclude = seen | set(skipped_ids)
-        if exclude:
-            ph = ",".join("?" * len(exclude))
-            exclude_clause = f"AND telegraph_id NOT IN ({ph})"
-        else:
-            exclude_clause = "AND telegraph_id NOT IN ('__none__')"
-            exclude = []
-
-        cursor = conn.execute(
-            f"""
-            SELECT telegraph_id, title, content, level, category, trade_date
-            FROM cls_telegraph
-            WHERE trade_date = ?
-              AND (ai_status = 'pending' OR ai_status = 'failed')
-              {exclude_clause}
-            ORDER BY ctime ASC
-        """,
-            [trade_date] + list(exclude),
-        )
-        for row in cursor.fetchall():
-            tid = row["telegraph_id"]
-            if tid in seen:
-                continue
-            r = dict(row)
-            if self._is_noise_telegraph(r):
-                skipped_ids.append(tid)
-                continue
-            pending_rows.append(r)
-            seen.add(tid)
-
-        conn.close()
-
-        # 标记噪声电报为 skipped（不再重试）
-        if skipped_ids:
-            self._mark_skipped(skipped_ids)
-
-        if not pending_rows:
-            return
-
-        # 单次最多 10 条，避免输出超 token 限制
-        pending_rows = pending_rows[:10]
-        self.logger.info(
-            f"AI 结构化：处理 {len(pending_rows)} 条电报（跳过 {len(skipped_ids)} 条噪声）"
-        )
-
-        # 2. 格式化为 prompt
-        telegraphs_text = ""
-        for i, r in enumerate(pending_rows, 1):
-            telegraphs_text += (
-                f"--- 电报 {i} ---\n"
-                f"ID: {r['telegraph_id']}\n"
-                f"日期: {r['trade_date']}\n"
-                f"级别: {r['level']}\n"
-                f"分类: {r['category']}\n"
-                f"标题: {r['title']}\n"
-                f"内容: {(r['content'] or '')[:500]}\n\n"
-            )
-
-        from system.ai.prompts.telegraph import (
-            TELEGRAPH_AI_SYSTEM,
-            TELEGRAPH_FC_TOOLS,
-            TELEGRAPH_STRUCTURE_PROMPT,
-        )
-
-        prompt = TELEGRAPH_STRUCTURE_PROMPT.format(telegraphs=telegraphs_text)
-
-        # 3. 初始化 AI + 工具
-        try:
-            from system.ai import ai
-            from system.ai.function_calling import FunctionCallingEngine
-            from system.ai.stock_tools import StockTools
-
-            fc_engine = FunctionCallingEngine()
-            tools = StockTools()
-            tool_map = {
-                "search_stock": tools.search_stock,
-                "search_sector": tools.search_sector,
-            }
-
-            system_prompt = TELEGRAPH_AI_SYSTEM
-
-            # 4. FC 多轮对话
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
-
-            max_rounds = 6
-            result_text = None
-
-            for _round in range(max_rounds):
-                response = ai.chat_with_tools_raw(
-                    messages,
-                    model="watcher",
-                    tools=TELEGRAPH_FC_TOOLS,
-                    tool_choice="auto",
-                    max_tokens=2000,
-                )
-
-                content = response.get("content", "")
-                tool_calls = response.get("tool_calls", [])
-
-                if tool_calls:
-                    self.logger.info(
-                        f"FC 第{_round + 1}轮：{len(tool_calls)} 个工具调用"
-                    )
-                    assistant_msg = {"role": "assistant", "content": content or ""}
-                    assistant_msg["tool_calls"] = tool_calls
-                    messages.append(assistant_msg)
-
-                    for tc in tool_calls:
-                        fn = (
-                            tc.get("function", {})
-                            if isinstance(tc, dict)
-                            else tc.function
-                        )
-                        name = fn.get("name", "")
-                        args_str = fn.get("arguments", "{}")
-                        try:
-                            args = _json.loads(args_str)
-                        except Exception:
-                            args = {}
-                        self.logger.info(f"  → {name}({args})")
-                        try:
-                            tool_result = tool_map[name](**args)
-                        except Exception as e:
-                            tool_result = {"error": str(e)}
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc.get("id", ""),
-                                "content": _json.dumps(tool_result, ensure_ascii=False),
-                            }
-                        )
-                    continue
-
-                if content:
-                    result_text = content
-                    break
-
-            if not result_text:
-                self.logger.warning("AI 结构化返回空（FC 多轮未产出最终结果）")
-                self._mark_failed([r["telegraph_id"] for r in pending_rows])
-                return
-
-            # 5. 解析 JSON
-            result_text = result_text.strip()
-            if result_text.startswith("```"):
-                result_text = result_text.split("\n", 1)[-1]
-                if result_text.endswith("```"):
-                    result_text = result_text[:-3]
-                result_text = result_text.strip()
-            if result_text.startswith("json"):
-                result_text = result_text[4:].strip()
-
-            items = self._parse_ai_json(result_text)
-            if not isinstance(items, list):
-                items = [items]
-            items = [it for it in items if it.get("telegraph_id")]
-            self._update_ai_fields(items)
-
-        except _json.JSONDecodeError as e:
-            repaired = self._repair_truncated_json(result_text)
-            if repaired:
-                try:
-                    items = _json.loads(repaired)
-                    if isinstance(items, list):
-                        self.logger.info(
-                            f"JSON 修复成功，恢复 {len(items)}/{len(pending_rows)} 条"
-                        )
-                        items = [it for it in items if it.get("telegraph_id")]
-                        self._update_ai_fields(items)
-                except _json.JSONDecodeError:
-                    self.logger.warning(f"AI 返回 JSON 解析失败（修复无效）: {e}")
-                    self._mark_failed([r["telegraph_id"] for r in pending_rows])
-            else:
-                self.logger.warning(f"AI 返回 JSON 解析失败（无法修复）: {e}")
-                self._mark_failed([r["telegraph_id"] for r in pending_rows])
-        except Exception as e:
-            self.logger.warning(f"AI 结构化失败: {e}")
-            self._mark_failed([r["telegraph_id"] for r in pending_rows])
-
-    def _parse_ai_json(self, text: str) -> list:
-        """解析 AI 返回 JSON，从混合文本中提取 JSON 数组。失败抛出 JSONDecodeError"""
-        import re
-
-        text = text.strip()
-        # 策略1: 直接解析（纯 JSON）
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-        # 策略2: 用 raw_decode 只取第一个完整 JSON 值（忽略尾部说明文字）
-        try:
-            decoder = json.JSONDecoder()
-            data, _ = decoder.raw_decode(text)
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-        # 策略3: 从文本中提取 JSON 数组（找到第一个 [ 和最后一个 ]）
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        # 策略4: 从 markdown 代码块中提取
-        match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # 全部失败，抛出原始错误
-        return json.loads(text)
-
-    def _repair_truncated_json(self, text: str) -> Optional[str]:
-        """尝试修复因 max_tokens 截断导致的 JSON 不完整"""
-        if not text:
-            return None
-        text = text.strip()
-        # 找到最后一个完整的对象（以 }, 结尾）
-        last_complete = text.rfind("},")
-        if last_complete > 0:
-            text = text[: last_complete + 1]
-            # 闭合数组
-            if text.rstrip().endswith(","):
-                text = text.rstrip()[:-1]
-            text = text.strip() + "\n]"
-            return text
-        return None
-
-    def _update_ai_fields(self, items: list):
-        """回写 AI 结构化结果到 DB"""
-        updated = 0
-        conn = sqlite3.connect(self.db_path)
-        for item in items:
-            tid = str(item.get("telegraph_id", ""))
-            if not tid:
-                continue
-            try:
-                conn.execute(
-                    """
-                    UPDATE cls_telegraph SET
-                        ai_summary=?, ai_sentiment=?, ai_impact=?,
-                        ai_stocks=?, ai_sectors=?,
-                        ai_importance=?, ai_direction=?,
-                        ai_status='done'
-                    WHERE telegraph_id=?
-                """,
-                    (
-                        item.get("ai_summary", "")[:100],
-                        item.get("ai_sentiment", "中性"),
-                        item.get("ai_impact", "")[:100],
-                        json.dumps(item.get("ai_stocks", []), ensure_ascii=False),
-                        json.dumps(item.get("ai_sectors", []), ensure_ascii=False),
-                        item.get("ai_importance", 0),
-                        item.get("ai_direction", "其他"),
-                        tid,
-                    ),
-                )
-                updated += 1
-            except Exception as e:
-                self.logger.warning(f"回写电报 {tid} AI 字段失败: {e}")
-        conn.commit()
-        conn.close()
-        self.logger.info(f"AI 结构化完成：{updated}/{len(items)} 条已更新")
-
-    def _mark_failed(self, telegraph_ids: List[str]):
-        """标记 AI 结构化失败的记录"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            for tid in telegraph_ids:
-                conn.execute(
-                    "UPDATE cls_telegraph SET ai_status='failed' WHERE telegraph_id=? AND (ai_status IS NULL OR ai_status='pending')",
-                    (tid,),
-                )
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            self.logger.warning(f"标记 failed 失败: {e}")
-
-    def _mark_skipped(self, telegraph_ids: List[str]):
-        """标记不需要 AI 结构化的噪声电报"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            for tid in telegraph_ids:
-                conn.execute(
-                    "UPDATE cls_telegraph SET ai_status='skipped' WHERE telegraph_id=? AND (ai_status IS NULL OR ai_status='pending')",
-                    (tid,),
-                )
-            conn.commit()
-            conn.close()
-            self.logger.info(f"标记 {len(telegraph_ids)} 条噪声电报为 skipped")
-        except Exception as e:
-            self.logger.warning(f"标记 skipped 失败: {e}")
+        return any(kw in title for kw in _TELEGRAPH_NOISE_PATTERNS)
 
     # ========== 查询（供复盘使用） ==========
 
-    def get_for_review(
-        self, trade_date: str, min_score: int = 3, limit: int = 80
-    ) -> List[Dict]:
+    def get_for_review(self, trade_date: str, min_score: int = 3, limit: int = 80) -> List[Dict]:
         """获取复盘用的电报列表（按评分筛选）"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -891,9 +518,7 @@ def _print_report(result):
         high = [r for r in result["data"] if r.get("score", 0) >= 3]
         for i, r in enumerate(high[:10], 1):
             print(f"  {i}. [{r['level']}] {r['title'][:60]}")
-            print(
-                f"     分类：{r['category']}，评分：{r['score']}，阅读：{r['reading_num']}"
-            )
+            print(f"     分类：{r['category']}，评分：{r['score']}，阅读：{r['reading_num']}")
 
     print(f"\n{'=' * 60}")
 

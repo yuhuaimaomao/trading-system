@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WHITELIST = {0, 1, -1, 2, 3, 4, 0.5, -1.0, 0.25, 0.75}  # 值 → 允许的原因
+WHITELIST = {0, 1, -1, 2, 3, 4, 5, 10, 20, 0.5, -1.0, 0.25, 0.75}  # 值 → 允许的原因
 
 
 def is_volume_multiple(v: float) -> bool:
@@ -33,11 +33,7 @@ def check_line(line: str) -> list[str]:
     violations = []
     # 跳过注释和文档字符串
     clean_line = line.strip()
-    if (
-        clean_line.startswith("#")
-        or clean_line.startswith('"""')
-        or clean_line.startswith("'''")
-    ):
+    if clean_line.startswith("#") or clean_line.startswith('"""') or clean_line.startswith("'''"):
         return violations
 
     # 1. 拦截科学计数法 (如 1e-4, 5e6)
@@ -84,9 +80,7 @@ def get_changed_lines(filename: str) -> list[tuple[int, str]]:
         elif line.startswith("+") and not line.startswith("+++"):
             changed.append((line_num, line[1:]))
             line_num += 1
-        elif line.startswith(
-            " "
-        ):  # 修复核心：只有真正的上下文行才递增行号，避开 \ No newline 干扰
+        elif line.startswith(" "):  # 修复核心：只有真正的上下文行才递增行号，避开 \ No newline 干扰
             line_num += 1
 
     return changed

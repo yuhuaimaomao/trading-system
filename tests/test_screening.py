@@ -171,8 +171,7 @@ class TestMarketBreadth:
         _init_breadth_tables(conn)
         for code in ["000001", "000002", "000003", "000004", "000005"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, 2.0),
             )
         conn.execute(
@@ -193,8 +192,7 @@ class TestMarketBreadth:
         _init_breadth_tables(conn)
         for code in ["000001", "000002", "000003"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, -3.0),
             )
         conn.execute(
@@ -215,20 +213,15 @@ class TestMarketBreadth:
         _init_breadth_tables(conn)
         for i, code in enumerate(["000001", "000002", "000003", "000004", "000005"]):
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, 1.0 + i),
             )
         for code in ["000006", "000007", "000008"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, -2.0),
             )
-        conn.execute(
-            "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-            "VALUES ('000009', '2026-06-01', 0)"
-        )
+        conn.execute("INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES ('000009', '2026-06-01', 0)")
         conn.execute(
             "INSERT INTO index_realtime_data (index_code, trade_date, trade_time, change_percent) "
             "VALUES ('sh000001', '2026-06-01', '15:00:00', 0.5)"
@@ -247,23 +240,19 @@ class TestMarketBreadth:
         _init_breadth_tables(conn)
         for code in ["000001", "000002"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, 10.0),
             )
         for code in ["000003", "000004"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, -10.0),
             )
         conn.execute(
-            "INSERT INTO limit_pool (stock_code, trade_date, pool_type) "
-            "VALUES ('000001', '2026-06-01', '涨停')"
+            "INSERT INTO limit_pool (stock_code, trade_date, pool_type) VALUES ('000001', '2026-06-01', '涨停')"
         )
         conn.execute(
-            "INSERT INTO limit_pool (stock_code, trade_date, pool_type) "
-            "VALUES ('000003', '2026-06-01', '跌停')"
+            "INSERT INTO limit_pool (stock_code, trade_date, pool_type) VALUES ('000003', '2026-06-01', '跌停')"
         )
         conn.execute(
             "INSERT INTO index_realtime_data (index_code, trade_date, trade_time, change_percent) "
@@ -281,8 +270,7 @@ class TestMarketBreadth:
         conn = sqlite3.connect(db_path)
         _init_breadth_tables(conn)
         conn.execute(
-            "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-            "VALUES ('000001', '2026-06-01', 2.0)"
+            "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES ('000001', '2026-06-01', 2.0)"
         )
         conn.execute(
             "INSERT INTO index_realtime_data (index_code, trade_date, trade_time, change_percent) "
@@ -319,8 +307,7 @@ class TestMarketBreadth:
         )
         for code in ["000001", "000002", "000003", "000004"]:
             conn.execute(
-                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) "
-                "VALUES (?, '2026-06-01', ?)",
+                "INSERT INTO stock_basic (stock_code, trade_date, change_pct) VALUES (?, '2026-06-01', ?)",
                 (code, 2.0),
             )
         conn.execute(
@@ -448,26 +435,16 @@ class TestFactorFunctions:
         assert check_volume_breakout({}, []) is None
 
     def test_volume_pullback_low_vol_negative_chg(self):
-        assert (
-            check_volume_pullback({"volume_ratio": 0.5, "change_pct": -1.0}, [])
-            == "缩量回调"
-        )
+        assert check_volume_pullback({"volume_ratio": 0.5, "change_pct": -1.0}, []) == "缩量回调"
 
     def test_volume_pullback_exact_boundary(self):
-        assert (
-            check_volume_pullback({"volume_ratio": 0.5, "change_pct": -2.0}, [])
-            == "缩量回调"
-        )
+        assert check_volume_pullback({"volume_ratio": 0.5, "change_pct": -2.0}, []) == "缩量回调"
 
     def test_volume_pullback_positive_chg(self):
-        assert (
-            check_volume_pullback({"volume_ratio": 0.5, "change_pct": 1.0}, []) is None
-        )
+        assert check_volume_pullback({"volume_ratio": 0.5, "change_pct": 1.0}, []) is None
 
     def test_volume_pullback_high_vol(self):
-        assert (
-            check_volume_pullback({"volume_ratio": 1.0, "change_pct": -1.0}, []) is None
-        )
+        assert check_volume_pullback({"volume_ratio": 1.0, "change_pct": -1.0}, []) is None
 
     def test_amplitude_contract_below_3(self):
         assert check_amplitude_contract({"amplitude": 2.0}, []) == "蓄力中"
@@ -479,39 +456,24 @@ class TestFactorFunctions:
         assert check_amplitude_contract({}, []) is None
 
     def test_main_force_buy_positive_net_high_ratio(self):
-        result = check_main_force_buy(
-            {"main_force_net": 500_0000, "main_force_ratio": 5.0}, []
-        )
+        result = check_main_force_buy({"main_force_net": 500_0000, "main_force_ratio": 5.0}, [])
         assert result == "主力介入"
 
     def test_main_force_buy_negative_net(self):
-        assert (
-            check_main_force_buy({"main_force_net": -100, "main_force_ratio": 5.0}, [])
-            is None
-        )
+        assert check_main_force_buy({"main_force_net": -100, "main_force_ratio": 5.0}, []) is None
 
     def test_main_force_buy_low_ratio(self):
-        assert (
-            check_main_force_buy({"main_force_net": 100, "main_force_ratio": 2.0}, [])
-            is None
-        )
+        assert check_main_force_buy({"main_force_net": 100, "main_force_ratio": 2.0}, []) is None
 
     def test_chip_concentrate_positive_mf_negative_small(self):
-        result = check_chip_concentrate(
-            {"main_force_net": 500_0000, "small_net": -200_0000}, []
-        )
+        result = check_chip_concentrate({"main_force_net": 500_0000, "small_net": -200_0000}, [])
         assert result == "筹码集中"
 
     def test_chip_concentrate_no_small(self):
-        assert (
-            check_chip_concentrate({"main_force_net": 500_0000, "small_net": 0}, [])
-            is None
-        )
+        assert check_chip_concentrate({"main_force_net": 500_0000, "small_net": 0}, []) is None
 
     def test_chip_concentrate_no_mf(self):
-        assert (
-            check_chip_concentrate({"main_force_net": 0, "small_net": -100}, []) is None
-        )
+        assert check_chip_concentrate({"main_force_net": 0, "small_net": -100}, []) is None
 
 
 # ===================================================================
@@ -584,15 +546,10 @@ class TestMultiDayFactors:
         assert check_low_volatility(row, history) is None
 
     def test_volume_expand_avg5_greater_than_avg20(self):
-        assert (
-            check_volume_expand({"avg_vol_5d": 2000, "avg_vol_20d": 1000}, [])
-            == "量能放大"
-        )
+        assert check_volume_expand({"avg_vol_5d": 2000, "avg_vol_20d": 1000}, []) == "量能放大"
 
     def test_volume_expand_not_enough(self):
-        assert (
-            check_volume_expand({"avg_vol_5d": 1000, "avg_vol_20d": 1000}, []) is None
-        )
+        assert check_volume_expand({"avg_vol_5d": 1000, "avg_vol_20d": 1000}, []) is None
 
     def test_volume_expand_missing(self):
         assert check_volume_expand({}, []) is None
@@ -819,9 +776,7 @@ class TestTrendScreenerStatic:
         """多头排列不成立 → False"""
         ts = TrendScreener()
         history = [{"ma5": 48, "ma10": 49, "ma20": 50}]
-        assert (
-            ts._is_ma_diverging({"ma5": 48, "ma10": 49, "ma20": 50}, history) is False
-        )
+        assert ts._is_ma_diverging({"ma5": 48, "ma10": 49, "ma20": 50}, history) is False
 
     def test_is_ma_diverging_no_history(self):
         ts = TrendScreener()
@@ -833,9 +788,7 @@ class TestTrendScreenerStatic:
 
     def test_compute_score_basic(self):
         ts = TrendScreener()
-        score = ts._compute_score(
-            ["放量启动", "趋势延续"], ["突破追涨"], {"ma5_angle": 5}
-        )
+        score = ts._compute_score(["放量启动", "趋势延续"], ["突破追涨"], {"ma5_angle": 5})
         # base=20, tags=2*5=10, scenarios=1*8=8, angle=5*2=10 → 48
         assert score == 48.0
 
@@ -1074,8 +1027,7 @@ def _init_trend_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS cls_telegraph;
         CREATE TABLE cls_telegraph (
             trade_date TEXT, ctime TEXT,
-            ai_summary TEXT, ai_sentiment TEXT, ai_stocks TEXT,
-            ai_status TEXT
+            title TEXT, stock_tags TEXT
         );
         DROP TABLE IF EXISTS stock_indicators;
         CREATE TABLE stock_indicators (
@@ -1123,9 +1075,7 @@ def _insert_trend_stock(conn, code, name, **kw):
     defaults.update(kw)
     cols = ", ".join(defaults.keys())
     vals = ", ".join("?" * len(defaults))
-    conn.execute(
-        f"INSERT INTO stock_basic ({cols}) VALUES ({vals})", list(defaults.values())
-    )
+    conn.execute(f"INSERT INTO stock_basic ({cols}) VALUES ({vals})", list(defaults.values()))
 
 
 class TestTrendScreenerDB:
@@ -1154,9 +1104,7 @@ class TestTrendScreenerDB:
             volume_ratio=2.0,
             main_force_net=1000_0000,
         )
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')")
         conn.execute(
             "INSERT INTO sector_hot_history (sector_code, trade_date, rank) VALUES ('BK0001', '2026-06-01', 1)"
         )
@@ -1184,9 +1132,7 @@ class TestTrendScreenerDB:
             volume_ratio=2.0,
             main_force_net=1000_0000,
         )
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')")
         conn.execute(
             "INSERT INTO sector_hot_history (sector_code, trade_date, rank) VALUES ('BK0001', '2026-06-01', 1)"
         )
@@ -1204,9 +1150,7 @@ class TestTrendScreenerDB:
     def test_get_history(self, db_path):
         conn = sqlite3.connect(db_path)
         _init_trend_tables(conn)
-        for i, day in enumerate(
-            ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"]
-        ):
+        for i, day in enumerate(["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"]):
             conn.execute(
                 "INSERT INTO stock_basic (stock_code, trade_date, price, open, high, low, prev_close, "
                 "change_pct, volume_ratio, ma5, ma10, ma20) "
@@ -1238,9 +1182,7 @@ class TestTrendScreenerDB:
             volume_ratio=2.0,
             main_force_net=1000_0000,
         )
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')")
         conn.execute(
             "INSERT INTO sector_hot_history (sector_code, trade_date, rank) VALUES ('BK0001', '2026-06-01', 1)"
         )
@@ -1259,9 +1201,7 @@ class TestTrendScreenerDB:
             volume_ratio=2.0,
             main_force_net=1000_0000,
         )
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('000002', 'BK9999')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('000002', 'BK9999')")
         conn.commit()
         conn.close()
 
@@ -1287,9 +1227,7 @@ class TestTrendScreenerDB:
             main_force_net=1000_0000,
         )
         # BK1575 = 白酒, 在黑名单中
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK1575')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK1575')")
         conn.execute(
             "INSERT INTO sector_hot_history (sector_code, trade_date, rank) VALUES ('BK1575', '2026-06-01', 1)"
         )
@@ -1353,9 +1291,8 @@ def _init_profile_tables(conn: sqlite3.Connection):
         );
         DROP TABLE IF EXISTS cls_telegraph;
         CREATE TABLE cls_telegraph (
-            stock_code TEXT, trade_date TEXT, ctime TEXT,
-            ai_summary TEXT, ai_sentiment TEXT, ai_stocks TEXT,
-            ai_status TEXT
+            trade_date TEXT, ctime TEXT,
+            title TEXT, stock_tags TEXT
         );
         DROP TABLE IF EXISTS regulatory_letter;
         CREATE TABLE regulatory_letter (
@@ -1406,7 +1343,7 @@ class TestProfileBuilder:
         """表不存在时抛出异常（非静默失败，符合设计）"""
         stocks = [_make_stock_score()]
         pb = ProfileBuilder(db_path=db_path)
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, TypeError)):
             pb.build(stocks, "2026-06-01")
 
     def test_build_valid_stock(self, db_path):
@@ -1436,9 +1373,7 @@ class TestProfileBuilder:
             )
 
         # 板块
-        conn.execute(
-            "INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')"
-        )
+        conn.execute("INSERT INTO sector_stocks (stock_code, sector_code) VALUES ('002371', 'BK0001')")
         conn.execute(
             "INSERT INTO sector_industry (sector_code, trade_date, change_percent, sector_name, main_force_net) "
             "VALUES ('BK0001', '2026-06-01', 2.0, '半导体', 1000_0000)"
@@ -1524,9 +1459,9 @@ class TestProfileBuilder:
                        51.0, 50.0, 48.0)"""
         )
         conn.execute(
-            """INSERT INTO cls_telegraph (trade_date, ctime, ai_summary, ai_sentiment, ai_stocks, ai_status)
-               VALUES ('2026-06-01', '09:30:00', '北方华创业绩预喜', '利好',
-                       '[{"code": "002371", "name": "北方华创"}]', 'done')"""
+            """INSERT INTO cls_telegraph (trade_date, ctime, title, stock_tags)
+               VALUES ('2026-06-01', '09:30:00', '北方华创业绩预喜',
+                       '[{"code": "002371", "name": "北方华创"}]')"""
         )
         conn.commit()
         conn.close()
@@ -1593,7 +1528,7 @@ class TestProfileBuilder:
     def test_build_multiple_stocks(self, db_path):
         conn = sqlite3.connect(db_path)
         _init_profile_tables(conn)
-        for code, name in [("002371", "北方华创"), ("000001", "平安银行")]:
+        for code, _name in [("002371", "北方华创"), ("000001", "平安银行")]:
             conn.execute(
                 """INSERT INTO stock_basic (stock_code, trade_date, price, open, high, low, prev_close,
                    change_pct, volume_ratio, amplitude, main_force_net, main_force_ratio, small_net,
@@ -1773,12 +1708,10 @@ class TestProfileBuilderInternals:
     def test_load_telegraphs_no_match(self, db_path):
         conn = sqlite3.connect(db_path)
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS cls_telegraph (trade_date TEXT, ctime TEXT, ai_summary TEXT, "
-            "ai_sentiment TEXT, ai_stocks TEXT, ai_status TEXT)"
+            "CREATE TABLE IF NOT EXISTS cls_telegraph (trade_date TEXT, ctime TEXT, title TEXT, stock_tags TEXT)"
         )
         conn.execute(
-            "INSERT INTO cls_telegraph VALUES ('2026-06-01', '10:00', '其他股票消息', '利好', "
-            "'[{\"code\": \"000999\"}]', 'done')"
+            "INSERT INTO cls_telegraph VALUES ('2026-06-01', '10:00', '其他股票消息', '[{\"code\": \"000999\"}]')"
         )
         conn.commit()
 
@@ -1794,12 +1727,9 @@ class TestProfileBuilderInternals:
             "risk_level INTEGER, risk_type TEXT, title TEXT)"
         )
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS cls_telegraph (trade_date TEXT, ctime TEXT, ai_summary TEXT, "
-            "ai_sentiment TEXT, ai_stocks TEXT, ai_status TEXT)"
+            "CREATE TABLE IF NOT EXISTS cls_telegraph (trade_date TEXT, ctime TEXT, title TEXT, stock_tags TEXT)"
         )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS limit_pool (stock_code TEXT, trade_date TEXT, pool_type TEXT)"
-        )
+        conn.execute("CREATE TABLE IF NOT EXISTS limit_pool (stock_code TEXT, trade_date TEXT, pool_type TEXT)")
         conn.commit()
 
         pb = ProfileBuilder(db_path=db_path)
@@ -1818,6 +1748,6 @@ class TestProfileBuilderInternals:
         pb = ProfileBuilder(db_path=db_path)
         # _calc_indicators 内部会创建自己的连接去查 stock_indicators
         # 如果 stock_indicators 表不存在会抛出 OperationalError
-        with pytest.raises(Exception):
+        with pytest.raises((sqlite3.OperationalError, Exception)):
             pb._calc_indicators(conn, "002371", "2026-06-01", [], {})
         conn.close()

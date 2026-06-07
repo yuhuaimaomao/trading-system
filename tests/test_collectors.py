@@ -49,9 +49,7 @@ class TestProxyManager:
     def test_get_proxy_success_dict_format(self):
         with patch(f"{self.PATCH_PATH}.requests.get") as mock_get:
             pm = self._make_pm()
-            mock_get.return_value = self._make_get_resp(
-                {"code": 1000, "data": [{"ip": "123.45.67.89", "port": 8080}]}
-            )
+            mock_get.return_value = self._make_get_resp({"code": 1000, "data": [{"ip": "123.45.67.89", "port": 8080}]})
             result = pm.get_proxy()
 
         assert result == {
@@ -62,9 +60,7 @@ class TestProxyManager:
     def test_get_proxy_success_list_format(self):
         with patch(f"{self.PATCH_PATH}.requests.get") as mock_get:
             pm = self._make_pm()
-            mock_get.return_value = self._make_get_resp(
-                [{"ip": "5.6.7.8", "port": 3128}]
-            )
+            mock_get.return_value = self._make_get_resp([{"ip": "5.6.7.8", "port": 3128}])
             result = pm.get_proxy()
         assert result == {
             "http": "http://5.6.7.8:3128",
@@ -85,9 +81,7 @@ class TestProxyManager:
 
         with patch(f"{self.PATCH_PATH}.requests.get") as mock_get:
             pm = self._make_pm()
-            mock_get.side_effect = requests.exceptions.ConnectionError(
-                "connection refused"
-            )
+            mock_get.side_effect = requests.exceptions.ConnectionError("connection refused")
             result = pm.get_proxy()
         assert result is None
 
@@ -115,9 +109,7 @@ class TestProxyManager:
     def test_get_proxy_missing_ip_or_port(self):
         with patch(f"{self.PATCH_PATH}.requests.get") as mock_get:
             pm = self._make_pm()
-            mock_get.return_value = self._make_get_resp(
-                {"code": 1000, "data": [{"ip": "", "port": 0}]}
-            )
+            mock_get.return_value = self._make_get_resp({"code": 1000, "data": [{"ip": "", "port": 0}]})
             result = pm.get_proxy()
         assert result is None
 
@@ -139,9 +131,7 @@ class TestProxyManager:
     def test_get_proxy_missing_ip_or_port_partial(self):
         with patch(f"{self.PATCH_PATH}.requests.get") as mock_get:
             pm = self._make_pm()
-            mock_get.return_value = self._make_get_resp(
-                {"code": 1000, "data": [{"ip": "1.2.3.4"}]}
-            )
+            mock_get.return_value = self._make_get_resp({"code": 1000, "data": [{"ip": "1.2.3.4"}]})
             result = pm.get_proxy()
         assert result is None
 
@@ -152,9 +142,7 @@ class TestProxyManager:
                 with patch(f"{self.PATCH_PATH}.record_ip_usage", record_ip_mock):
                     from data.collect.proxy.proxy_manager import ProxyManager
 
-                    pm = ProxyManager(
-                        trade_date="2026-06-01", collector_name="test_stats"
-                    )
+                    pm = ProxyManager(trade_date="2026-06-01", collector_name="test_stats")
                     mock_get.return_value = self._make_get_resp(
                         {"code": 1000, "data": [{"ip": "1.2.3.4", "port": 8888}]}
                     )
@@ -226,14 +214,13 @@ class TestProxyRequester:
     REQUIRER_PATH = "data.collect.proxy.proxy_requester"
 
     def _make_pr(self, trade_date=None, collector_name=None):
-        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQUIRER_PATH}.ProxyManager"):
-                from data.collect.proxy.proxy_requester import ProxyRequester
+        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"), patch(f"{self.REQUIRER_PATH}.ProxyManager"):
+            from data.collect.proxy.proxy_requester import ProxyRequester
 
-                return ProxyRequester(
-                    trade_date=trade_date or "2026-06-02",
-                    collector_name=collector_name or "test_req",
-                )
+            return ProxyRequester(
+                trade_date=trade_date or "2026-06-02",
+                collector_name=collector_name or "test_req",
+            )
 
     def test_init(self):
         pr = self._make_pr()
@@ -304,34 +291,31 @@ class TestProxyRequester:
         from data.collect.proxy.proxy_requester import UA_PROFILES, ProxyRequester
 
         profile = UA_PROFILES[1]
-        headers = ProxyRequester._build_headers_from_profile(
-            None, profile, api_call=False
-        )
+        headers = ProxyRequester._build_headers_from_profile(None, profile, api_call=False)
         assert headers["Sec-Fetch-Dest"] == "document"
         assert headers["Sec-Fetch-Mode"] == "navigate"
 
     def test_request_with_session_returns_json(self):
-        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQUIRER_PATH}.ProxyManager"):
-                from data.collect.proxy.proxy_requester import ProxyRequester
+        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"), patch(f"{self.REQUIRER_PATH}.ProxyManager"):
+            from data.collect.proxy.proxy_requester import ProxyRequester
 
-                mock_sess = MagicMock()
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.text = '{"data": {"diff": [{"code": "000001"}]}}'
-                resp.json.return_value = {"data": {"diff": [{"code": "000001"}]}}
-                mock_sess.get.return_value = resp
+            mock_sess = MagicMock()
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.text = '{"data": {"diff": [{"code": "000001"}]}}'
+            resp.json.return_value = {"data": {"diff": [{"code": "000001"}]}}
+            mock_sess.get.return_value = resp
 
-                pr = ProxyRequester()
-                result = pr._request(
-                    url="https://api.example.com",
-                    params={"key": "val"},
-                    headers={"User-Agent": "test"},
-                    proxy={"http": "http://1.2.3.4:8080"},
-                    impersonate="chrome124",
-                    session=mock_sess,
-                )
-                assert result == {"data": {"diff": [{"code": "000001"}]}}
+            pr = ProxyRequester()
+            result = pr._request(
+                url="https://api.example.com",
+                params={"key": "val"},
+                headers={"User-Agent": "test"},
+                proxy={"http": "http://1.2.3.4:8080"},
+                impersonate="chrome124",
+                session=mock_sess,
+            )
+            assert result == {"data": {"diff": [{"code": "000001"}]}}
 
     def test_request_without_session_creates_one(self):
         with patch(f"{self.REQUIRER_PATH}.curl_requests.Session") as mock_session_cls:
@@ -360,67 +344,64 @@ class TestProxyRequester:
                 mock_own_sess.close.assert_called_once()
 
     def test_request_http_error_returns_none(self):
-        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQUIRER_PATH}.ProxyManager"):
-                from data.collect.proxy.proxy_requester import ProxyRequester
+        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"), patch(f"{self.REQUIRER_PATH}.ProxyManager"):
+            from data.collect.proxy.proxy_requester import ProxyRequester
 
-                mock_sess = MagicMock()
-                resp = MagicMock()
-                resp.status_code = 500
-                resp.text = "Internal Server Error"
-                mock_sess.get.return_value = resp
+            mock_sess = MagicMock()
+            resp = MagicMock()
+            resp.status_code = 500
+            resp.text = "Internal Server Error"
+            mock_sess.get.return_value = resp
 
-                pr = ProxyRequester()
-                result = pr._request(
-                    url="https://api.example.com",
-                    params={},
-                    headers={},
-                    proxy={},
-                    impersonate="chrome124",
-                    session=mock_sess,
-                )
-                assert result is None
+            pr = ProxyRequester()
+            result = pr._request(
+                url="https://api.example.com",
+                params={},
+                headers={},
+                proxy={},
+                impersonate="chrome124",
+                session=mock_sess,
+            )
+            assert result is None
 
     def test_request_exception_returns_none(self):
-        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQUIRER_PATH}.ProxyManager"):
-                from data.collect.proxy.proxy_requester import ProxyRequester
+        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"), patch(f"{self.REQUIRER_PATH}.ProxyManager"):
+            from data.collect.proxy.proxy_requester import ProxyRequester
 
-                mock_sess = MagicMock()
-                mock_sess.get.side_effect = RuntimeError("connection broken")
+            mock_sess = MagicMock()
+            mock_sess.get.side_effect = RuntimeError("connection broken")
 
-                pr = ProxyRequester()
-                result = pr._request(
-                    url="https://api.example.com",
-                    params={},
-                    headers={},
-                    proxy={},
-                    impersonate="chrome124",
-                    session=mock_sess,
-                )
-                assert result is None
+            pr = ProxyRequester()
+            result = pr._request(
+                url="https://api.example.com",
+                params={},
+                headers={},
+                proxy={},
+                impersonate="chrome124",
+                session=mock_sess,
+            )
+            assert result is None
 
     def test_request_jsonp_parsing(self):
-        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQUIRER_PATH}.ProxyManager"):
-                from data.collect.proxy.proxy_requester import ProxyRequester
+        with patch(f"{self.REQUIRER_PATH}.curl_requests.Session"), patch(f"{self.REQUIRER_PATH}.ProxyManager"):
+            from data.collect.proxy.proxy_requester import ProxyRequester
 
-                mock_sess = MagicMock()
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.text = 'jQuery1234567890123_4567890123({"data": "ok"})'
-                mock_sess.get.return_value = resp
+            mock_sess = MagicMock()
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.text = 'jQuery1234567890123_4567890123({"data": "ok"})'
+            mock_sess.get.return_value = resp
 
-                pr = ProxyRequester()
-                result = pr._request(
-                    url="https://api.example.com",
-                    params={},
-                    headers={},
-                    proxy={},
-                    impersonate="chrome124",
-                    session=mock_sess,
-                )
-                assert result == {"data": "ok"}
+            pr = ProxyRequester()
+            result = pr._request(
+                url="https://api.example.com",
+                params={},
+                headers={},
+                proxy={},
+                impersonate="chrome124",
+                session=mock_sess,
+            )
+            assert result == {"data": "ok"}
 
     def test_request_with_retry_first_attempt_succeeds(self):
         with patch(f"{self.REQUIRER_PATH}.curl_requests.Session") as mock_sess_cls:
@@ -566,30 +547,29 @@ class TestProxyBaseCollector:
     def _make_collector(self, cls_attrs=None, logger_name="test_coll", trade_date=None):
         """Create a minimal concrete ProxyBaseCollector subclass with patched deps."""
         # ProxyManager is created by ProxyRequester.__init__, patch it there
-        with patch(f"{self.BASE_PATH}.curl_requests.Session"):
-            with patch(f"{self.REQ_PATH}.ProxyManager"):
-                with patch(f"{self.BASE_PATH}.get_collect_logger"):
-                    from data.collect.proxy.proxy_base_collector import (
-                        ProxyBaseCollector,
-                    )
+        with patch(f"{self.BASE_PATH}.curl_requests.Session"), patch(f"{self.REQ_PATH}.ProxyManager"):
+            with patch(f"{self.BASE_PATH}.get_collect_logger"):
+                from data.collect.proxy.proxy_base_collector import (
+                    ProxyBaseCollector,
+                )
 
-                    defaults = {
-                        "API_URL": "https://api.test.com/endpoint",
-                        "API_PARAMS": {"p1": "v1"},
-                        "TABLE_NAME": "test_collector",
-                        "PAGE_SIZE": 100,
-                        "CACHE_FILE": "",
-                        "REFERER_URL": "",
-                        "DATABASE_PATH": ":memory:",
-                    }
-                    if cls_attrs:
-                        defaults.update(cls_attrs)
+                defaults = {
+                    "API_URL": "https://api.test.com/endpoint",
+                    "API_PARAMS": {"p1": "v1"},
+                    "TABLE_NAME": "test_collector",
+                    "PAGE_SIZE": 100,
+                    "CACHE_FILE": "",
+                    "REFERER_URL": "",
+                    "DATABASE_PATH": ":memory:",
+                }
+                if cls_attrs:
+                    defaults.update(cls_attrs)
 
-                    cls = type("ConcreteCollector", (ProxyBaseCollector,), defaults)
-                    return cls(
-                        logger_name=logger_name,
-                        trade_date=trade_date or "2026-06-03",
-                    )
+                cls = type("ConcreteCollector", (ProxyBaseCollector,), defaults)
+                return cls(
+                    logger_name=logger_name,
+                    trade_date=trade_date or "2026-06-03",
+                )
 
     def test_init(self):
         c = self._make_collector(trade_date="2026-06-03")
@@ -624,9 +604,7 @@ class TestProxyBaseCollector:
         c = self._make_collector()
         c.cache_data["trade_date"] = c.trade_date
         c.cache_data["status"] = "incomplete"
-        stale_time = (datetime.now() - timedelta(hours=200)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        stale_time = (datetime.now() - timedelta(hours=200)).strftime("%Y-%m-%d %H:%M:%S")
         c.cache_data["updated_at"] = stale_time
 
         with patch(f"{self.BASE_PATH}.CACHE_ENABLED", True):
@@ -658,11 +636,9 @@ class TestIPStatsManager:
     def test_init_creates_tables(self):
         from data.collect.proxy.ip_stats import IPStatsManager
 
-        mgr = IPStatsManager()
+        IPStatsManager()
         conn = sqlite3.connect(self.db_file)
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         table_names = {r[0] for r in tables}
         assert "ip_usage" in table_names
         assert "ip_details" in table_names
@@ -950,18 +926,17 @@ class TestIPStatsManager:
 
 
 class TestTelegraphCollector:
-    """TelegraphCollector: CLS telegraph data collection and AI structuring."""
+    """TelegraphCollector: CLS telegraph data collection."""
 
     TEL_PATH = "data.collect.events.telegraph_collector"
 
     def _make_tc(self, db_path=":memory:"):
-        with patch(f"{self.TEL_PATH}.requests.Session"):
-            with patch(f"{self.TEL_PATH}.get_collect_logger"):
-                from data.collect.events.telegraph_collector import (
-                    TelegraphCollector,
-                )
+        with patch(f"{self.TEL_PATH}.requests.Session"), patch(f"{self.TEL_PATH}.get_collect_logger"):
+            from data.collect.events.telegraph_collector import (
+                TelegraphCollector,
+            )
 
-                return TelegraphCollector(db_path=db_path)
+            return TelegraphCollector(db_path=db_path)
 
     def test_init(self):
         tc = self._make_tc(db_path=":memory:")
@@ -1080,14 +1055,8 @@ class TestTelegraphCollector:
     def test_derive_category(self):
         from data.collect.events.telegraph_collector import TelegraphCollector
 
-        assert (
-            TelegraphCollector._derive_category(["期货市场情报", "有色金属"])
-            == "有色金属"
-        )
-        assert (
-            TelegraphCollector._derive_category(["互动平台精选", "期货市场情报"])
-            == "互动平台精选"
-        )
+        assert TelegraphCollector._derive_category(["期货市场情报", "有色金属"]) == "有色金属"
+        assert TelegraphCollector._derive_category(["互动平台精选", "期货市场情报"]) == "互动平台精选"
         assert TelegraphCollector._derive_category([]) == "其他"
 
     def test_score(self):
@@ -1103,32 +1072,9 @@ class TestTelegraphCollector:
     def test_is_noise_telegraph(self):
         from data.collect.events.telegraph_collector import TelegraphCollector
 
-        assert (
-            TelegraphCollector._is_noise_telegraph(
-                {
-                    "category": "盘面直播",
-                    "title": "收评：三大指数...",
-                    "level": "C",
-                }
-            )
-            is True
-        )
-        assert (
-            TelegraphCollector._is_noise_telegraph(
-                {
-                    "category": "盘面直播",
-                    "title": "涨停分析：芯片板块...",
-                    "level": "A",
-                }
-            )
-            is False
-        )
-        assert (
-            TelegraphCollector._is_noise_telegraph(
-                {"category": "行业观察", "title": "半导体涨价"}
-            )
-            is False
-        )
+        assert TelegraphCollector._is_noise_telegraph("盘面直播", "收评：三大指数...") is True
+        assert TelegraphCollector._is_noise_telegraph("盘面直播", "涨停分析：芯片板块...") is False
+        assert TelegraphCollector._is_noise_telegraph("行业观察", "半导体涨价") is False
 
     def test_collect_success(self, tmp_path):
         db_file = str(tmp_path / "test_telegraph.db")
@@ -1139,10 +1085,7 @@ class TestTelegraphCollector:
                 telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
                 level TEXT, title TEXT, content TEXT, reading_num INTEGER,
                 stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
+                category TEXT, score INTEGER, content_hash TEXT, created_at TEXT)
         """
         )
         conn.close()
@@ -1165,9 +1108,7 @@ class TestTelegraphCollector:
                                 "brief": "这是一条重要公告",
                                 "ctime": 1750000000,
                                 "reading_num": 500000,
-                                "stock_list": [
-                                    {"StockID": "sh600519", "name": "贵州茅台"}
-                                ],
+                                "stock_list": [{"StockID": "sh600519", "name": "贵州茅台"}],
                                 "subjects": [{"subject_name": "白酒"}],
                                 "plate_list": [],
                             },
@@ -1178,14 +1119,12 @@ class TestTelegraphCollector:
                 mock_session_cls.return_value = mock_sess
 
                 tc = TelegraphCollector(db_path=db_file)
-                with patch.object(tc, "_ai_structure_batch") as mock_ai:
-                    result = tc.collect(trade_date="2026-06-05")
+                result = tc.collect(trade_date="2026-06-05")
 
         assert result["success"] is True
         assert len(result["data"]) == 1
         assert result["data"][0]["telegraph_id"] == "1001"
         assert result["data"][0]["score"] == 8
-        mock_ai.assert_called_once()
 
     def test_collect_empty_list(self):
         with patch(f"{self.TEL_PATH}.requests.Session") as mock_session_cls:
@@ -1220,171 +1159,6 @@ class TestTelegraphCollector:
                 result = tc.collect(trade_date="2026-06-05")
                 assert result["success"] is False
 
-    def test_ai_structure_batch_skips_noise(self, tmp_path):
-        db_file = str(tmp_path / "test_ai.db")
-        conn = sqlite3.connect(db_file)
-        conn.execute(
-            """
-            CREATE TABLE cls_telegraph (
-                telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
-                level TEXT, title TEXT, content TEXT, reading_num INTEGER,
-                stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
-        """
-        )
-        conn.execute(
-            """
-            INSERT INTO cls_telegraph (telegraph_id, trade_date, ctime, level,
-                title, content, reading_num, category, score, content_hash, ai_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "999",
-                "2026-06-05",
-                1750000000,
-                "C",
-                "收评：三大指数集体收跌",
-                "收评内容",
-                50000,
-                "盘面直播",
-                0,
-                "hash1",
-                "pending",
-            ),
-        )
-        conn.commit()
-        conn.close()
-
-        tc = self._make_tc(db_path=db_file)
-        with patch.object(tc, "_mark_skipped") as mock_skipped:
-            with patch.object(tc, "_mark_failed") as mock_failed:
-                tc._ai_structure_batch(["999"], "2026-06-05")
-
-        mock_skipped.assert_called_once_with(["999"])
-        mock_failed.assert_not_called()
-
-    def test_ai_structure_batch_success(self, tmp_path):
-        db_file = str(tmp_path / "test_ai2.db")
-        conn = sqlite3.connect(db_file)
-        conn.execute(
-            """
-            CREATE TABLE cls_telegraph (
-                telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
-                level TEXT, title TEXT, content TEXT, reading_num INTEGER,
-                stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
-        """
-        )
-        conn.execute(
-            """
-            INSERT INTO cls_telegraph (telegraph_id, trade_date, ctime, level,
-                title, content, reading_num, category, score, content_hash, ai_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "2001",
-                "2026-06-05",
-                1750000000,
-                "A",
-                "半导体行业利好",
-                "内容详情",
-                500000,
-                "行业",
-                8,
-                "hash2",
-                "pending",
-            ),
-        )
-        conn.commit()
-        conn.close()
-
-        mock_ai_response = json.dumps(
-            [
-                {
-                    "telegraph_id": "2001",
-                    "ai_summary": "半导体利好",
-                    "ai_sentiment": "利好",
-                    "ai_impact": "利好半导体板块",
-                    "ai_stocks": [{"code": "002371", "name": "北方华创"}],
-                    "ai_sectors": [{"sector_code": "BK0717", "sector_name": "半导体"}],
-                    "ai_importance": 4,
-                    "ai_direction": "行业",
-                }
-            ]
-        )
-
-        tc = self._make_tc(db_path=db_file)
-
-        # The AI service object (system.ai.ai) — set up its return value
-        ai_service_mock = MagicMock()
-        ai_service_mock.chat_with_tools_raw.return_value = {
-            "content": mock_ai_response,
-            "tool_calls": [],
-        }
-
-        # The system.ai module — "from system.ai import ai" gets `ai` attr
-        ai_module_mock = MagicMock()
-        ai_module_mock.ai = ai_service_mock
-
-        # All AI imports happen inside _ai_structure_batch's function body.
-        # Pre-populate sys.modules so those imports find our mocks.
-        mock_prompts = MagicMock()
-        mock_prompts.TELEGRAPH_STRUCTURE_PROMPT = "{telegraphs}"
-        mock_prompts.TELEGRAPH_AI_SYSTEM = ""
-        mock_prompts.TELEGRAPH_FC_TOOLS = []
-
-        mock_stock_tools = MagicMock()
-        mock_fc_engine = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {
-                "system.ai": ai_module_mock,
-                "system.ai.prompts": MagicMock(),
-                "system.ai.prompts.telegraph": mock_prompts,
-                "system.ai.stock_tools": mock_stock_tools,
-                "system.ai.function_calling": mock_fc_engine,
-            },
-        ):
-            tc._ai_structure_batch(["2001"], "2026-06-05")
-
-        conn = sqlite3.connect(db_file)
-        row = conn.execute(
-            "SELECT ai_summary, ai_sentiment, ai_status FROM cls_telegraph WHERE telegraph_id='2001'"
-        ).fetchone()
-        conn.close()
-        assert row is not None
-        assert row[0] == "半导体利好"
-        assert row[1] == "利好"
-        assert row[2] == "done"
-
-    def test_ai_structure_batch_no_new_ids(self, tmp_path):
-        db_file = str(tmp_path / "test_ai3.db")
-        conn = sqlite3.connect(db_file)
-        conn.execute(
-            """
-            CREATE TABLE cls_telegraph (
-                telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
-                level TEXT, title TEXT, content TEXT, reading_num INTEGER,
-                stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
-        """
-        )
-        conn.close()
-
-        tc = self._make_tc(db_path=db_file)
-        # Should not raise
-        tc._ai_structure_batch([], "2026-06-05")
-
     def test_get_for_review(self, tmp_path):
         db_file = str(tmp_path / "test_review.db")
         conn = sqlite3.connect(db_file)
@@ -1394,10 +1168,7 @@ class TestTelegraphCollector:
                 telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
                 level TEXT, title TEXT, content TEXT, reading_num INTEGER,
                 stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
+                category TEXT, score INTEGER, content_hash TEXT, created_at TEXT)
         """
         )
         conn.execute(
@@ -1435,10 +1206,7 @@ class TestTelegraphCollector:
                 telegraph_id TEXT PRIMARY KEY, trade_date TEXT, ctime INTEGER,
                 level TEXT, title TEXT, content TEXT, reading_num INTEGER,
                 stock_tags TEXT, subject_tags TEXT, plate_tags TEXT,
-                category TEXT, score INTEGER, content_hash TEXT,
-                ai_summary TEXT, ai_sentiment TEXT, ai_impact TEXT,
-                ai_stocks TEXT, ai_sectors TEXT, ai_importance INTEGER,
-                ai_direction TEXT, ai_status TEXT, created_at TEXT)
+                category TEXT, score INTEGER, content_hash TEXT, created_at TEXT)
         """
         )
         conn.execute(
@@ -1471,41 +1239,31 @@ class TestMacroCollector:
     MACRO_PATH = "data.collect.macro.macro_collector"
 
     def test_init(self):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                mc = MacroCollector(timeout=15)
-                assert mc.timeout == 15
+            mc = MacroCollector(timeout=15)
+            assert mc.timeout == 15
 
     def test_collect_all_structure(self):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                mc = MacroCollector()
-                # Mock all sub-methods
-                mc.get_us_market = MagicMock(
-                    return_value={"nasdaq": {"price": 18000, "change": 1.5}}
-                )
-                mc.get_exchange_rate = MagicMock(
-                    return_value={"usd_cny": {"rate": 7.25}}
-                )
-                mc.get_a50_futures = MagicMock(
-                    return_value={"price": 13500, "change": 0.5}
-                )
-                mc.get_crude_oil = MagicMock(
-                    return_value={"price": 75.0, "change": -0.3}
-                )
-                mc.get_gold = MagicMock(return_value={"price": 2700, "change": 0.8})
+            mc = MacroCollector()
+            # Mock all sub-methods
+            mc.get_us_market = MagicMock(return_value={"nasdaq": {"price": 18000, "change": 1.5}})
+            mc.get_exchange_rate = MagicMock(return_value={"usd_cny": {"rate": 7.25}})
+            mc.get_a50_futures = MagicMock(return_value={"price": 13500, "change": 0.5})
+            mc.get_crude_oil = MagicMock(return_value={"price": 75.0, "change": -0.3})
+            mc.get_gold = MagicMock(return_value={"price": 2700, "change": 0.8})
 
-                result = mc.collect_all()
-                assert "us_market" in result
-                assert "exchange_rate" in result
-                assert "a50_futures" in result
-                assert "crude_oil" in result
-                assert "gold" in result
-                assert "timestamp" in result
+            result = mc.collect_all()
+            assert "us_market" in result
+            assert "exchange_rate" in result
+            assert "a50_futures" in result
+            assert "crude_oil" in result
+            assert "gold" in result
+            assert "timestamp" in result
 
     def test_get_us_market(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
@@ -1575,44 +1333,40 @@ class TestMacroCollector:
                 assert result is None
 
     def test_get_exchange_rate_akshare(self):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                mc = MacroCollector()
+            mc = MacroCollector()
 
-                # Mock akshare DataFrame result
-                mock_df = MagicMock()
-                mock_df.empty = False
-                last_row = MagicMock()
-                last_row.__getitem__ = MagicMock(return_value=725.0)
-                mock_df.iloc.__getitem__ = MagicMock(return_value=last_row)
+            # Mock akshare DataFrame result
+            mock_df = MagicMock()
+            mock_df.empty = False
+            last_row = MagicMock()
+            last_row.__getitem__ = MagicMock(return_value=725.0)
+            mock_df.iloc.__getitem__ = MagicMock(return_value=last_row)
 
-                mock_ak = MagicMock()
-                mock_ak.currency_boc_sina = MagicMock(return_value=mock_df)
+            mock_ak = MagicMock()
+            mock_ak.currency_boc_sina = MagicMock(return_value=mock_df)
 
-                # get_exchange_rate imports get_akshare inside function body,
-                # so patch at the SOURCE module
-                with patch(
-                    "system.config.akshare_config.get_akshare", return_value=mock_ak
-                ):
-                    result = mc.get_exchange_rate()
+            # get_exchange_rate imports get_akshare inside function body,
+            # so patch at the SOURCE module
+            with patch("system.config.akshare_config.get_akshare", return_value=mock_ak):
+                result = mc.get_exchange_rate()
 
-                assert result is not None
-                assert result["usd_cny"]["rate"] == 7.25
+            assert result is not None
+            assert result["usd_cny"]["rate"] == 7.25
 
     def test_get_exchange_rate_fallback(self):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                mc = MacroCollector()
-                with patch(
-                    "system.config.akshare_config.get_akshare",
-                    side_effect=ImportError("no akshare"),
-                ):
-                    result = mc.get_exchange_rate()
-                assert result["usd_cny"]["rate"] == 7.25
+            mc = MacroCollector()
+            with patch(
+                "system.config.akshare_config.get_akshare",
+                side_effect=ImportError("no akshare"),
+            ):
+                result = mc.get_exchange_rate()
+            assert result["usd_cny"]["rate"] == 7.25
 
     def test_get_a50_futures_success(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
@@ -1688,42 +1442,41 @@ class TestMacroCollector:
                 assert result.get("_fallback") is True
 
     def test_get_gold_yfinance(self):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                mc = MacroCollector()
+            mc = MacroCollector()
 
-                # Mock yfinance module in sys.modules so the function-body
-                # "import yfinance as yf" picks it up
-                mock_yfin = MagicMock()
+            # Mock yfinance module in sys.modules so the function-body
+            # "import yfinance as yf" picks it up
+            mock_yfin = MagicMock()
 
-                class _CloseIdx:
-                    def __init__(self, vals):
-                        self._vals = vals
+            class _CloseIdx:
+                def __init__(self, vals):
+                    self._vals = vals
 
-                    @property
-                    def iloc(self):
-                        return self
+                @property
+                def iloc(self):
+                    return self
 
-                    def __getitem__(self, i):
-                        return self._vals[i]
+                def __getitem__(self, i):
+                    return self._vals[i]
 
-                mock_hist = MagicMock()
-                mock_hist.empty = False
-                mock_hist.__len__.return_value = 2
-                mock_hist.__getitem__.return_value = _CloseIdx([2680.0, 2700.0])
+            mock_hist = MagicMock()
+            mock_hist.empty = False
+            mock_hist.__len__.return_value = 2
+            mock_hist.__getitem__.return_value = _CloseIdx([2680.0, 2700.0])
 
-                mock_ticker = MagicMock()
-                mock_ticker.history.return_value = mock_hist
-                mock_yfin.Ticker.return_value = mock_ticker
+            mock_ticker = MagicMock()
+            mock_ticker.history.return_value = mock_hist
+            mock_yfin.Ticker.return_value = mock_ticker
 
-                with patch.dict("sys.modules", {"yfinance": mock_yfin}):
-                    result = mc.get_gold()
+            with patch.dict("sys.modules", {"yfinance": mock_yfin}):
+                result = mc.get_gold()
 
-                assert result is not None
-                assert result["price"] == 2700.0
-                assert result["change"] == pytest.approx(0.75, abs=0.1)
+            assert result is not None
+            assert result["price"] == 2700.0
+            assert result["change"] == pytest.approx(0.75, abs=0.1)
 
     def test_get_gold_fallback(self):
         with patch(f"{self.MACRO_PATH}.curl_requests.Session") as mock_session_cls:
@@ -1747,71 +1500,67 @@ class TestMacroCollector:
                 assert result.get("_fallback") is True
 
     def test_save_to_db(self, tmp_path):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                db_file = str(tmp_path / "test_macro.db")
+            db_file = str(tmp_path / "test_macro.db")
 
-                macro_data = {
-                    "us_market": {
-                        "nasdaq": {"price": 18000, "change": 1.5},
-                        "china_etf": {"price": 31.5, "change": 5.0},
-                    },
-                    "exchange_rate": {"usd_cny": {"rate": 7.25, "change": 0}},
-                    "a50_futures": {"price": 13500, "change": 0.5},
-                    "crude_oil": {"price": 75.0, "change": -1.0},
-                    "gold": {"price": 2700, "change": 0.8},
-                    "timestamp": "2026-06-05T10:00:00",
-                }
+            macro_data = {
+                "us_market": {
+                    "nasdaq": {"price": 18000, "change": 1.5},
+                    "china_etf": {"price": 31.5, "change": 5.0},
+                },
+                "exchange_rate": {"usd_cny": {"rate": 7.25, "change": 0}},
+                "a50_futures": {"price": 13500, "change": 0.5},
+                "crude_oil": {"price": 75.0, "change": -1.0},
+                "gold": {"price": 2700, "change": 0.8},
+                "timestamp": "2026-06-05T10:00:00",
+            }
 
-                # save_to_db imports DATABASE_PATH from system.config.settings
-                # inside the function body — patch at source.
-                with patch("system.config.settings.DATABASE_PATH", db_file):
-                    MacroCollector.save_to_db(macro_data, trade_date="2026-06-05")
+            # save_to_db imports DATABASE_PATH from system.config.settings
+            # inside the function body — patch at source.
+            with patch("system.config.settings.DATABASE_PATH", db_file):
+                MacroCollector.save_to_db(macro_data, trade_date="2026-06-05")
 
-                conn = sqlite3.connect(db_file)
-                row = conn.execute(
-                    "SELECT * FROM macro_daily WHERE trade_date='2026-06-05'"
-                ).fetchone()
-                conn.close()
-                assert row is not None
-                assert row[1] == "2026-06-05"
-                assert row[2] == 1.5  # nasdaq_change
-                assert row[3] == 5.0  # kweb_change
-                assert row[4] == 7.25  # usd_cny_rate
-                assert row[5] == 13500.0  # a50_price
-                assert row[6] == 0.5  # a50_change
-                assert row[7] == 75.0  # crude_oil_price
-                assert row[8] == -1.0  # crude_oil_change
-                assert row[9] == 2700.0  # gold_price
-                assert row[10] == 0.8  # gold_change
+            conn = sqlite3.connect(db_file)
+            row = conn.execute("SELECT * FROM macro_daily WHERE trade_date='2026-06-05'").fetchone()
+            conn.close()
+            assert row is not None
+            assert row[1] == "2026-06-05"
+            assert row[2] == 1.5  # nasdaq_change
+            assert row[3] == 5.0  # kweb_change
+            assert row[4] == 7.25  # usd_cny_rate
+            assert row[5] == 13500.0  # a50_price
+            assert row[6] == 0.5  # a50_change
+            assert row[7] == 75.0  # crude_oil_price
+            assert row[8] == -1.0  # crude_oil_change
+            assert row[9] == 2700.0  # gold_price
+            assert row[10] == 0.8  # gold_change
 
     def test_fetch_and_save(self, tmp_path):
-        with patch(f"{self.MACRO_PATH}.curl_requests.Session"):
-            with patch(f"{self.MACRO_PATH}.get_collect_logger"):
-                from data.collect.macro.macro_collector import MacroCollector
+        with patch(f"{self.MACRO_PATH}.curl_requests.Session"), patch(f"{self.MACRO_PATH}.get_collect_logger"):
+            from data.collect.macro.macro_collector import MacroCollector
 
-                db_file = str(tmp_path / "test_fs.db")
+            db_file = str(tmp_path / "test_fs.db")
 
-                mc = MacroCollector()
-                mc.collect_all = MagicMock(
-                    return_value={
-                        "us_market": {"nasdaq": {"price": 18000, "change": 1.0}},
-                        "exchange_rate": {"usd_cny": {"rate": 7.25}},
-                        "a50_futures": {"price": 13500, "change": 0.5},
-                        "crude_oil": {"price": 75.0, "change": 0.0},
-                        "gold": {"price": 2700, "change": 0.5},
-                        "timestamp": "2026-06-05T10:00:00",
-                    }
-                )
+            mc = MacroCollector()
+            mc.collect_all = MagicMock(
+                return_value={
+                    "us_market": {"nasdaq": {"price": 18000, "change": 1.0}},
+                    "exchange_rate": {"usd_cny": {"rate": 7.25}},
+                    "a50_futures": {"price": 13500, "change": 0.5},
+                    "crude_oil": {"price": 75.0, "change": 0.0},
+                    "gold": {"price": 2700, "change": 0.5},
+                    "timestamp": "2026-06-05T10:00:00",
+                }
+            )
 
-                with patch("system.config.settings.DATABASE_PATH", db_file):
-                    result = mc.fetch_and_save()
+            with patch("system.config.settings.DATABASE_PATH", db_file):
+                result = mc.fetch_and_save()
 
-                assert result["us_market"]["nasdaq"]["price"] == 18000
+            assert result["us_market"]["nasdaq"]["price"] == 18000
 
-                conn = sqlite3.connect(db_file)
-                row = conn.execute("SELECT * FROM macro_daily").fetchone()
-                conn.close()
-                assert row is not None
+            conn = sqlite3.connect(db_file)
+            row = conn.execute("SELECT * FROM macro_daily").fetchone()
+            conn.close()
+            assert row is not None

@@ -35,7 +35,7 @@ class ProfileBuilder:
             stock_sectors = self._load_stock_sectors(conn, codes)
             sector_changes = self._load_sector_changes(conn, trade_date)
             sector_hot_map = self._load_sector_hot(conn, trade_date)
-            sector_funds = self._load_sector_funds(conn, trade_date)
+            _sector_funds = self._load_sector_funds(conn, trade_date)
 
             profiles = []
             # 批量加载风险数据
@@ -46,15 +46,11 @@ class ProfileBuilder:
                 snapshot = self._build_snapshot(s, conn, trade_date)
                 history_data = self._build_history(s, history)
                 rps = self._compute_rps(conn, s.stock_code, trade_date)
-                sectors = self._build_sector_ref(
-                    s, stock_sectors, sector_changes, sector_hot_map
-                )
+                sectors = self._build_sector_ref(s, stock_sectors, sector_changes, sector_hot_map)
                 resonance = self._build_resonance(sectors, sector_hot_map)
                 valuation = self._build_valuation(s, conn, trade_date)
                 telegraphs = self._load_telegraphs(conn, s, trade_date)
-                indicators = self._calc_indicators(
-                    conn, s.stock_code, trade_date, history, snapshot
-                )
+                indicators = self._calc_indicators(conn, s.stock_code, trade_date, history, snapshot)
                 risks = risk_map.get(s.stock_code, [])
 
                 profile = StockProfile(
@@ -231,7 +227,7 @@ class ProfileBuilder:
         new_p, old_p = hist_rows[0][1] or 0, hist_rows[-1][1] or 0
         if old_p <= 0:
             return result
-        stock_return = (new_p - old_p) / old_p
+        _stock_return = (new_p - old_p) / old_p
 
         # 全市场股票数
         total = conn.execute(
@@ -266,8 +262,7 @@ class ProfileBuilder:
             return {}
         placeholders = ",".join("?" * len(codes))
         rows = conn.execute(
-            f"SELECT stock_code, sector_code FROM sector_stocks "
-            f"WHERE stock_code IN ({placeholders})",
+            f"SELECT stock_code, sector_code FROM sector_stocks WHERE stock_code IN ({placeholders})",
             codes,
         ).fetchall()
         result: dict = {}
@@ -404,29 +399,25 @@ class ProfileBuilder:
         trade_date: str,
     ) -> list[dict]:
         rows = conn.execute(
-            """SELECT ctime, ai_summary, ai_sentiment, ai_stocks
+            """SELECT ctime, title, stock_tags
             FROM cls_telegraph
-            WHERE trade_date=? AND ai_status='done'
+            WHERE trade_date=?
             ORDER BY ctime""",
             (trade_date,),
         ).fetchall()
         result = []
         for r in rows:
             try:
-                stocks_list = json.loads(r["ai_stocks"] or "[]")
+                stocks_list = json.loads(r["stock_tags"] or "[]")
             except (json.JSONDecodeError, TypeError):
                 continue
-            matched = any(
-                item.get("code", "") == s.stock_code
-                for item in stocks_list
-                if isinstance(item, dict)
-            )
+            matched = any(item.get("code", "") == s.stock_code for item in stocks_list if isinstance(item, dict))
             if matched:
                 result.append(
                     {
                         "time": r["ctime"],
-                        "summary": r["ai_summary"] or "",
-                        "sentiment": r["ai_sentiment"] or "",
+                        "summary": r["title"] or "",
+                        "sentiment": "",
                     }
                 )
         return result[:5]
@@ -563,31 +554,29 @@ class ProfileBuilder:
                 }
             )
 
-        # 2. 电报：近 3 天利空消息
+        # 2. 电报：近 3 天标题含利空关键词
         tel_rows = conn.execute(
-            """SELECT ctime, ai_summary, ai_sentiment, ai_stocks
+            """SELECT ctime, title, stock_tags
             FROM cls_telegraph
             WHERE trade_date >= date(?, '-3 days')
-              AND ai_status = 'done'
-              AND ai_sentiment IN ('利空', '负面')
+              AND (title LIKE '%利空%' OR title LIKE '%减持%' OR title LIKE '%暴雷%'
+                   OR title LIKE '%下跌%' OR title LIKE '%下挫%')
             ORDER BY ctime""",
             (trade_date,),
         ).fetchall()
         for r in tel_rows:
             try:
-                stocks_list = json.loads(r["ai_stocks"] or "[]")
+                stocks_list = json.loads(r["stock_tags"] or "[]")
             except (json.JSONDecodeError, TypeError):
                 continue
-            mentioned_codes = {
-                item.get("code", "") for item in stocks_list if isinstance(item, dict)
-            }
+            mentioned_codes = {item.get("code", "") for item in stocks_list if isinstance(item, dict)}
             for code in mentioned_codes & set(codes):
                 result.setdefault(code, []).append(
                     {
                         "type": "电报利空",
                         "level": 2,
                         "risk_type": "利空消息",
-                        "title": (r["ai_summary"] or "")[:80],
+                        "title": (r["title"] or "")[:80],
                         "date": r["ctime"][:10] if r["ctime"] else "",
                     }
                 )

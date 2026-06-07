@@ -19,12 +19,15 @@ from strategy.screening.factors import (
     check_leader_in_sector,
     check_low_volatility,
     check_main_force_buy,
+    check_price_position,
     check_pullback_hold,
     check_sector_fund_resonance,
     check_sector_hot,
+    check_sector_vol_price,
     check_stronger_than_sector,
     check_trend_persist,
     check_trend_strength,
+    check_vol_price_rise,
     check_volume_breakout,
     check_volume_expand,
     check_volume_pullback,
@@ -137,9 +140,7 @@ class TrendScreener:
         try:
             rows = self._fetch_base(conn, trade_date)
             sector_data = self._load_sector_data(conn, trade_date, rows)
-            candidates = self._screen_rows(
-                conn, rows, trade_date, market_state, sector_data
-            )
+            candidates = self._screen_rows(conn, rows, trade_date, market_state, sector_data)
             return self._rank_and_limit(candidates)
         finally:
             conn.close()
@@ -285,23 +286,19 @@ class TrendScreener:
         ).fetchall()
         result.update(r[0] for r in reg_rows)
 
-        # 2. 电报：近3天利空消息涉及业绩暴雷/减持/诉讼
+        # 2. 电报：近3天标题含业绩暴雷/减持/诉讼关键词，交叉匹配 stock_tags
         tel_rows = conn.execute(
-            """SELECT ai_stocks, ai_summary FROM cls_telegraph
+            """SELECT stock_tags, title FROM cls_telegraph
                WHERE trade_date >= date(?, '-3 days')
-                 AND ai_status = 'done'
-                 AND ai_sentiment IN ('利空', '负面')""",
+                 AND (title LIKE '%业绩暴雷%' OR title LIKE '%减持%' OR title LIKE '%诉讼%')""",
             (trade_date,),
         ).fetchall()
         import json
 
         for r in tel_rows:
             try:
-                stocks_list = json.loads(r["ai_stocks"] or "[]")
+                stocks_list = json.loads(r["stock_tags"] or "[]")
             except (json.JSONDecodeError, TypeError):
-                continue
-            summary = r["ai_summary"] or ""
-            if not any(kw in summary for kw in ("业绩暴雷", "减持", "诉讼")):
                 continue
             for item in stocks_list:
                 if isinstance(item, dict):
@@ -357,16 +354,15 @@ class TrendScreener:
             if not self._check_sector_gate(row, sd["sector_hot"], sd["stock_sectors"]):
                 continue
 
-            if not self._check_sector_blacklist(
-                row, _SECTOR_BLACKLIST, sd["stock_sectors"]
-            ):
+            if not self._check_sector_blacklist(row, _SECTOR_BLACKLIST, sd["stock_sectors"]):
                 continue
 
             history = self._get_history(conn, row["stock_code"], trade_date, days=20)
 
-            # 跑所有因子（量价/资金/趋势 + 板块类）
+            # 跑所有因子（量价/资金/趋势 + 位置 + 量价配合）
             factor_results = []
             for fn in [
+                check_price_position,  # 位置判断——必须最先跑，后续因子依赖
                 check_volume_breakout,
                 check_volume_pullback,
                 check_amplitude_contract,
@@ -378,6 +374,7 @@ class TrendScreener:
                 check_low_volatility,
                 check_volume_expand,
                 check_trend_strength,
+                check_vol_price_rise,  # 量价齐升——当日涨+放量
             ]:
                 result = fn(row, history)
                 if result:
@@ -394,6 +391,7 @@ class TrendScreener:
                 check_leader_in_sector,
                 check_stronger_than_sector,
                 check_sector_fund_resonance,
+                check_sector_vol_price,
             ]:
                 try:
                     result = fn(
@@ -413,9 +411,7 @@ class TrendScreener:
             if len(factor_results) < 2:
                 continue
 
-            scenarios = self._match_scenarios(
-                row, history, factor_results, market_state
-            )
+            scenarios = self._match_scenarios(row, history, factor_results, market_state)
             score = self._compute_score(factor_results, scenarios, row)
             mode = self._determine_mode(scenarios, row, history)
 
@@ -473,37 +469,57 @@ class TrendScreener:
         market_state: str,
     ) -> list[str]:
         scenarios = []
-        # "放量启动" = 今日量比≥1.5，是突破信号
-        # "量能放大" = 5日均量>20日均量，是温和放量，不触发突破类场景
         has_breakout = "放量启动" in tags
         has_volume_up = has_breakout or "量能放大" in tags
+        has_high = "高位运行" in tags
+        has_low = "低位启动" in tags
+        has_vol_price = "量价齐升" in tags
 
         # 强趋势（恐慌日跳过）
         if market_state != "恐慌":
-            if has_breakout:
+            # 低位 + 量价齐升 → 低位启动，确定性最高的买入信号
+            if has_low and has_vol_price and has_volume_up:
+                scenarios.append("低位启动")
+            elif has_breakout:
+                # 高位放量 → 慎重，只加"突破追涨"不加"新高突破"
                 scenarios.append("突破追涨")
-                if self._is_20d_high(row, history):
+                if not has_high and self._is_20d_high(row, history):
                     scenarios.append("新高突破")
 
             if "趋势延续" in tags and "主力介入" in tags:
                 scenarios.append("趋势加速")
 
-            if self._is_reversal(row, history) and has_breakout:
+            # 高位反包可能是出货前拉高，不加场景
+            if self._is_reversal(row, history) and has_breakout and not has_high:
                 scenarios.append("强势反包")
 
         # 稳健
-        if "缩量回调" in tags and self._near_ma(row, "ma5", pct=2):
-            scenarios.append("回踩MA5")
-        if (
-            "缩量回调" in tags
-            and self._near_ma(row, "ma10", pct=2)
-            and "趋势延续" in tags
-        ):
-            scenarios.append("回踩MA10")
-        if self._near_ma(row, "ma20", pct=3) and has_volume_up:
+        if "缩量回调" in tags:
+            if self._near_ma(row, "ma5", pct=2):
+                # 高位缩量回踩 → 主力锁仓信号，加独立场景
+                if has_high:
+                    scenarios.append("高位蓄力")
+                else:
+                    scenarios.append("回踩MA5")
+            if self._near_ma(row, "ma10", pct=2) and "趋势延续" in tags:
+                # 高位缩量回踩MA10 → 同样判定为蓄力
+                if has_high:
+                    if "高位蓄力" not in scenarios:
+                        scenarios.append("高位蓄力")
+                else:
+                    scenarios.append("回踩MA10")
+
+        # 高位放量回踩MA20 → 可能是破位前兆，不加场景
+        if self._near_ma(row, "ma20", pct=3) and has_volume_up and not has_high:
             scenarios.append("回踩MA20")
+
         if "蓄力中" in tags and self._is_tight_consolidation(row, history):
-            scenarios.append("强势横盘")
+            # 高位横盘蓄力 → 有机会突破
+            if has_high:
+                if "高位蓄力" not in scenarios:
+                    scenarios.append("高位蓄力")
+            else:
+                scenarios.append("强势横盘")
 
         # 转折
         if self._is_bounce_from_below_ma20(row, history) and has_volume_up:
@@ -576,9 +592,7 @@ class TrendScreener:
         )
         return prev_spread < 2
 
-    def _determine_mode(
-        self, scenarios: list[str], row: dict, history: list[dict]
-    ) -> str:
+    def _determine_mode(self, scenarios: list[str], row: dict, history: list[dict]) -> str:
         """纯数据驱动：只看价格与均线的位置关系，不看场景标签。
 
         5日线强趋势 — 价格紧贴MA5，沿MA5上行
@@ -601,9 +615,8 @@ class TrendScreener:
             return "strong"
 
         # 20日线：价格在MA20上方，且近期回踩过MA20（10日内低点触及MA20附近）
-        if price > ma20 and bias20 < 15:
-            if self._has_ma20_bounce(history, ma20) or bias20 < 8:
-                return "normal"
+        if price > ma20 and bias20 < 15 and (self._has_ma20_bounce(history, ma20) or bias20 < 8):
+            return "normal"
 
         # 两者都不典型时：MA5角度高且多头排列 → strong；否则 normal
         if angle >= 2 and ma5 > ma10 > ma20:
@@ -633,6 +646,24 @@ class TrendScreener:
         base += len(scenarios) * 8
         angle = row.get("ma5_angle") or 0
         base += max(-10, min(10, angle * 2))
+
+        # 位置 + 量价配合奖惩
+        # 高位放量回踩 → 主力出货嫌疑，扣分
+        if "高位运行" in tags and "放量启动" in tags and "缩量回调" not in tags:
+            base -= 8
+        # 高位缩量回踩 → 主力锁仓蓄力，加分
+        if "高位运行" in tags and "缩量回调" in tags:
+            base += 5
+        # 低位量价齐升 → 确定性最高的启动信号，加分
+        if "低位启动" in tags and "量价齐升" in tags:
+            base += 8
+        # 低位放量 → 底部资金介入确认
+        if "低位启动" in tags and "放量启动" in tags:
+            base += 5
+        # 板块量价齐升 → 板块级确认，个股信号更可靠
+        if "板块量价齐升" in tags:
+            base += 5
+
         return round(min(base, 100), 1)
 
     def _rank_and_limit(self, candidates: list[StockScore]) -> list[StockScore]:

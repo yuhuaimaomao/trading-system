@@ -52,10 +52,20 @@ AI_MODEL_AUDIT = os.environ.get("AI_MODEL_AUDIT", "")  # 审计
 AI_MODEL_STRATEGY = os.environ.get("AI_MODEL_STRATEGY", AI_MODEL_SCREENING)
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
 
+# ===== Batch API =====
+BATCH_ENABLED = os.environ.get("BATCH_ENABLED", "false").lower() == "true"
+BATCH_TIMEOUT_MINUTES = int(os.environ.get("BATCH_TIMEOUT_MINUTES", "60"))
+BATCH_POLL_INTERVAL = int(os.environ.get("BATCH_POLL_INTERVAL", "10"))
+
 # Provider 端点
 DASHSCOPE_ENDPOINT = os.environ.get(
     "DASHSCOPE_ENDPOINT",
     "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+)
+# OpenAI 兼容模式端点（Batch API / Files API 需要）
+DASHSCOPE_COMPAT_ENDPOINT = os.environ.get(
+    "DASHSCOPE_COMPAT_ENDPOINT",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
 DEEPSEEK_ENDPOINT = os.environ.get(
     "DEEPSEEK_ENDPOINT",
@@ -128,9 +138,7 @@ RESONANCE_INDEX_MIN_POINTS = 12  # 指数最小数据点数
 
 # ===== 盯盘自审计 =====
 AUDIT_ENABLED = os.environ.get("AUDIT_ENABLED", "true").lower() == "true"
-AUDIT_AUTO_APPLY_PARAM = (
-    os.environ.get("AUDIT_AUTO_APPLY_PARAM", "false").lower() == "true"
-)
+AUDIT_AUTO_APPLY_PARAM = os.environ.get("AUDIT_AUTO_APPLY_PARAM", "false").lower() == "true"
 AUDIT_RETENTION_DAYS = int(os.environ.get("AUDIT_RETENTION_DAYS", "90"))
 
 # ===== 市场环境判定 =====
@@ -138,9 +146,7 @@ MA_PERIOD = 20
 SWING_THRESHOLD = 0.03
 
 # ===== 筛选策略 =====
-STOCK_BASIC_RETENTION_DAYS = (
-    120  # stock_basic 保留天数（RPS 计算需要，当前 21 天自然增长中）
-)
+STOCK_BASIC_RETENTION_DAYS = 120  # stock_basic 保留天数（RPS 计算需要，当前 21 天自然增长中）
 SCREENING_MIN_MCAP_YI = 50  # 市值下限（亿）
 RPS_THRESHOLD_TOP = 0.20  # RPS 前 20% 为强势
 RPS_RESONANCE_THRESHOLD = 0.30  # RPS 多周期共振阈值（前 30%）
@@ -155,31 +161,17 @@ BREADTH_DOWN_UP_RATIO = 3.0  # 下跌/上涨 > 此值且指数跌时暂停新开
 
 # ===== 自适应交易 =====
 # Phase 1: 早盘 AI 板块倾向
-MORNING_SECTOR_BIAS_ENABLED = (
-    os.environ.get("MORNING_SECTOR_BIAS_ENABLED", "true").lower() == "true"
-)
+MORNING_SECTOR_BIAS_ENABLED = os.environ.get("MORNING_SECTOR_BIAS_ENABLED", "true").lower() == "true"
 # Phase 2: 盘中动态板块发现
-DYNAMIC_SECTOR_DISCOVERY_ENABLED = (
-    os.environ.get("DYNAMIC_SECTOR_DISCOVERY_ENABLED", "true").lower() == "true"
-)
-DYNAMIC_SECTOR_HEAT_THRESHOLD = int(
-    os.environ.get("DYNAMIC_SECTOR_HEAT_THRESHOLD", "3")
-)
-DYNAMIC_SECTOR_MAX_CANDIDATES = int(
-    os.environ.get("DYNAMIC_SECTOR_MAX_CANDIDATES", "10")
-)
+DYNAMIC_SECTOR_DISCOVERY_ENABLED = os.environ.get("DYNAMIC_SECTOR_DISCOVERY_ENABLED", "true").lower() == "true"
+DYNAMIC_SECTOR_HEAT_THRESHOLD = int(os.environ.get("DYNAMIC_SECTOR_HEAT_THRESHOLD", "3"))
+DYNAMIC_SECTOR_MAX_CANDIDATES = int(os.environ.get("DYNAMIC_SECTOR_MAX_CANDIDATES", "10"))
 # Phase 3: 板块轮动
-SECTOR_ROTATION_ENABLED = (
-    os.environ.get("SECTOR_ROTATION_ENABLED", "false").lower() == "true"
-)
-SECTOR_ROTATION_COOLDOWN_SCANS = int(
-    os.environ.get("SECTOR_ROTATION_COOLDOWN_SCANS", "30")
-)
+SECTOR_ROTATION_ENABLED = os.environ.get("SECTOR_ROTATION_ENABLED", "false").lower() == "true"
+SECTOR_ROTATION_COOLDOWN_SCANS = int(os.environ.get("SECTOR_ROTATION_COOLDOWN_SCANS", "30"))
 
 # ===== Phase 4: 盘中回踩机会发现 =====
-PULLBACK_SCAN_ENABLED = (
-    os.environ.get("PULLBACK_SCAN_ENABLED", "true").lower() == "true"
-)
+PULLBACK_SCAN_ENABLED = os.environ.get("PULLBACK_SCAN_ENABLED", "true").lower() == "true"
 PULLBACK_SCAN_INTERVAL = int(
     os.environ.get("PULLBACK_SCAN_INTERVAL", "12")  # 每12轮约12分钟
 )

@@ -18,7 +18,7 @@ def check_hard_gates(row: dict) -> bool:
     change_pct = row.get("change_pct") or 0
     mcap = row.get("total_market_cap") or 0
     vol_ratio = row.get("volume_ratio") or 0
-    ma5 = row.get("ma5") or 0
+    _ma5 = row.get("ma5") or 0
     ma10 = row.get("ma10") or 0
     ma20 = row.get("ma20") or 0
     price = row.get("price") or 0
@@ -35,9 +35,7 @@ def check_hard_gates(row: dict) -> bool:
         return False
     if vol_ratio <= 0.3:
         return False
-    if not (price > ma20 and ma10 > ma20):
-        return False
-    return True
+    return price > ma20 and ma10 > ma20
 
 
 # ============================================================
@@ -143,11 +141,19 @@ def check_low_volatility(row: dict, history: list[dict]) -> Optional[str]:
 
 
 def check_volume_expand(row: dict, history: list[dict]) -> Optional[str]:
+    """5日均量 > 20日均量*1.2，且近5日累计涨幅 > 0。
+    加价格条件是为了过滤「放量下跌」——量增价跌不在趋势筛选范围。
+    """
     avg5 = row.get("avg_vol_5d") or 0
     avg20 = row.get("avg_vol_20d") or 0
-    if avg5 > avg20 * 1.2 and avg20 > 0:
-        return "量能放大"
-    return None
+    if not (avg5 > avg20 * 1.2 and avg20 > 0):
+        return None
+    # 近5日累计涨幅必须 > 0，排除放量下跌
+    if len(history) >= 5:
+        recent_returns = [(h.get("change_pct") or 0) for h in history[-5:]]
+        if sum(recent_returns) <= 0:
+            return None
+    return "量能放大"
 
 
 def check_trend_strength(row: dict, history: list[dict]) -> Optional[str]:
@@ -276,4 +282,73 @@ def check_weekly_bbi(
     price = row.get("price") or 0
     if price > bbi:
         return "周线多头"
+    return None
+
+
+# ============================================================
+# 位置与量价配合类 (2)
+# ============================================================
+
+
+def check_price_position(row: dict, history: list[dict]) -> Optional[str]:
+    """价格在近20日高低区间的相对位置。
+    高位（>80%分位）：已涨很多，追高需谨慎，回踩信号要区分主力锁仓还是出货。
+    低位（<30%分位）：刚启动或调整充分，放量信号更有参与价值。
+    中间位置不返回标签，不干扰评分。
+    """
+    if len(history) < 20:
+        return None
+    price = row.get("price") or 0
+    if price <= 0:
+        return None
+    highs = [h.get("high") or 0 for h in history[-20:]]
+    lows = [h.get("low") or 0 for h in history[-20:]]
+    hh, ll = max(highs), min(lows)
+    if hh <= ll:
+        return None
+    # 当前价格在20日高低区间的百分位
+    position_pct = (price - ll) / (hh - ll) * 100
+    if position_pct > 80:
+        return "高位运行"
+    if position_pct < 30:
+        return "低位启动"
+    return None
+
+
+def check_vol_price_rise(row: dict, history: list[dict]) -> Optional[str]:
+    """量价齐升：当日上涨 + 量比 > 1.2。
+    上涨日放量说明资金主动买入而非被动承接，是趋势延续的重要确认。
+    与 check_volume_expand 互补：那个看5日/20日均量对比，这个看当日量价配合。
+    """
+    change_pct = row.get("change_pct") or 0
+    vol_ratio = row.get("volume_ratio") or 0
+    if change_pct > 0 and vol_ratio > 1.2:
+        return "量价齐升"
+    return None
+
+
+def check_sector_vol_price(
+    row: dict,
+    history: list[dict],
+    sector_changes: Optional[dict] = None,
+    sector_funds: Optional[dict] = None,
+    stock_sectors: Optional[dict] = None,
+) -> Optional[str]:
+    """板块量价齐升：个股所属板块涨 + 板块主力净流入 + 个股也涨。
+    板块整体量价配合意味着板块资金在主动做多，不是个别股票的单打独斗。
+    与 check_sector_fund_resonance 的区别：那个只看资金方向，这个加上了价格方向确认。
+    """
+    if not sector_changes or not sector_funds or not stock_sectors:
+        return None
+    code = row.get("stock_code", "")
+    stock_pct = row.get("change_pct") or 0
+    if stock_pct <= 0:
+        return None  # 个股必须涨
+    sectors = stock_sectors.get(code, [])
+    for s in sectors:
+        s_chg = sector_changes.get(s, -999)
+        s_fund = sector_funds.get(s, 0)
+        # 板块涨 + 板块资金进 → 板块量价齐升
+        if s_chg > 0.5 and s_fund > 0:
+            return "板块量价齐升"
     return None

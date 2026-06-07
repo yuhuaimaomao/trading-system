@@ -1,6 +1,6 @@
 """trade/decision/ 模块测试"""
 
-from trade.decision.buy import BuyEvalInput, evaluate_buy, evaluate_below_zone
+from trade.decision.buy import BuyEvalInput, evaluate_below_zone, evaluate_buy
 from trade.decision.sell import analyze_exit_signals, classify_holding_status
 from trade.decision.sizing import calculate_position_size
 
@@ -8,8 +8,12 @@ from trade.decision.sizing import calculate_position_size
 class TestEvaluateBuy:
     def _make_ctx(self, **overrides):
         defaults = {
-            "code": "000001", "price": 10.0, "buy_min": 9.5, "buy_max": 10.5,
-            "sector_trend": "走强", "sector_chg": 1.5,
+            "code": "000001",
+            "price": 10.0,
+            "buy_min": 9.5,
+            "buy_max": 10.5,
+            "sector_trend": "走强",
+            "sector_chg": 1.5,
             "intra_available": False,
         }
         defaults.update(overrides)
@@ -36,24 +40,36 @@ class TestEvaluateBuy:
         assert "布林带超买" in reason
 
     def test_intra_rsi_extreme(self):
-        ok, reason, mul = evaluate_buy(self._make_ctx(
-            intra_available=True, intra_rsi6=90,
-        ))
+        ok, reason, mul = evaluate_buy(
+            self._make_ctx(
+                intra_available=True,
+                intra_rsi6=90,
+            )
+        )
         assert not ok
         assert "RSI6" in reason
 
     def test_bearish_alignment_reject(self):
-        ok, reason, mul = evaluate_buy(self._make_ctx(
-            price=9.0, buy_min=8.5, buy_max=9.5,
-            daily_ma5=10.0, daily_ma10=11.0, daily_ma20=12.0,
-        ))
+        ok, reason, mul = evaluate_buy(
+            self._make_ctx(
+                price=9.0,
+                buy_min=8.5,
+                buy_max=9.5,
+                daily_ma5=10.0,
+                daily_ma10=11.0,
+                daily_ma20=12.0,
+            )
+        )
         assert not ok
         assert "接飞刀" in reason
 
     def test_sector_strong_boost(self):
-        ok, reason, mul = evaluate_buy(self._make_ctx(
-            sector_trend="持续走强", sector_chg=2.0,
-        ))
+        ok, reason, mul = evaluate_buy(
+            self._make_ctx(
+                sector_trend="持续走强",
+                sector_chg=2.0,
+            )
+        )
         assert ok
         assert mul > 0.9
 
@@ -69,8 +85,12 @@ class TestEvaluateBuy:
 class TestEvaluateBelowZone:
     def _make_ctx(self, **overrides):
         defaults = {
-            "code": "000001", "price": 9.0, "buy_min": 9.5, "buy_max": 10.5,
-            "sector_trend": "走强", "sector_chg": 1.0,
+            "code": "000001",
+            "price": 9.0,
+            "buy_min": 9.5,
+            "buy_max": 10.5,
+            "sector_trend": "走强",
+            "sector_chg": 1.0,
             "intra_available": False,
         }
         defaults.update(overrides)
@@ -128,7 +148,12 @@ class TestSizing:
 
     def test_breadth_down(self):
         amount, reason = calculate_position_size(
-            "000001", 10.0, 9.5, 10.5, "normal", "走强",
+            "000001",
+            10.0,
+            9.5,
+            10.5,
+            "normal",
+            "走强",
             market_breadth={"up": 200, "down": 800},
         )
         assert amount < 10000

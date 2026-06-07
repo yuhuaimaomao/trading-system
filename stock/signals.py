@@ -98,12 +98,8 @@ class StockProfile:
         lines.append(f"{'=' * 50}")
         lines.append("")
         lines.append("▼ 今日盘面")
-        lines.append(
-            f"  收盘: {price:.2f}  涨跌: {s.get('change_pct', 0):+.2f}%  振幅: {s.get('amplitude', 0):.2f}%"
-        )
-        lines.append(
-            f"  量比: {s.get('volume_ratio', 0):.2f}  换手: {s.get('turnover_rate', 0):.2f}%"
-        )
+        lines.append(f"  收盘: {price:.2f}  涨跌: {s.get('change_pct', 0):+.2f}%  振幅: {s.get('amplitude', 0):.2f}%")
+        lines.append(f"  量比: {s.get('volume_ratio', 0):.2f}  换手: {s.get('turnover_rate', 0):.2f}%")
         lines.append(
             f"  主力净买: {s.get('main_force_net', 0) / 10000:.0f}万  占比: {s.get('main_force_ratio', 0):.1f}%"
         )
@@ -130,12 +126,8 @@ class StockProfile:
 
         lines.append("")
         lines.append("▼ 趋势特征")
-        lines.append(
-            f"  连阳: {h.get('consecutive_yang', 0)}日  多头排列: {h.get('ma_bull_days', 0)}日"
-        )
-        lines.append(
-            f"  20日最高: {h.get('high_20d', 0):.2f}  20日最低: {h.get('low_20d', 0):.2f}"
-        )
+        lines.append(f"  连阳: {h.get('consecutive_yang', 0)}日  多头排列: {h.get('ma_bull_days', 0)}日")
+        lines.append(f"  20日最高: {h.get('high_20d', 0):.2f}  20日最低: {h.get('low_20d', 0):.2f}")
         lines.append(
             f"  5日主力累计: {h.get('mf_5d_cum', 0) / 10000:.0f}万  连续流入: {h.get('mf_consec_inflow', 0)}日"
         )
@@ -153,20 +145,14 @@ class StockProfile:
             lines.append("")
             lines.append("▼ 技术指标 (5日趋势)")
             lines.append(
-                f"  MACD(12,26,9): DIF={macd.get('dif', 0):.2f}  DEA={macd.get('dea', 0):.2f}  BAR={macd.get('bar', 0):.2f}"
+                f"  MACD(12,26,9): DIF={macd.get('dif', 0):.2f}  DEA={macd.get('dea', 0):.2f}  BAR={macd.get('bar', 0):.2f}"  # noqa: E501
             )
             if t5:
-                lines.append(
-                    f"    5日前 → 今日: DIF {t5.get('macd_dif', '')}  BAR {t5.get('macd_bar', '')}"
-                )
+                lines.append(f"    5日前 → 今日: DIF {t5.get('macd_dif', '')}  BAR {t5.get('macd_bar', '')}")
             lines.append(f"  RSI: 6日={rsi6:.1f}  12日={rsi12:.1f}  24日={rsi24:.1f}")
             if t5:
-                lines.append(
-                    f"    5日前 → 今日: RSI6 {t5.get('rsi6', '')}  RSI12 {t5.get('rsi12', '')}"
-                )
-            lines.append(
-                f"  KDJ(9,3,3): K={kdj.get('k', 0):.1f}  D={kdj.get('d', 0):.1f}  J={kdj.get('j', 0):.1f}"
-            )
+                lines.append(f"    5日前 → 今日: RSI6 {t5.get('rsi6', '')}  RSI12 {t5.get('rsi12', '')}")
+            lines.append(f"  KDJ(9,3,3): K={kdj.get('k', 0):.1f}  D={kdj.get('d', 0):.1f}  J={kdj.get('j', 0):.1f}")
             if t5:
                 lines.append(f"    5日前 → 今日: K {t5.get('kdj_k', '')}")
             boll = ind.get("boll", {})
@@ -213,23 +199,17 @@ class StockProfile:
             lines.append("")
             lines.append("▼ 板块参照")
             for sec in self.sectors[:4]:
-                lines.append(
-                    f"  {sec.get('name', '')}({sec.get('code', '')}): {sec.get('change_pct', 0):+.2f}%"
-                )
+                lines.append(f"  {sec.get('name', '')}({sec.get('code', '')}): {sec.get('change_pct', 0):+.2f}%")
 
         if v and v.get("pe_ttm"):
             lines.append("")
-            lines.append(
-                f"▼ 估值: PE(TTM){v['pe_ttm']:.1f}  PB{v.get('pb', 0):.1f}  市值{v.get('mcap_yi', 0):.0f}亿"
-            )
+            lines.append(f"▼ 估值: PE(TTM){v['pe_ttm']:.1f}  PB{v.get('pb', 0):.1f}  市值{v.get('mcap_yi', 0):.0f}亿")
 
         # 电报
         if self.telegraphs:
             lines.append("▼ 今日相关电报:")
             for t in self.telegraphs[:3]:
-                sentiment = t.get("sentiment", "")
-                sentiment_icon = {"利好": "+", "利空": "-"}.get(sentiment, "")
-                lines.append(f"  [{sentiment_icon}] {t.get('summary', '')[:80]}")
+                lines.append(f"  • {t.get('summary', '')[:80]}")
 
         # 风险警示
         if self.risks:
@@ -299,9 +279,7 @@ class ReviewContext:
     outlook: str = ""
     # 七、趋势交易者精选 codes + 结构化数据
     review_picks: list[str] = field(default_factory=list)
-    review_stocks_raw: list = field(
-        default_factory=list
-    )  # STOCKS JSON 中趋势票的原始数据
+    review_stocks_raw: list = field(default_factory=list)  # STOCKS JSON 中趋势票的原始数据
     # 八、早盘监控雷达
     monitor_conditions: str = ""
     # 十、仓位与策略
@@ -325,7 +303,8 @@ class ReviewContext:
             parts.append(f"【复盘·明日大局推演】\n{self.outlook}")
         if self.review_picks:
             parts.append(
-                f"【复盘·趋势精选参考】\n  复盘精选股票: {', '.join(self.review_picks)}\n  这些股票如出现在今日候选池中，可给予额外加分（趋势延续性好），但不强制推荐。"
+                f"【复盘·趋势精选参考】\n  复盘精选股票: {', '.join(self.review_picks)}\n"
+                f"  这些股票如出现在今日候选池中，可给予额外加分（趋势延续性好），但不强制推荐。"
             )
         if self.monitor_conditions:
             parts.append(f"【复盘·早盘监控条件】\n{self.monitor_conditions}")
@@ -428,13 +407,7 @@ class OrderSignal:
         }
 
     def __repr__(self) -> str:
-        trend_label = (
-            "强趋势"
-            if self.trend_mode == "strong"
-            else "稳健趋势"
-            if self.trend_mode == "normal"
-            else ""
-        )
+        trend_label = "强趋势" if self.trend_mode == "strong" else "稳健趋势" if self.trend_mode == "normal" else ""
         sector_str = f" [{self.sector_name}]" if self.sector_name else ""
         if self.signal_type == SignalType.BUY:
             return (
