@@ -16,9 +16,7 @@ logger = get_trade_logger("detect")
 class AbnormalMonitorMixin:
     """异动检测 + 换仓评估 + 板块热度。"""
 
-    def _check_sector_heat(
-        self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None
-    ):
+    def _check_sector_heat(self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None):
         monitor = self._get_sector_monitor()
         if monitor is None:
             return
@@ -47,7 +45,11 @@ class AbnormalMonitorMixin:
             logger.warning(f"板块热度检查异常: {e}")
 
     def _format_market_header(self) -> str:
-        """多指数 + 涨跌比，放头部。"""
+        """多指数 + 涨跌比，放头部。
+
+        不直接用 collector 消息里的 change_pct（可能和最新价格不同步），
+        用最新价 + 昨收自己算，保证显示的是当前真实涨跌幅。
+        """
         im = getattr(self, "_index_map", {})
         parts = []
         for code in ["000001.SH", "399006.SZ", "399303.SZ"]:
@@ -59,7 +61,12 @@ class AbnormalMonitorMixin:
                     "创业板指": "创业",
                     "国证2000": "国证",
                 }.get(name, name[:2])
-                chg = info.get("change_pct", 0)
+                price = info.get("last_price", 0)
+                pre_close = info.get("pre_close", 0)
+                if price > 0 and pre_close > 0:
+                    chg = (price - pre_close) / pre_close
+                else:
+                    chg = info.get("change_pct", 0)
                 parts.append(f"{short} {chg:+.2%}")
         bb = getattr(self, "_market_breadth", {})
         up, down = bb.get("up", 0), bb.get("down", 0)
@@ -197,14 +204,8 @@ class AbnormalMonitorMixin:
                 continue
             in_or_near = buy_min * 0.95 <= price <= buy_max
             if in_or_near:
-                snap = (
-                    self._market_snapshot.get(code, {}) if self._market_snapshot else {}
-                )
-                industry = (
-                    self._industry_cache.get(code, "")
-                    if hasattr(self, "_industry_cache")
-                    else ""
-                )
+                snap = self._market_snapshot.get(code, {}) if self._market_snapshot else {}
+                industry = self._industry_cache.get(code, "") if hasattr(self, "_industry_cache") else ""
                 sec_trend = ""
                 if industry and hasattr(self, "_sector_trend_history"):
                     history = self._sector_trend_history.get(industry, [])
@@ -229,9 +230,7 @@ class AbnormalMonitorMixin:
                 if concepts and self._concept_stats:
                     top = sorted(
                         concepts,
-                        key=lambda c: abs(
-                            self._concept_stats.get(c, {}).get("change_pct", 0)
-                        ),
+                        key=lambda c: abs(self._concept_stats.get(c, {}).get("change_pct", 0)),
                         reverse=True,
                     )[:3]
                     candidates[-1]["concepts"] = top
@@ -241,11 +240,7 @@ class AbnormalMonitorMixin:
 
         ctx = ""
         if self._index_prices and len(self._index_prices) >= 2:
-            idx_chg = (
-                (self._index_prices[-1] - self._index_prices[-2])
-                / self._index_prices[-2]
-                * 100
-            )
+            idx_chg = (self._index_prices[-1] - self._index_prices[-2]) / self._index_prices[-2] * 100
             ctx = f"上证指数 日内变动{idx_chg:+.2f}%"
 
         price_info = {}
@@ -263,22 +258,16 @@ class AbnormalMonitorMixin:
                 if concepts and self._concept_stats:
                     top = sorted(
                         concepts,
-                        key=lambda c: abs(
-                            self._concept_stats.get(c, {}).get("change_pct", 0)
-                        ),
+                        key=lambda c: abs(self._concept_stats.get(c, {}).get("change_pct", 0)),
                         reverse=True,
                     )[:3]
                     info["concepts"] = top
                 price_info[code] = info
 
-        all_codes = set(c["code"] for c in candidates) | set(
-            self.paper_account.positions.keys()
-        )
+        all_codes = set(c["code"] for c in candidates) | set(self.paper_account.positions.keys())
         sector_context = self._build_sector_context(all_codes)
 
-        logger.info(
-            f"主动换仓评估: {len(candidates)} 个候选, {len(self.paper_account.positions)} 个持仓"
-        )
+        logger.info(f"主动换仓评估: {len(candidates)} 个候选, {len(self.paper_account.positions)} 个持仓")
         try:
             swapped = _do_evaluate_swaps(
                 self,
@@ -300,9 +289,7 @@ class AbnormalMonitorMixin:
     @staticmethod
     def _build_market_snapshot(prices: dict[str, float]) -> dict:
         """将当前价格字典转为 snapshot 格式供异动检测器使用。"""
-        return {
-            code: {"price": p, "timestamp": time.time()} for code, p in prices.items()
-        }
+        return {code: {"price": p, "timestamp": time.time()} for code, p in prices.items()}
 
     # ======================== 收盘收尾 ========================
 
@@ -425,10 +412,7 @@ def _do_evaluate_swaps(
     price = buy_cand["price"]
     max_affordable = int(self.paper_account.cash * 0.9 / price / 100) * 100
     volume = min(
-        int(
-            self.paper_account.total_value * settings.DEFAULT_POSITION_PCT / price / 100
-        )
-        * 100,
+        int(self.paper_account.total_value * settings.DEFAULT_POSITION_PCT / price / 100) * 100,
         max_affordable,
     )
     if volume < 100:
@@ -472,11 +456,7 @@ def _submit_swap_ai(
     for code, pos in self.paper_account.positions.items():
         meta = self._pos_meta.get(code, {})
         extra = pinfo.get(code, {})
-        chg_str = (
-            f" 日内{extra.get('change_pct', 0):+.1f}%"
-            if extra.get("change_pct")
-            else ""
-        )
+        chg_str = f" 日内{extra.get('change_pct', 0):+.1f}%" if extra.get("change_pct") else ""
         sector = meta.get("sector", "")
         sec_str = f" [{sector}]" if sector else ""
         sec_trend = extra.get("sector_trend", "")
@@ -487,16 +467,8 @@ def _submit_swap_ai(
             sec_str += f" 概念:{','.join(concepts)}"
         sl = meta.get("sl", 0)
         tp = meta.get("tp", 0)
-        dist_sl = (
-            (pos.current_price - sl) / pos.current_price * 100
-            if sl > 0 and pos.current_price > 0
-            else 0
-        )
-        dist_tp = (
-            (tp - pos.current_price) / pos.current_price * 100
-            if tp > 0 and pos.current_price > 0
-            else 0
-        )
+        dist_sl = (pos.current_price - sl) / pos.current_price * 100 if sl > 0 and pos.current_price > 0 else 0
+        dist_tp = (tp - pos.current_price) / pos.current_price * 100 if tp > 0 and pos.current_price > 0 else 0
         pos_lines.append(
             f"{code} {pos.stock_name}{sec_str} | 成本{pos.avg_cost:.2f} 现价{pos.current_price:.2f}{chg_str} "
             f"盈亏{pos.pnl_pct:+.1f}% | 止损{sl}(距现价{dist_sl:.1f}%) 止盈{tp}(距现价{dist_tp:+.1f}%)"

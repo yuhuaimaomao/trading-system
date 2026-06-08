@@ -31,7 +31,6 @@ class PositionRiskMixin:
         # 大盘 + 板块环境，用于动态调整止损止盈触发条件
         regime = getattr(self, "_regime", None)
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
-        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
 
         # 开盘缓冲期内跳过止损止盈执行（价格序列不稳定，容易恐慌扫止损）
         seconds_since_open = self._minutes_since_open() * 60
@@ -42,9 +41,15 @@ class PositionRiskMixin:
         if pa.daily_pnl < 0 and pa.total_value > 0:
             loss_ratio = abs(pa.daily_pnl) / pa.total_value
             if loss_ratio > settings.MAX_DAILY_LOSS:
+                # 每天只告警一次，不重复推送（冷却检查放最前面，防日志刷屏）
+                alert_key = f"circuit_breaker:{self._trade_date}"
+                if getattr(self, "_circuit_breaker_alerted", None) == alert_key:
+                    return
+                self._circuit_breaker_alerted = alert_key
                 logger.warning(
                     f"日内熔断触发: 日亏损 {loss_ratio:.1%} > {settings.MAX_DAILY_LOSS:.0%}"
                 )
+
                 closed = []
                 blocked_t1 = []
                 for code, pos in list(pa.positions.items()):
@@ -466,7 +471,6 @@ class PositionRiskMixin:
         if self._scan_count % 10 != 0:  # 每 10 轮检查一次
             return
 
-        now = datetime.now()
         pos_count = len(self.paper_account.positions)
         pa = self.paper_account
 
@@ -525,15 +529,6 @@ class PositionRiskMixin:
             is_overnight = buy_date and buy_date < self._trade_date
             if is_overnight:
                 # 今日已有充分时间表现（开市 > 30 分钟）
-                minutes_since_open = (
-                    (
-                        datetime.combine(datetime.now().date(), dt_time(9, 30))
-                        - datetime.now()
-                    ).total_seconds()
-                    / 60
-                    if False
-                    else 999
-                )
                 morning_passed = (
                     time.time() - getattr(self, "_data_ready_at", 0)
                 ) > 1800  # 数据就绪 > 30 分钟
@@ -1150,7 +1145,7 @@ class PositionRiskMixin:
                             self._log_exit_analysis(
                                 stock_code=code,
                                 holding_status=new_status,
-                                market_env=pattern,
+                                market_env=getattr(self, "_regime_pattern", "normal"),
                                 sector_trend=trend,
                             )
                         except Exception:
@@ -1505,7 +1500,6 @@ class PositionRiskMixin:
             ind = self.repo.get_daily_indicators(code)
             if ind:
                 bb_lower = ind.get("bb_lower")
-                bb_mid = ind.get("bb_mid")
                 ma20 = ind.get("ma20")
                 rsi12 = ind.get("rsi12")
                 if bb_lower and price <= bb_lower * 1.05:

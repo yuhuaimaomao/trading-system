@@ -44,14 +44,26 @@ class OrderRepo(BaseRepository):
         with self._conn() as conn:
             if account:
                 rows = conn.execute(
-                    f"SELECT {_ORDER_ALL_COLS} FROM trade_orders "
-                    "WHERE trade_date=? AND account=? ORDER BY order_time",
+                    f"SELECT {_ORDER_ALL_COLS} FROM trade_orders WHERE trade_date=? AND account=? ORDER BY order_time",
                     (trade_date, account),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    f"SELECT {_ORDER_ALL_COLS} FROM trade_orders "
-                    "WHERE trade_date=? ORDER BY order_time",
+                    f"SELECT {_ORDER_ALL_COLS} FROM trade_orders WHERE trade_date=? ORDER BY order_time",
                     (trade_date,),
                 ).fetchall()
         return [dict(zip(cols, row)) for row in rows]
+
+    def get_sold_codes(self, codes: list[str], account: str) -> set[str]:
+        """返回 codes 中有 sell 成交记录的代码集合（不限日期）。"""
+        if not codes:
+            return set()
+        placeholders = ",".join("?" * len(codes))
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT stock_code FROM trade_orders "
+                f"WHERE stock_code IN ({placeholders}) "
+                "AND order_type='sell' AND order_status='filled' AND account=?",
+                (*codes, account),
+            ).fetchall()
+        return {r[0] for r in rows}

@@ -9,7 +9,7 @@
 
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import date, datetime
 from datetime import time as dt_time
 
@@ -76,9 +76,7 @@ class Watcher(
             telegram_bot=self.telegram,
             initial_capital=settings.PAPER_INITIAL_CAPITAL,
         )
-        self._pos_meta: dict[
-            str, dict
-        ] = {}  # {code: {sl, tp, trailing_stop, highest_price, sector, score, signal_id}}
+        self._pos_meta: dict[str, dict] = {}  # {code: {sl, tp, trailing_stop, highest_price, sector, score, signal_id}}
         self.risk_engine = RiskEngine()
         self._running = False
         self._trade_date = ""
@@ -102,6 +100,7 @@ class Watcher(
         self._index_map: dict[str, dict] = {}
         # 市场宽度
         self._market_breadth: dict = {"up": 0, "down": 0, "flat": 0, "total": 0}
+        self._breadth_history: deque = deque(maxlen=120)  # [(ts, up, down, flat)] 滚动窗口
         self._index_close_high: float = 0.0  # 收盘价序列最大值（健康检查用）
         self._index_close_low: float = 0.0  # 收盘价序列最小值（健康检查用）
         self._index_alerted_downtrend: bool = False
@@ -145,12 +144,8 @@ class Watcher(
         self._last_resonance_index_dir: str = ""  # 上次推送时大盘方向（去重用）
         self._industry_cache: dict[str, str] = {}  # code → industry
         self._concept_cache: dict[str, list[str]] = {}  # code → [concept_names]
-        self._sector_stats: dict[
-            str, dict
-        ] = {}  # sector_name → {change_pct, up, down} 实时
-        self._concept_stats: dict[
-            str, dict
-        ] = {}  # concept_name → {change_pct, up, down} 实时
+        self._sector_stats: dict[str, dict] = {}  # sector_name → {change_pct, up, down} 实时
+        self._concept_stats: dict[str, dict] = {}  # concept_name → {change_pct, up, down} 实时
 
         # 指数技术指标拐点检测状态
         self._index_tech_state: dict[str, str | None] = {
@@ -197,9 +192,7 @@ class Watcher(
         self._daily_factor_cache: dict[str, dict] = {}
 
         # 个股价格追踪（最近10分钟，用于止跌确认）
-        self._recent_prices: dict[
-            str, list[tuple[float, float]]
-        ] = {}  # {code: [(ts, price), ...]}
+        self._recent_prices: dict[str, list[tuple[float, float]]] = {}  # {code: [(ts, price), ...]}
 
         # 全市场快照价格追踪（用于回踩机会扫描，覆盖所有5000+只）
         self._snapshot_price_history: dict[str, list[tuple[float, float]]] = {}
@@ -230,6 +223,7 @@ class Watcher(
 
         # 运行时动态状态（getattr 防御的对象 — 现在全部显式初始化）
         self._breadth_block_alerted: bool = False
+        self._panic_fade_alerted: bool = False  # 恐慌衰减告警去重
         self._last_abnormal_alert: int = 0
         self._last_index_alert_scan: int = 0
         self._last_index_alert_advice: str = ""
@@ -241,7 +235,7 @@ class Watcher(
         self._regime_confirm_count: int = 0
         self._regime_pending_pattern: str = ""
         self._regime_switch_times: list[float] = []
-        self._holding_batch: dict = {}
+        self._holding_batch: list = []
         self._scenario_engine = None  # 惰性初始化，getattr 仍需检查 None
         self._scenario_prev_outlook = None
 
@@ -348,24 +342,14 @@ class Watcher(
                     "reason": r["reason"],
                 }
             if self._morning_sector_bias:
-                focus = [
-                    n
-                    for n, i in self._morning_sector_bias.items()
-                    if i["bias"] == "focus"
-                ]
-                avoid = [
-                    n
-                    for n, i in self._morning_sector_bias.items()
-                    if i["bias"] == "avoid"
-                ]
+                focus = [n for n, i in self._morning_sector_bias.items() if i["bias"] == "focus"]
+                avoid = [n for n, i in self._morning_sector_bias.items() if i["bias"] == "avoid"]
                 parts = []
                 if focus:
                     parts.append(f"聚焦: {', '.join(focus)}")
                 if avoid:
                     parts.append(f"回避: {', '.join(avoid)}")
-                logger.info(
-                    f"早盘板块倾向已加载 ({len(self._morning_sector_bias)}条) {' | '.join(parts)}"
-                )
+                logger.info(f"早盘板块倾向已加载 ({len(self._morning_sector_bias)}条) {' | '.join(parts)}")
         except Exception as e:
             logger.warning(f"加载早盘板块倾向失败: {e}")
 
@@ -402,11 +386,7 @@ class Watcher(
                 for code, pos in self.paper_account.positions.items():
                     item = quotes.get(code)
                     if item:
-                        new_price = (
-                            item.get("lastPrice")
-                            or item.get("last_price")
-                            or item.get("price")
-                        )
+                        new_price = item.get("lastPrice") or item.get("last_price") or item.get("price")
                         if new_price:
                             pos.update_price(float(new_price))
                 # 立即落盘，确保快照与当前价格一致
@@ -446,9 +426,7 @@ class Watcher(
             self._connect_collector()
 
         if self._before_market():
-            wait = (
-                datetime.combine(date.today(), MORNING_START) - datetime.now()
-            ).total_seconds()
+            wait = (datetime.combine(date.today(), MORNING_START) - datetime.now()).total_seconds()
             if wait > 0:
                 logger.info(f"距开盘 {wait:.0f} 秒，等待中")
                 time.sleep(wait)
@@ -509,6 +487,9 @@ class Watcher(
         self._alert_fingerprints.clear()
         self._push_cooldown.clear()
         self._health_alert_seen.clear()
+        self._breadth_history.clear()
+        self._panic_fade_alerted = False
+        self._breadth_block_alerted = False
         self._triggered_ids.clear()
         self._alerted_sl_tp.clear()
         self._sl_reminders.clear()
@@ -525,9 +506,7 @@ class Watcher(
     @staticmethod
     def _in_trading_hours() -> bool:
         now = datetime.now().time()
-        return (
-            MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
-        )
+        return MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
 
     @staticmethod
     def _in_lunch_break() -> bool:
@@ -638,9 +617,7 @@ class Watcher(
                 regime_ok = self._regime and not drawdown_halt
         except Exception as e:
             logger.error(f"大盘状态检查异常，暂停买入: {e}", exc_info=True)
-            self._regime = MarketRegime(
-                pattern="error", confidence="low", allow_buy=False
-            )
+            self._regime = MarketRegime(pattern="error", confidence="low", allow_buy=False)
             regime_ok = False
 
         try:
@@ -649,21 +626,9 @@ class Watcher(
                 ma60 = self._get_index_ma60()
                 vol_trend = self._calc_volume_trend()
                 breadth = self._compute_breadth()
-                br = (
-                    breadth.get("up", 1) / max(breadth.get("down", 1), 1)
-                    if breadth
-                    else 0
-                )
-                amp = (
-                    (state.index_high - state.index_low) / state.index_low
-                    if state.index_low > 0
-                    else 0
-                )
-                active = sum(
-                    1
-                    for s in state.sector_stats.values()
-                    if abs(s.get("change_pct", 0)) > 0.01
-                )
+                br = breadth.get("up", 1) / max(breadth.get("down", 1), 1) if breadth else 0
+                amp = (state.index_high - state.index_low) / state.index_low if state.index_low > 0 else 0
+                active = sum(1 for s in state.sector_stats.values() if abs(s.get("change_pct", 0)) > 0.01)
                 self.risk_engine.update_market_env(
                     ma20,
                     state.index_prices[-1],
@@ -729,10 +694,7 @@ class Watcher(
 
         # 盘中回踩机会发现
         try:
-            if (
-                state.data_ready
-                and state.scan_count % settings.PULLBACK_SCAN_INTERVAL == 0
-            ):
+            if state.data_ready and state.scan_count % settings.PULLBACK_SCAN_INTERVAL == 0:
                 opps = self._scan_pullback_opportunities(prices)
                 if opps:
                     self._check_buy_candidates(state, opps, self._regime)
@@ -745,14 +707,8 @@ class Watcher(
             logger.warning(f"止损提醒异常: {e}", exc_info=True)
 
         try:
-            minutes_since_open = (
-                datetime.now() - datetime.combine(date.today(), MORNING_START)
-            ).total_seconds() / 60
-            if (
-                not getattr(self, "_opening_decision_sent", False)
-                and prices
-                and 0 <= minutes_since_open <= 10
-            ):
+            minutes_since_open = (datetime.now() - datetime.combine(date.today(), MORNING_START)).total_seconds() / 60
+            if not getattr(self, "_opening_decision_sent", False) and prices and 0 <= minutes_since_open <= 10:
                 self._send_opening_decision(prices, regime_ok)
                 self._opening_decision_sent = True
         except Exception as e:
@@ -785,19 +741,11 @@ class Watcher(
                 self._check_sector_heat(state.market_snapshot, res_labels)
                 try:
                     top5 = sorted(
-                        [
-                            (k, round(v[-1], 2))
-                            for k, v in self._sector_trend_history.items()
-                            if len(v) >= 3
-                        ],
+                        [(k, round(v[-1], 2)) for k, v in self._sector_trend_history.items() if len(v) >= 3],
                         key=lambda x: -x[1],
                     )[:5]
                     bottom3 = sorted(
-                        [
-                            (k, round(v[-1], 2))
-                            for k, v in self._sector_trend_history.items()
-                            if len(v) >= 3
-                        ],
+                        [(k, round(v[-1], 2)) for k, v in self._sector_trend_history.items() if len(v) >= 3],
                         key=lambda x: x[1],
                     )[:3]
                     if top5 or bottom3:
@@ -868,8 +816,7 @@ class Watcher(
             "round": self._scan_count,
         }
         logger.info(
-            f"基准锚点: preClose={self._baseline['pre_close']:.2f} "
-            f"QMT涨跌幅={self._baseline['qmt_change_pct']:.4f}"
+            f"基准锚点: preClose={self._baseline['pre_close']:.2f} QMT涨跌幅={self._baseline['qmt_change_pct']:.4f}"
         )
 
     # ======================== 健康检查 ========================
@@ -885,8 +832,7 @@ class Watcher(
         # 指数停更检测
         index_stale = False
         collector_ok = bool(
-            getattr(self, "_collector_client", None)
-            and getattr(self._collector_client, "connected", False)
+            getattr(self, "_collector_client", None) and getattr(self._collector_client, "connected", False)
         )
         if len(state.index_prices) >= 5:
             recent = state.index_prices[-5:]
@@ -898,7 +844,9 @@ class Watcher(
             else:
                 self._index_stale_count = 0
 
-        regime = state.regime
+        # 用 self._regime 而非 state.regime：state 是 build_state() 拍的上轮快照，
+        # self._regime 已在本轮第 634 行更新，_check_positions 用的也是它。
+        regime = self._regime
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
         sector_trends = {}
         for code in pa.positions:
@@ -968,12 +916,8 @@ class Watcher(
             sector_trends=sector_trends,
             index_technicals=index_tech,
             market_env=market_env,
-            scenario_probs=getattr(self, "_scenario_engine", None)
-            and self._scenario_engine.probs
-            or {},
-            scenario_scan_count=getattr(self, "_scenario_engine", None)
-            and self._scenario_engine.scan_count
-            or 0,
+            scenario_probs=getattr(self, "_scenario_engine", None) and self._scenario_engine.probs or {},
+            scenario_scan_count=getattr(self, "_scenario_engine", None) and self._scenario_engine.scan_count or 0,
         )
         self._prev_scan_count = state.scan_count
 
@@ -1073,9 +1017,7 @@ class Watcher(
             except Exception as e:
                 logger.warning(f"获取复盘推荐异常: {e}")
 
-            self._cached_db_watch_codes = codes - set(
-                self.paper_account.positions.keys()
-            )
+            self._cached_db_watch_codes = codes - set(self.paper_account.positions.keys())
             self._watch_codes_stale = False
         else:
             # 从缓存恢复（不含持仓，持仓已从内存加入）
@@ -1123,9 +1065,7 @@ class Watcher(
                             hist.append((now_ts, price_f))
                         # 只保留最近10分钟
                         cutoff = now_ts - 600
-                        self._recent_prices[code] = [
-                            (t, p) for t, p in hist if t > cutoff
-                        ]
+                        self._recent_prices[code] = [(t, p) for t, p in hist if t > cutoff]
 
                 # 涨跌停价
                 pre_close = item.get("preClose") or item.get("pre_close") or 0
@@ -1180,17 +1120,14 @@ class Watcher(
 
         # 检查大盘近10分钟波动
         n = min(settings.RESONANCE_PUSH_WINDOW_ENTRIES * 3, len(self._index_prices) - 1)
-        recent_change = (
-            self._index_prices[-1] - self._index_prices[-(n + 1)]
-        ) / self._index_prices[-(n + 1)]
+        recent_change = (self._index_prices[-1] - self._index_prices[-(n + 1)]) / self._index_prices[-(n + 1)]
         if abs(recent_change) < INDEX_VOLATILITY_THRESHOLD:
             return
 
         # 去重：冷却轮数内不重复，大盘方向未变不重复
         index_dir = "up" if recent_change > 0 else "down"
         if (
-            self._scan_count - self._last_resonance_push_scan
-            < settings.RESONANCE_PUSH_COOLDOWN_ROUNDS
+            self._scan_count - self._last_resonance_push_scan < settings.RESONANCE_PUSH_COOLDOWN_ROUNDS
             and index_dir == self._last_resonance_index_dir
         ):
             return
@@ -1218,9 +1155,7 @@ class Watcher(
             window_entries=settings.RESONANCE_PUSH_WINDOW_ENTRIES,
         )
 
-        msg = self._resonance_analyzer.format_push_message(
-            result, my_codes=set(self._bought_watch.keys())
-        )
+        msg = self._resonance_analyzer.format_push_message(result, my_codes=set(self._bought_watch.keys()))
         if msg:
             self._alert(msg)
             self._last_resonance_push_scan = self._scan_count
@@ -1231,13 +1166,8 @@ class Watcher(
                 self._log_resonance_alert(
                     index_direction=result.get("index_direction", ""),
                     index_change=result.get("index_change", 0),
-                    resonance_down=[
-                        (n, round(c, 4))
-                        for n, c, *_ in result.get("resonance_down", [])
-                    ],
-                    counter_up=[
-                        (n, round(c, 4)) for n, c, *_ in result.get("counter_up", [])
-                    ],
+                    resonance_down=[(n, round(c, 4)) for n, c, *_ in result.get("resonance_down", [])],
+                    counter_up=[(n, round(c, 4)) for n, c, *_ in result.get("counter_up", [])],
                 )
             except Exception:
                 pass
@@ -1297,9 +1227,7 @@ class Watcher(
         if stale_sec > 180:  # 3 分钟
             self._data_ready = False
             self._alert_private(
-                f"🚨 数据断连\n"
-                f"   距离上次 Collector 数据已 {stale_sec:.0f} 秒\n"
-                f"   暂停所有买入信号，恢复后自动重启"
+                f"🚨 数据断连\n   距离上次 Collector 数据已 {stale_sec:.0f} 秒\n   暂停所有买入信号，恢复后自动重启"
             )
             logger.warning(f"数据断连: {stale_sec:.0f} 秒无数据，暂停交易")
 
@@ -1427,6 +1355,9 @@ class Watcher(
                 "flat": flat,
                 "total": up + down + flat,
             }
+            # 记录宽度历史快照（用于滚动窗口计算）
+            msg_ts = msg.get("ts", time.time())
+            self._breadth_history.append((msg_ts, up, down, flat))
 
             # 全市场价格追踪（用于回踩机会发现的止跌判断）
             now_ts = time.time()
@@ -1443,9 +1374,7 @@ class Watcher(
                 hist = self._snapshot_price_history[code]
                 if not hist or hist[-1][1] != price_f:
                     hist.append((now_ts, price_f))
-                self._snapshot_price_history[code] = [
-                    (t, p) for t, p in hist if t > cutoff
-                ]
+                self._snapshot_price_history[code] = [(t, p) for t, p in hist if t > cutoff]
 
             self._update_sector_trends()
             if not self._data_ready and self._sector_stats:
@@ -1481,9 +1410,7 @@ class Watcher(
             except (ValueError, TypeError):
                 _parsed = 0
             self._last_db_ts = max(self._last_db_ts, _parsed)
-            logger.info(
-                f"从DB恢复市场快照: {len(self._market_snapshot)}只 ts={latest_ts}"
-            )
+            logger.info(f"从DB恢复市场快照: {len(self._market_snapshot)}只 ts={latest_ts}")
             # 盘中重启：给回踩扫描器播种初始价格点，避免等10分钟才有数据
             now_ts = time.time()
             for code, item in self._market_snapshot.items():
@@ -1598,24 +1525,18 @@ class Watcher(
             CHASE_OPINION_TEMPLATE,
         )
 
-        above_desc = (
-            f"超出买入区上限{above_pct:+.1f}%"
-            if above_pct > 0
-            else f"低于买入区下限{abs(above_pct):.1f}%"
-        )
-        reject_info = (
-            f"系统已因「{reject_reason}」拒绝买入，请二判。" if reject_reason else ""
-        )
+        above_desc = f"超出买入区上限{above_pct:+.1f}%" if above_pct > 0 else f"低于买入区下限{abs(above_pct):.1f}%"
+        reject_info = f"系统已因「{reject_reason}」拒绝买入，请二判。" if reject_reason else ""
 
         prompt = CHASE_OPINION_TEMPLATE.format(
             code=code,
             name=name,
-            price=f"{price:.2f}",
-            buy_min=f"{buy_min:.2f}",
-            buy_max=f"{buy_max:.2f}",
+            price=float(price or 0),
+            buy_min=float(buy_min or 0),
+            buy_max=float(buy_max or 0),
             above_desc=above_desc,
-            sl=f"{sl:.2f}",
-            tp=f"{tp:.2f}",
+            sl=float(sl or 0),
+            tp=float(tp or 0),
             trend=trend,
             reject_info=reject_info,
         )
@@ -1673,9 +1594,7 @@ class Watcher(
             # 更新信号提醒状态
             signal_alert = getattr(self, "_signal_alert_state", {})
             review_alert = getattr(self, "_review_alert_state", {})
-            alert_dict = (
-                signal_alert if ctx["alert_key"] in signal_alert else review_alert
-            )
+            alert_dict = signal_alert if ctx["alert_key"] in signal_alert else review_alert
             alert_dict[ctx["alert_key"]] = (ctx["price"], True)
             if ctx["chase_key"]:
                 alert_dict[ctx["chase_key"]] = self._scan_count
@@ -1714,11 +1633,7 @@ class Watcher(
             # 分组：按 (title, industry)
             groups: dict[tuple, list[dict]] = {}
             for item in chase_items:
-                key = (
-                    (item["title"], item["industry"])
-                    if item["industry"]
-                    else (item["title"], item["code"])
-                )
+                key = (item["title"], item["industry"]) if item["industry"] else (item["title"], item["code"])
                 groups.setdefault(key, []).append(item)
 
             for (title, sector), items in groups.items():
@@ -1727,9 +1642,7 @@ class Watcher(
                     emoji = "📈"
                     lines = [f"{emoji} {title} — {sector}板块 {len(items)}只"]
                     for it in items[:8]:  # 最多展示8只
-                        lines.append(
-                            f"   {it['code']} {it['name']}  {it['price']:.2f}  超出{it['above_pct']:+.1f}%"
-                        )
+                        lines.append(f"   {it['code']} {it['name']}  {it['price']:.2f}  超出{it['above_pct']:+.1f}%")
                     # 取第一只的 AI 分析作为板块级建议
                     ai_text = items[0]["result"]
                     lines.append(f"   ─────────────────────────\n   🤖 {ai_text}")
@@ -1831,13 +1744,7 @@ class Watcher(
         price = buy_cand["price"]
         max_affordable = int(self.paper_account.cash * 0.9 / price / 100) * 100
         volume = min(
-            int(
-                self.paper_account.total_value
-                * settings.DEFAULT_POSITION_PCT
-                / price
-                / 100
-            )
-            * 100,
+            int(self.paper_account.total_value * settings.DEFAULT_POSITION_PCT / price / 100) * 100,
             max_affordable,
         )
         if volume < 100:
@@ -1942,9 +1849,7 @@ class Watcher(
                 held_sectors.add(s)
 
         # 查领涨/领跌股（复用 market_snapshot 的实时数据）
-        leaders = (
-            self._get_sector_leaders() if hasattr(self, "_get_sector_leaders") else {}
-        )
+        leaders = self._get_sector_leaders() if hasattr(self, "_get_sector_leaders") else {}
 
         alerts = []
         for name, s in stats.items():
@@ -1953,23 +1858,15 @@ class Watcher(
             leader_str = ""
             if leaders_in_sector:
                 stocks = [f"{c[0]} {c[1]:+.1f}%" for c in leaders_in_sector[:3]]
-                leader_str = (
-                    "\n     领" + ("涨" if chg > 0 else "跌") + ": " + ", ".join(stocks)
-                )
+                leader_str = "\n     领" + ("涨" if chg > 0 else "跌") + ": " + ", ".join(stocks)
 
             if chg < -1.5:
                 marker = "🔴" if name in held_sectors else "⬇"
                 alerts.append(
-                    f"{marker} {name}: {chg:+.1f}%  "
-                    f"涨跌{stats.get('up', 0)}/{stats.get('down', 0)}"
-                    f"{leader_str}"
+                    f"{marker} {name}: {chg:+.1f}%  涨跌{stats.get('up', 0)}/{stats.get('down', 0)}{leader_str}"
                 )
             elif chg > 2.5:
-                alerts.append(
-                    f"🟢 {name}: {chg:+.1f}%  "
-                    f"涨跌{stats.get('up', 0)}/{stats.get('down', 0)}"
-                    f"{leader_str}"
-                )
+                alerts.append(f"🟢 {name}: {chg:+.1f}%  涨跌{stats.get('up', 0)}/{stats.get('down', 0)}{leader_str}")
 
         if alerts:
             # 全局冷却：至少 40 轮不重复推（~7分钟），防止尾盘消息轰炸
@@ -2022,42 +1919,48 @@ class Watcher(
 
     # ======================== 推送 ========================
 
-    def _should_throttle(
-        self, code: str, price: float, cooldown_scans: int = 15
-    ) -> bool:
+    def _should_throttle(self, code: str, price: float, cooldown_scans: int = 15) -> bool:
         """委托至 AlertRouter.is_cooling。"""
         return self.alerter.is_cooling(code, cooldown_scans)
 
-    def _alert(self, msg: str):
-        """委托至 AlertRouter。"""
+    def _alert(self, msg: str, *, fingerprint: str = "", fingerprint_rounds: int = 0):
+        """委托至 AlertRouter。
+
+        调用方可传入 fingerprint / fingerprint_rounds 覆盖自动指纹检测。
+        不传则自动从消息首行提取股票代码或前 40 字符作为指纹。
+        """
         import re
 
-        # 提取指纹
-        first_line = msg.split("\n")[0] if msg else ""
-        m = re.search(r"\b(\d{6})\b", first_line)
-        if m:
-            prefix = re.sub(r"\d{6}", "XXXXXX", first_line)
-            fp = f"{prefix}:{m.group(1)}"
+        if fingerprint:
+            fp = fingerprint
+            cd = fingerprint_rounds if fingerprint_rounds > 0 else 30
         else:
-            fp = first_line[:40]
+            # 自动提取指纹
+            first_line = msg.split("\n")[0] if msg else ""
+            m = re.search(r"\b(\d{6})\b", first_line)
+            if m:
+                prefix = re.sub(r"\d{6}", "XXXXXX", first_line)
+                fp = f"{prefix}:{m.group(1)}"
+            else:
+                fp = first_line[:40]
 
-        # 冷却轮数
-        if "大盘偏弱" in first_line:
-            cd = 30
-        elif "暂停买入" in first_line:
-            cd = 20
-        elif "追高提醒" in first_line:
-            cd = 15
-        elif "暂不买入" in first_line or "暂缓买入" in first_line:
-            cd = 10
-        elif "逼近涨停" in first_line:
-            cd = 12
-        elif "板块热度" in first_line or "板块急" in first_line:
-            cd = 20
-        elif "止损未触发" in first_line:
-            cd = 40
-        else:
-            cd = 3
+            # 冷却轮数
+            if "大盘偏弱" in first_line:
+                cd = 30
+            elif "暂停买入" in first_line:
+                cd = 20
+            elif "追高提醒" in first_line:
+                cd = 15
+            elif "暂不买入" in first_line or "暂缓买入" in first_line:
+                cd = 10
+            elif "逼近涨停" in first_line:
+                cd = 12
+            elif "板块热度" in first_line or "板块急" in first_line:
+                cd = 20
+            elif "止损未触发" in first_line:
+                cd = 40
+            else:
+                cd = 3
 
         self.alerter.alert(msg, fingerprint=fp, fingerprint_rounds=cd)
 

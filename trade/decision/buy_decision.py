@@ -63,8 +63,6 @@ class BuyDecisionMixin:
         try:
             row = self.repo.get_daily_indicators(code)
             if row:
-                bb_upper = row["bb_upper"]
-                bb_mid = row["bb_mid"]
                 bb_lower = row["bb_lower"]
                 pct_b = row["bb_pct_b"]
                 ma5 = row["ma5"]
@@ -837,6 +835,19 @@ class BuyDecisionMixin:
         advice = advice_map.get(pattern, "大盘风险信号，暂停自动买入，关注市场变化")
         return f"{idx_info}{advice}"
 
+    def _check_instant_breadth(self) -> bool:
+        """瞬时宽度检查：下跌/上涨 > BREADTH_DOWN_UP_RATIO 且指数跌 → True。"""
+        breadth = self._market_breadth
+        if not breadth or breadth.get("up", 0) <= 0:
+            return False
+        down_up = breadth.get("down", 0) / breadth["up"]
+        idx_quote = getattr(self, "_last_index_quote", None) or {}
+        idx_change = idx_quote.get("change_pct", 0)
+        return (
+            down_up > getattr(settings, "BREADTH_DOWN_UP_RATIO", 3.0)
+            and idx_change < 0
+        )
+
     def _check_buy_candidates(self, state, candidates: list[dict], regime):
         """统一买入候选处理：信号 + 复盘推荐共用管线。
 
@@ -884,29 +895,52 @@ class BuyDecisionMixin:
         paper_full = len(self.paper_account.positions) >= settings.MAX_POSITIONS
 
         # 市场宽度过滤：下跌/上涨 > BREADTH_DOWN_UP_RATIO 且指数跌时暂停新开仓
+        # 优先用滚动窗口：若近期宽度在改善，跳过全量过滤
         breadth_blocked = False
-        breadth = self._market_breadth
-        if breadth and breadth.get("up", 0) > 0:
-            down_up = breadth.get("down", 0) / breadth["up"]
-            idx_quote = getattr(self, "_last_index_quote", None) or {}
-            idx_change = idx_quote.get("change_pct", 0)
-            if (
-                down_up > getattr(settings, "BREADTH_DOWN_UP_RATIO", 3.0)
-                and idx_change < 0
-            ):
-                breadth_blocked = True
-                if not getattr(self, "_breadth_block_alerted", False):
-                    self._breadth_block_alerted = True
-                    logger.warning(
-                        f"市场宽度过滤: 下跌/上涨={down_up:.1f} 指数{idx_change:+.2%}，暂停新开仓"
-                    )
-                    self._alert(
-                        f"🛑 市场宽度预警\n"
-                        f"   下跌/上涨: {down_up:.1f}  指数变化: {idx_change:+.2%}\n"
-                        f"   → 多数个股下跌，暂停新开仓位"
-                    )
-        # 宽度恢复后重置告警标记
-        if not breadth_blocked:
+        try:
+            if hasattr(self, "_compute_rolling_breadth"):
+                breadth_roll = self._compute_rolling_breadth(
+                    window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT
+                )
+                if breadth_roll and breadth_roll.get("improving"):
+                    up_delta = breadth_roll.get("up_delta", 0)
+                    if up_delta < settings.BREADTH_IMPROVEMENT_THRESHOLD:
+                        breadth_blocked = self._check_instant_breadth()
+                else:
+                    breadth_blocked = self._check_instant_breadth()
+            else:
+                breadth_blocked = self._check_instant_breadth()
+        except Exception:
+            breadth_blocked = self._check_instant_breadth()
+
+        # 恐慌衰减 → 即使瞬时宽度仍差，也放开
+        if breadth_blocked:
+            try:
+                if hasattr(self, "_check_panic_fading"):
+                    _fade = self._check_panic_fading()
+                    if _fade.get("faded"):
+                        breadth_blocked = False
+                        if getattr(self, "_breadth_block_alerted", False):
+                            self._breadth_block_alerted = False
+            except Exception:
+                pass
+
+        if breadth_blocked:
+            if not getattr(self, "_breadth_block_alerted", False):
+                self._breadth_block_alerted = True
+                breadth = self._market_breadth
+                down_up = breadth.get("down", 0) / max(breadth.get("up", 0), 1)
+                idx_quote = getattr(self, "_last_index_quote", None) or {}
+                idx_change = idx_quote.get("change_pct", 0)
+                logger.warning(
+                    f"市场宽度过滤: 下跌/上涨={down_up:.1f} 指数{idx_change:+.2%}，暂停新开仓"
+                )
+                self._alert(
+                    f"🛑 市场宽度预警\n"
+                    f"   下跌/上涨: {down_up:.1f}  指数变化: {idx_change:+.2%}\n"
+                    f"   → 多数个股下跌，暂停新开仓位"
+                )
+        else:
             self._breadth_block_alerted = False
 
         # 早盘 AI 板块倾向：focus 板块候选优先处理
@@ -1179,6 +1213,15 @@ class BuyDecisionMixin:
                     continue
 
             if not market_ok:
+                # 大盘不好时不要反复推送"暂停买入"——每 60 轮最多报一次
+                reject_key = f"mkt_reject:{c['alert_key']}"
+                last_reject = getattr(self, "_review_market_reject", {}).get(reject_key, -999)
+                if self._scan_count - last_reject < 60:
+                    continue
+                if not hasattr(self, "_review_market_reject"):
+                    self._review_market_reject = {}
+                self._review_market_reject[reject_key] = self._scan_count
+
                 alert_state[c["alert_key"]] = (price, True)
                 market_advice = regime_alert_msg or self._get_market_risk_advice()
                 self._alert(

@@ -273,8 +273,6 @@ class QMTCollector:
     def _fetch_and_push(self):
         """取 QMT 数据 → push socket → write DB。"""
         t0 = time.time()
-        now_iso = datetime.now().isoformat(timespec="seconds")
-        now_ts = time.time()  # epoch 浮点，watcher DB 恢复用
         pushed_market = False
         pushed_index = False
 
@@ -319,7 +317,7 @@ class QMTCollector:
         except Exception as e:
             logger.warning(f"all_quotes 获取失败: {e}")
 
-        # 2. 多指数采集（上证+深证+创业板+国证2000+科创50）
+        # 2. 多指数采集（批量一次拉取，不再逐个请求）
         INDEX_CODES = {
             "000001.SH": "上证指数",
             "399001.SZ": "深证成指",
@@ -328,48 +326,45 @@ class QMTCollector:
             "000688.SH": "科创50",
         }
         try:
-            for code, name in INDEX_CODES.items():
-                result = self.qmt.quote(code)
-                if not result.get("success", True):
-                    continue
+            result = self.qmt.quotes(list(INDEX_CODES.keys()))
+            if result.get("success", True):
                 data = result.get("data", result)
-                if not isinstance(data, dict):
-                    continue
-                price = data.get("lastPrice") or data.get("last_price")
-                if not price:
-                    continue
-                ts = time.time()
-                pre_close = float(data.get("preClose") or 0)
-                change_pct = (float(price) - pre_close) / pre_close if pre_close else 0
-                amount = float(data.get("amount") or data.get("turnover") or 0)
-                idx_high = float(data.get("high") or price)
-                idx_low = float(data.get("low") or price)
-                msg = {
-                    "type": "index",
-                    "ts": ts,
-                    "code": code,
-                    "name": name,
-                    "price": float(price),
-                    "high": idx_high,
-                    "low": idx_low,
-                    "pre_close": pre_close,
-                    "change_pct": change_pct,
-                    "amount": amount,
-                }
-                self._send_json(msg)
-                self._write_index_snapshot(
-                    ts,
-                    code,
-                    float(price),
-                    idx_high,
-                    idx_low,
-                    pre_close,
-                    change_pct,
-                    amount,
-                )
-                pushed_index = True
-                if code == "000001.SH":
-                    logger.debug(f"index push: {name} {float(price):.2f}")
+                if isinstance(data, dict):
+                    for code, name in INDEX_CODES.items():
+                        item = data.get(code)
+                        if not isinstance(item, dict):
+                            continue
+                        price = item.get("lastPrice") or item.get("last_price")
+                        if not price:
+                            continue
+                        ts = time.time()
+                        pre_close = float(item.get("preClose") or 0)
+                        change_pct = (
+                            (float(price) - pre_close) / pre_close if pre_close else 0
+                        )
+                        amount = float(item.get("amount") or item.get("turnover") or 0)
+                        idx_high = float(item.get("high") or price)
+                        idx_low = float(item.get("low") or price)
+                        msg = {
+                            "type": "index",
+                            "ts": ts,
+                            "code": code,
+                            "name": name,
+                            "price": float(price),
+                            "high": idx_high,
+                            "low": idx_low,
+                            "pre_close": pre_close,
+                            "change_pct": change_pct,
+                            "amount": amount,
+                        }
+                        self._send_json(msg)
+                        self._write_index_snapshot(
+                            ts, code, float(price), idx_high, idx_low,
+                            pre_close, change_pct, amount,
+                        )
+                        pushed_index = True
+                        if code == "000001.SH":
+                            logger.debug(f"index push: {name} {float(price):.2f}")
         except Exception as e:
             logger.warning(f"index quote 获取失败: {e}")
 

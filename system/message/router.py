@@ -33,7 +33,7 @@ class AlertRouter:
     def send(self, msg: str, channel: str = "group"):
         """发送消息，不经过滤。channel: group / private / both。"""
         if channel in ("group", "both") and self._group:
-            self._group.send_message(msg)
+            self._group.send(msg)
         if channel in ("private", "both") and self._private:
             self._private.send(msg)
 

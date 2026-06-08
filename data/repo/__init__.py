@@ -32,8 +32,7 @@ class TradeRepository:
             self.db_path = db_path
         elif os.environ.get("E2E_TEST_MODE") == "1":
             raise RuntimeError(
-                "E2E_TEST_MODE=1 但 TradeRepository 未传入 db_path，"
-                "拒绝使用生产库路径。请显式传入测试 DB 路径。"
+                "E2E_TEST_MODE=1 但 TradeRepository 未传入 db_path，拒绝使用生产库路径。请显式传入测试 DB 路径。"
             )
         else:
             self.db_path = DATABASE_PATH
@@ -57,9 +56,7 @@ class TradeRepository:
     def insert_signal(self, signal_dict: dict) -> int:
         return self._signal.insert(signal_dict)
 
-    def get_pending_signals(
-        self, trade_date: str = None, account: str = None
-    ) -> list[dict]:
+    def get_pending_signals(self, trade_date: str = None, account: str = None) -> list[dict]:
         return self._signal.get_pending(trade_date, account)
 
     def get_expired_signals(self, before_date: str) -> list[dict]:
@@ -77,6 +74,9 @@ class TradeRepository:
 
     def get_orders_by_date(self, trade_date: str, account: str = None) -> list[dict]:
         return self._order.get_by_date(trade_date, account)
+
+    def get_sold_codes(self, codes: list[str], account: str) -> set[str]:
+        return self._order.get_sold_codes(codes, account)
 
     # ---- portfolio ----
     def insert_snapshot(self, snap_dict: dict):
@@ -140,13 +140,9 @@ class TradeRepository:
         stock_code: str | None,
         decision_data: dict,
     ) -> int:
-        return self._audit.insert_decision_log(
-            trade_date, ts, decision_type, stock_code, decision_data
-        )
+        return self._audit.insert_decision_log(trade_date, ts, decision_type, stock_code, decision_data)
 
-    def get_decision_logs(
-        self, trade_date: str, decision_type: str = None
-    ) -> list[dict]:
+    def get_decision_logs(self, trade_date: str, decision_type: str = None) -> list[dict]:
         return self._audit.get_decision_logs(trade_date, decision_type)
 
     def insert_audit_finding(self, finding: dict) -> int:
@@ -161,9 +157,7 @@ class TradeRepository:
     def get_pending_watcher_improvements(self) -> list[dict]:
         return self._audit.get_pending_watcher_improvements()
 
-    def update_watcher_improvement_status(
-        self, imp_id: int, status: str, applied_date: str = None
-    ):
+    def update_watcher_improvement_status(self, imp_id: int, status: str, applied_date: str = None):
         self._audit.update_watcher_improvement_status(imp_id, status, applied_date)
 
     def update_watcher_improvement_effectiveness(self, imp_id: int, check: str):
@@ -180,9 +174,7 @@ class TradeRepository:
         new_stop_loss: float = None,
         new_take_profit: float = None,
     ):
-        self._audit.apply_holdings_review_sl_tp(
-            trade_date, stock_code, new_stop_loss, new_take_profit
-        )
+        self._audit.apply_holdings_review_sl_tp(trade_date, stock_code, new_stop_loss, new_take_profit)
 
     # ---- legacy (kept for backward compat) ----
     def upsert_lesson(self, lesson_dict: dict):
@@ -268,9 +260,7 @@ class TradeRepository:
                         lesson_type,
                         lesson_key,
                         lesson_content,
-                        json.dumps(trigger_conditions, ensure_ascii=False)
-                        if trigger_conditions
-                        else None,
+                        json.dumps(trigger_conditions, ensure_ascii=False) if trigger_conditions else None,
                         trade_date,
                         trade_date,
                     ),
@@ -355,8 +345,7 @@ class TradeRepository:
         try:
             with self._signal._conn() as conn:
                 row = conn.execute(
-                    "SELECT ma60 FROM stock_basic WHERE stock_code='000001' "
-                    "ORDER BY trade_date DESC LIMIT 1"
+                    "SELECT ma60 FROM stock_basic WHERE stock_code='000001' ORDER BY trade_date DESC LIMIT 1"
                 ).fetchone()
                 return (row[0] or 0) if row else 0
         except Exception:
@@ -366,8 +355,7 @@ class TradeRepository:
         try:
             with self._signal._conn() as conn:
                 rows = conn.execute(
-                    "SELECT index_change_pct FROM market_breadth "
-                    "ORDER BY trade_date DESC LIMIT 5"
+                    "SELECT index_change_pct FROM market_breadth ORDER BY trade_date DESC LIMIT 5"
                 ).fetchall()
             if len(rows) < 3:
                 return 0
@@ -380,13 +368,10 @@ class TradeRepository:
         except Exception:
             return 0
 
-    def get_market_snapshots_batch(
-        self, trade_date: str, latest_ts: float
-    ) -> list[dict]:
+    def get_market_snapshots_batch(self, trade_date: str, latest_ts: float) -> list[dict]:
         with self._signal._conn() as conn:
             rows = conn.execute(
-                "SELECT ts, code, change_pct, price, amount FROM market_snapshots "
-                "WHERE trade_date=? AND ts=?",
+                "SELECT ts, code, change_pct, price, amount FROM market_snapshots WHERE trade_date=? AND ts=?",
                 (trade_date, latest_ts),
             ).fetchall()
         return [
@@ -411,8 +396,7 @@ class TradeRepository:
     def get_index_snapshot_history(self, days: int = 3) -> list[dict]:
         with self._signal._conn() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT trade_date FROM index_snapshots "
-                "ORDER BY trade_date DESC LIMIT ?",
+                "SELECT DISTINCT trade_date FROM index_snapshots ORDER BY trade_date DESC LIMIT ?",
                 (days,),
             ).fetchall()
         if len(rows) < 3:
@@ -420,8 +404,7 @@ class TradeRepository:
         prices = []
         for (td,) in rows:
             r = conn.execute(
-                "SELECT price FROM index_snapshots WHERE trade_date=? "
-                "ORDER BY ts DESC LIMIT 1",
+                "SELECT price FROM index_snapshots WHERE trade_date=? ORDER BY ts DESC LIMIT 1",
                 (td,),
             ).fetchone()
             if r:
@@ -437,11 +420,7 @@ class TradeRepository:
                 "AND status='pending' AND account='paper'",
                 (trade_date,),
             ).fetchall()
-        return {
-            r[0]: (r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0)
-            for r in rows
-            if r[1] and r[2]
-        }
+        return {r[0]: (r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0) for r in rows if r[1] and r[2]}
 
     def get_review_picks_latest(self) -> list[dict]:
         """查询最新复盘推荐标的。"""

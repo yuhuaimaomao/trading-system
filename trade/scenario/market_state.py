@@ -10,6 +10,7 @@ from datetime import time as dt_time
 
 from system.config import settings
 from system.utils.logger import get_trade_logger
+from trade.core.scan_state import MarketOutlook, MarketRegime, MicroSignals
 
 logger = get_trade_logger("scenario")
 
@@ -23,11 +24,6 @@ MORNING_END = dt_time(11, 30)
 AFTERNOON_START = dt_time(13, 0)
 AFTERNOON_END = dt_time(15, 0)
 LATE_SESSION = dt_time(14, 30)  # 尾盘起点
-
-# ━━━━━━━━ MarketRegime — 统一市场状态 ━━━━━━━━
-
-
-from trade.core.scan_state import MarketOutlook, MarketRegime, MicroSignals
 
 # PATTERN_REGIME/PATTERN_ALERT/assess_regime 已移至 trade/decision/regime.py，方法内惰性导入
 
@@ -100,6 +96,42 @@ class MarketStateMixin:
             else:
                 flat += 1
         return {"up": up, "down": down, "flat": flat}
+
+    def _compute_rolling_breadth(self, window_minutes: int = 10) -> dict:
+        """从 _breadth_history 计算最近 N 分钟的滚动窗口宽度。
+
+        返回 {up, down, flat, total, up_delta, down_delta, improving, window_records}。
+        数据不足返回 {}，调用方回退到瞬时宽度。
+        """
+        hist = getattr(self, "_breadth_history", None)
+        if not hist or len(hist) < 2:
+            return {}
+
+        now = time.time()
+        cutoff = now - window_minutes * 60
+        window = [(ts, u, d, f) for ts, u, d, f in hist if ts >= cutoff]
+        if len(window) < 2:
+            return {}
+
+        _, u_first, d_first, f_first = window[0]
+        _, u_last, d_last, f_last = window[-1]
+        up_delta = u_last - u_first
+        down_delta = d_last - d_first
+        total_last = u_last + d_last + f_last
+
+        return {
+            "up": u_last,
+            "down": d_last,
+            "flat": f_last,
+            "total": total_last,
+            "up_delta": up_delta,
+            "down_delta": down_delta,
+            "up_trend": up_delta > 0,
+            "down_trend": down_delta < 0,
+            "improving": up_delta > 0 or down_delta < 0,
+            "window_records": len(window),
+            "window_minutes": window_minutes,
+        }
 
     # ━━━━━━━━ 指数行情 ━━━━━━━━
 
@@ -625,25 +657,21 @@ class MarketStateMixin:
 
         # 判断是否需要告警
         should_alert = False
-        reason = ""
 
         # 1. 主情景切换（跳过正常→横盘这类无意义切换）
         if outlook.primary.name != prev.primary.name:
             boring = {"normal_stable", "developing_uptrend", "wide_choppy"}
             if not (outlook.primary.name in boring and prev.primary.name in boring):
                 should_alert = True
-                reason = "主情景切换"
 
         # 2. 主情景概率大幅变化 (>25%)
         prob_delta = outlook.primary.probability - prev.primary.probability
         if abs(prob_delta) > 0.25:
             should_alert = True
-            reason = f"概率{'上升' if prob_delta > 0 else '下降'} {abs(prob_delta):.0%}"
 
         # 3. 紧急程度升级
         if outlook.urgency in ("critical", "act") and prev.urgency in ("none", "watch"):
             should_alert = True
-            reason = f"紧急程度升级 → {outlook.urgency}"
 
         # 无变化且非紧急，不推送
         if not should_alert:
@@ -654,12 +682,8 @@ class MarketStateMixin:
         if outlook.key_support and outlook.key_resistance:
             price = self._index_prices[-1] if self._index_prices else 0
             nearest_support = outlook.key_support[0] if outlook.key_support else 0
-            nearest_resistance = (
-                outlook.key_resistance[0] if outlook.key_resistance else 0
-            )
             if nearest_support > 0 and (price - nearest_support) / price < 0.003:
                 should_alert = True
-                reason = f"接近支撑 {nearest_support:.2f}"
 
         # 去重：至少间隔 20 轮
         if should_alert and scan - self._scenario_engine.last_alert_scan < 20:
@@ -912,7 +936,11 @@ class MarketStateMixin:
 
         # —— 熔断 ——
         if change_pct < INDEX_HALT_PCT:
-            self._alert(f"🚨 大盘熔断\n   上证跌幅: {change_pct:.1%}  暂停所有买入信号")
+            self._alert(
+                f"🚨 大盘熔断\n   上证跌幅: {change_pct:.1%}  暂停所有买入信号",
+                fingerprint="market_halt",
+                fingerprint_rounds=25,  # 约 5 分钟提醒一次
+            )
             return MarketRegime(
                 pattern="halt",
                 risk_level="extreme",
@@ -954,8 +982,14 @@ class MarketStateMixin:
         # —— 情景预判告警（前瞻性关卡和概率变化）——
         self._push_scenario_alert(outlook)
 
+        # —— V反转/GapDown恢复解锁：反转信号优先于下游安全闸 ——
+        _reversal_patterns = {"v_reversal", "gap_down_recover"}
+        _vrev_override = (
+            pattern in _reversal_patterns and regime.allow_buy
+        )
+
         # —— 涨跌比两极分化追加检测 ——
-        if regime.allow_buy and regime.breadth_healthy:
+        if regime.allow_buy and regime.breadth_healthy and not _vrev_override:
             breadth = self._compute_breadth()
             if breadth:
                 up, down = breadth.get("up", 0), breadth.get("down", 0)
@@ -977,31 +1011,63 @@ class MarketStateMixin:
 
         # —— 传统阈值补充（MA20+跌幅） ——
         if index_price < ma20 and change_pct < INDEX_DANGER_PCT:
-            last_alert = self._index_alerted_ma20
-            if self._scan_count - last_alert >= 30:
-                self._index_alerted_ma20 = self._scan_count
-                self._alert(
-                    f"⚠️ 大盘偏弱\n"
-                    f"   上证: {index_price:.2f}  跌破 MA20: {ma20:.2f}  跌幅: {change_pct:.1%}\n"
-                    f"   → 暂停买入"
-                )
-            regime.allow_buy = False
-            regime.position_mult = 0.0
-            regime.entry_rule = "none"
-            regime.risk_level = "dangerous"
+            if _vrev_override:
+                # V反转模式：不阻止买入，但保持极保守仓位
+                regime.position_mult = min(regime.position_mult, 0.3)
+                regime.entry_rule = "confirm"
+            else:
+                last_alert = self._index_alerted_ma20
+                if self._scan_count - last_alert >= 30:
+                    self._index_alerted_ma20 = self._scan_count
+                    self._alert(
+                        f"⚠️ 大盘偏弱\n"
+                        f"   上证: {index_price:.2f}  跌破 MA20: {ma20:.2f}  跌幅: {change_pct:.1%}\n"
+                        f"   → 暂停买入"
+                    )
+                regime.allow_buy = False
+                regime.position_mult = 0.0
+                regime.entry_rule = "none"
+                regime.risk_level = "dangerous"
 
         # —— 单边下跌结构检测 ——
         if self._is_index_downtrend():
-            if not self._index_alerted_downtrend:
-                self._index_alerted_downtrend = True
-                self._alert(
-                    f"⚠️ 单边下跌\n"
-                    f"   上证: {index_price:.2f}  日内高: {self._index_high:.2f}  日内低: {self._index_low:.2f}  重心持续下移\n"
-                    f"   → 暂停买入，等待止跌信号"
-                )
-            regime.allow_buy = False
-            regime.position_mult = 0.0
-            regime.entry_rule = "none"
+            if _vrev_override:
+                # V反转模式：结构偏弱但反转信号优先，极保守仓位试探
+                regime.position_mult = min(regime.position_mult, 0.25)
+                regime.entry_rule = "confirm"
+            else:
+                if not self._index_alerted_downtrend:
+                    self._index_alerted_downtrend = True
+                    self._alert(
+                        f"⚠️ 单边下跌\n"
+                        f"   上证: {index_price:.2f}  日内高: {self._index_high:.2f}  日内低: {self._index_low:.2f}  重心持续下移\n"
+                        f"   → 暂停买入，等待止跌信号"
+                    )
+                regime.allow_buy = False
+                regime.position_mult = 0.0
+                regime.entry_rule = "none"
+
+        # —— 恐慌衰减检测：开盘恐慌修复 → 恢复买入 ——
+        _fade = self._check_panic_fading()
+        if _fade.get("faded"):
+            if not regime.allow_buy:
+                regime.allow_buy = True
+                regime.position_mult = min(regime.position_mult or 0.3, 0.5)
+                regime.entry_rule = "confirm"
+                regime.risk_level = "cautious"
+                if not getattr(self, "_panic_fade_alerted", False):
+                    self._panic_fade_alerted = True
+                    self._alert(
+                        f"🟢 恐慌衰减\n"
+                        f"   开盘后回升 {_fade['recovery_pct']*100:.1f}%  "
+                        f"涨家+{_fade['breadth_delta']}\n"
+                        f"   → 恢复买入信号（保守仓位 {regime.position_mult:.0%}）"
+                    )
+            elif regime.position_mult > 0:
+                regime.position_mult = min(regime.position_mult * 1.3, 1.0)
+            # 消除单边下跌标记
+            if self._index_alerted_downtrend:
+                self._index_alerted_downtrend = False
 
         # —— 波动预警 ——
         if len(self._index_prices) >= 4:
@@ -1254,6 +1320,85 @@ class MarketStateMixin:
 
         return True
 
+    def _check_panic_fading(self) -> dict:
+        """恐慌衰减检测：开盘 ≥30 分钟后，指数从低点修复 + 宽度改善 + 趋势转升。
+
+        返回 {faded: bool, recovery_pct, breadth_delta, reasons}。
+        """
+        result = {"faded": False, "recovery_pct": 0.0, "breadth_delta": 0, "reasons": []}
+
+        # 条件 A：开盘 ≥ PANIC_FADE_MINUTES 分钟
+        try:
+            fade_minutes = float(settings.PANIC_FADE_MINUTES)
+        except (TypeError, ValueError):
+            fade_minutes = 30
+        now = datetime.now()
+        open_time = datetime.combine(now.date(), dt_time(9, 30))
+        minutes_since_open = (now - open_time).total_seconds() / 60.0
+        if minutes_since_open < fade_minutes:
+            return result
+
+        # 条件 B：指数从日内低点回升 ≥ PANIC_RECOVERY_MIN_PCT
+        prices = self._index_prices
+        if len(prices) < 5:
+            return result
+        day_low = self._index_low
+        if day_low <= 0:
+            return result
+        cur = prices[-1]
+        recovery_pct = (cur - day_low) / day_low
+        result["recovery_pct"] = recovery_pct
+        try:
+            recovery_min = float(settings.PANIC_RECOVERY_MIN_PCT)
+        except (TypeError, ValueError):
+            recovery_min = 0.005
+        if recovery_pct < recovery_min:
+            result["reasons"].append(
+                f"指数回升不足: {recovery_pct*100:.2f}% < {recovery_min*100:.1f}%"
+            )
+            return result
+
+        # 条件 C：近期宽度改善（滚动窗口）
+        try:
+            breadth_improve_min = int(settings.PANIC_BREADTH_IMPROVE_MIN)
+        except (TypeError, ValueError):
+            breadth_improve_min = 30
+        rolling = self._compute_rolling_breadth(window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT)
+        if rolling and rolling.get("improving"):
+            up_delta = rolling.get("up_delta", 0)
+            down_delta = rolling.get("down_delta", 0)
+            result["breadth_delta"] = up_delta
+            if up_delta >= breadth_improve_min:
+                result["reasons"].append(
+                    f"宽度改善: 涨家+{up_delta} 跌家{down_delta:+d}"
+                )
+            else:
+                result["reasons"].append(
+                    f"宽度改善不足: 涨家+{up_delta} < {breadth_improve_min}"
+                )
+                return result
+        else:
+            result["reasons"].append("滚动宽度数据不足或无改善")
+            return result
+
+        # 条件 D：近期趋势向上（近 10 tick 均价 > 前 10 tick 均价）
+        short_n = min(10, len(prices) // 2)
+        if short_n >= 3:
+            recent = prices[-short_n:]
+            earlier = prices[-2 * short_n:-short_n] if len(prices) >= 2 * short_n else prices[:short_n]
+            avg_recent = sum(recent) / len(recent)
+            avg_earlier = sum(earlier) / len(earlier)
+            if avg_recent <= avg_earlier:
+                result["reasons"].append("近期趋势未转升")
+                return result
+
+        result["faded"] = True
+        result["reasons"].append(
+            f"恐慌衰减: 开盘{minutes_since_open:.0f}分 回升{recovery_pct*100:.2f}% "
+            f"涨家+{result['breadth_delta']}"
+        )
+        return result
+
     # ━━━━━━━━ 指数技术指标 ━━━━━━━━
 
     def _check_index_divergence(self) -> str:
@@ -1291,7 +1436,8 @@ class MarketStateMixin:
             closes.append(chunk[-1])
             highs.append(max(chunk))
             lows.append(min(chunk))
-        if len(closes) < 26:
+        # calc_macd_series 需要 slow(26) + signal(9) = 35 根 bar
+        if len(closes) < 35:
             return
 
         from stock.indicators import (
@@ -1307,6 +1453,8 @@ class MarketStateMixin:
         kdj = calc_kdj(highs, lows, closes)
 
         macd_series = calc_macd_series(closes)
+        if not macd_series["dif"] or not macd_series["dea"]:
+            return
         macd = {
             "dif": macd_series["dif"][-1],
             "dea": macd_series["dea"][-1],
@@ -1330,32 +1478,49 @@ class MarketStateMixin:
                 )
 
         for period, val, key in [(6, rsi6, "rsi6_zone"), (12, rsi12, "rsi12_zone")]:
-            if val < 20:
+            # 滞后带防止 RSI 在阈值附近反复横跳刷屏
+            # 超卖：进入需 <20，退出需 >25（5% 滞后）
+            # 超买：进入需 >80，退出需 <75（5% 滞后）
+            prev_zone = st.get(key, "normal")
+            if val < 20 and prev_zone != "oversold":
                 zone = "oversold"
                 label = f"RSI{period}超卖({val:.1f})"
-            elif val > 80:
+            elif val > 80 and prev_zone != "overbought":
                 zone = "overbought"
                 label = f"RSI{period}超买({val:.1f})"
-            else:
+            elif prev_zone == "oversold" and val > 25:
                 zone = "normal"
-            if st[key] != zone and zone != "normal":
+            elif prev_zone == "overbought" and val < 75:
+                zone = "normal"
+            else:
+                # 滞后期内保持原状态，不触发告警
+                continue
+            if zone != "normal":
                 st[key] = zone
-                alerts.append(label)
-            elif zone == "normal":
+                if zone != prev_zone:
+                    alerts.append(label)
+            else:
                 st[key] = "normal"
 
-        if kdj["j"] < 0:
+        # KDJ J 值滞后带：进入超卖需 <0，退出需 >10；超买进入需 >100，退出需 <90
+        # 防止 J 值在 0 或 100 附近反复横跳刷屏
+        prev_kdj_zone = st.get("kdj_j_zone", "normal")
+        if kdj["j"] < 0 and prev_kdj_zone != "oversold":
             j_zone = "oversold"
             j_label = f"KDJ J值超卖(K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f})"
-        elif kdj["j"] > 100:
+        elif kdj["j"] > 100 and prev_kdj_zone != "overbought":
             j_zone = "overbought"
             j_label = f"KDJ J值超买(K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f})"
-        else:
+        elif prev_kdj_zone == "oversold" and kdj["j"] > 10:
             j_zone = "normal"
-        if st["kdj_j_zone"] != j_zone and j_zone != "normal":
+        elif prev_kdj_zone == "overbought" and kdj["j"] < 90:
+            j_zone = "normal"
+        else:
+            j_zone = prev_kdj_zone  # 滞后期保持，不触发变化
+        if j_zone != "normal" and j_zone != prev_kdj_zone:
             st["kdj_j_zone"] = j_zone
             alerts.append(j_label)
-        elif j_zone == "normal":
+        elif j_zone == "normal" and prev_kdj_zone != "normal":
             st["kdj_j_zone"] = "normal"
 
         if len(closes) >= 2:
@@ -1405,7 +1570,8 @@ class MarketStateMixin:
             for a in div_lines:
                 msg += f"\n   {a}"
             msg += f"\n   → {advice}"
-            self._alert(msg)
+            # 指纹去重：同一条建议 60 轮内不重复推送（约 60 分钟）
+            self._alert(msg, fingerprint=f"index_tech:{advice}", fingerprint_rounds=60)
 
     def _index_trend_desc(self, prices: list[float], pre_close: float = 0) -> str:
         if len(prices) < 10:

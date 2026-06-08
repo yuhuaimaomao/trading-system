@@ -511,7 +511,7 @@ class TestAlertRouter:
 
         router.send("hello", channel="group")
 
-        group.send_message.assert_called_once_with("hello")
+        group.send.assert_called_once_with("hello")
         private.send.assert_not_called()
 
     def test_send_private_channel(self):
@@ -522,7 +522,7 @@ class TestAlertRouter:
         router.send("hello", channel="private")
 
         private.send.assert_called_once_with("hello")
-        group.send_message.assert_not_called()
+        group.send.assert_not_called()
 
     def test_send_both_channels(self):
         """send(channel='both') → 同时调用两个 bot。"""
@@ -531,7 +531,7 @@ class TestAlertRouter:
 
         router.send("hello", channel="both")
 
-        group.send_message.assert_called_once_with("hello")
+        group.send.assert_called_once_with("hello")
         private.send.assert_called_once_with("hello")
 
     def test_send_defaults_to_group(self):
@@ -541,7 +541,7 @@ class TestAlertRouter:
 
         router.send("hello")
 
-        group.send_message.assert_called_once_with("hello")
+        group.send.assert_called_once_with("hello")
         private.send.assert_not_called()
 
     def test_send_skips_when_no_bot(self):
@@ -559,7 +559,7 @@ class TestAlertRouter:
         router.send("hello", channel="private")
         router.send("hello", channel="both")
 
-        group.send_message.assert_called_once_with("hello")
+        group.send.assert_called_once_with("hello")
 
     # ── alert — 指纹去重 ──
 
@@ -574,7 +574,7 @@ class TestAlertRouter:
 
         assert sent1 is True
         assert sent2 is False
-        group.send_message.assert_called_once()
+        group.send.assert_called_once()
 
     def test_alert_fingerprint_after_window(self):
         """相同 fingerprint 超过 fingerprint_rounds → 再次发送。"""
@@ -587,7 +587,7 @@ class TestAlertRouter:
         sent = router.alert("msg", fingerprint="f1", fingerprint_rounds=10)
 
         assert sent is True
-        assert group.send_message.call_count == 2
+        assert group.send.call_count == 2
 
     def test_alert_fingerprint_different_fingerprints_no_dedup(self):
         """不同 fingerprint → 各自发送，不受影响。"""
@@ -598,7 +598,7 @@ class TestAlertRouter:
         router.alert("msg1", fingerprint="f1")
         router.alert("msg2", fingerprint="f2")
 
-        assert group.send_message.call_count == 2
+        assert group.send.call_count == 2
 
     # ── alert — code 冷却 ──
 
@@ -612,7 +612,7 @@ class TestAlertRouter:
         # price 变了也抑制，因为 round 检查先触发
         assert router.alert("b", code="000001", price=20.0, cooldown_rounds=5) is False
 
-        group.send_message.assert_called_once()
+        group.send.assert_called_once()
 
     def test_alert_price_cooldown_round_expired(self):
         """round 冷却过期但价格变化 <0.5% → 价格冷却抑制。"""
@@ -627,7 +627,7 @@ class TestAlertRouter:
         # 0.03/10.0 = 0.3% < 0.5% → 抑制
 
         assert sent is False
-        group.send_message.assert_called_once()
+        group.send.assert_called_once()
 
     def test_alert_price_change_exceeds_sends(self):
         """round 冷却过期且价格变化 >0.5% → 再次发送。"""
@@ -641,7 +641,7 @@ class TestAlertRouter:
         # 0.10/10.0 = 1% > 0.5% → 发送
 
         assert sent is True
-        assert group.send_message.call_count == 2
+        assert group.send.call_count == 2
 
     def test_alert_price_cooldown_uses_stored_price(self):
         """价格冷却是相对于上一次存储的价格，不是最新的尝试价。"""
@@ -658,7 +658,7 @@ class TestAlertRouter:
         # 继续使用原价 10.0 对比，10.03 - 10.0 = 0.3% 仍然 < 0.5%
         sent = router.alert("third", code="000001", price=10.03, cooldown_rounds=5)
         assert sent is False
-        group.send_message.assert_called_once()
+        group.send.assert_called_once()
 
     def test_alert_different_code_no_cooldown(self):
         """不同 code → 各自冷却互不影响。"""
@@ -669,7 +669,7 @@ class TestAlertRouter:
         router.alert("a", code="000001", price=10.0, cooldown_rounds=5)
         router.alert("b", code="000002", price=20.0, cooldown_rounds=5)
 
-        assert group.send_message.call_count == 2
+        assert group.send.call_count == 2
 
     # ── alert — channel 参数 ──
 
@@ -681,7 +681,7 @@ class TestAlertRouter:
 
         router.alert("msg", fingerprint="f1")
 
-        group.send_message.assert_called_once()
+        group.send.assert_called_once()
         private.send.assert_not_called()
 
     def test_alert_private_helper(self):

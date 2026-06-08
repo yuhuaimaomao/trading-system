@@ -51,9 +51,7 @@ class PaperAccount:
     """
 
     def __init__(self, db_path: str, telegram_bot=None, initial_capital: float = None):
-        self._portfolio = Portfolio(
-            initial_cash=initial_capital or settings.PAPER_INITIAL_CAPITAL
-        )
+        self._portfolio = Portfolio(initial_cash=initial_capital or settings.PAPER_INITIAL_CAPITAL)
         self.db_path = db_path
         self.telegram = telegram_bot
         self.repo = TradeRepository(db_path=db_path)
@@ -100,9 +98,7 @@ class PaperAccount:
     def update_prices(self, prices: dict[str, float]):
         self._portfolio.update_prices(prices)
 
-    def get_sector_exposure(
-        self, sector_map: dict[str, str] = None
-    ) -> dict[str, float]:
+    def get_sector_exposure(self, sector_map: dict[str, str] = None) -> dict[str, float]:
         return self._portfolio.get_sector_exposure(sector_map)
 
     # ===== 买卖执行 =====
@@ -174,14 +170,10 @@ class PaperAccount:
             self._persist_state()
         except Exception as e:
             logger.warning(f"买入落库失败: {e}")
-        logger.info(
-            f"模拟盘买入: {code} {name} {volume}股 @{price:.2f} 佣金{commission:.0f}"
-        )
+        logger.info(f"模拟盘买入: {code} {name} {volume}股 @{price:.2f} 佣金{commission:.0f}")
         return BuyResult(success=True, volume=volume, cost=cost, commission=commission)
 
-    def sell(
-        self, code: str, price: float, reason: str = "", signal_id: int = None
-    ) -> SellResult:
+    def sell(self, code: str, price: float, reason: str = "", signal_id: int = None) -> SellResult:
         """执行卖出：T+1 检查、加现金、删持仓、写订单、发通知。"""
         pos = self._portfolio.positions.get(code)
         if not pos:
@@ -199,9 +191,7 @@ class PaperAccount:
         avg_cost = pos.avg_cost
 
         amount = price * volume
-        commission = (
-            max(amount * COMMISSION_RATE, MIN_COMMISSION) + amount * STAMP_TAX_RATE
-        )
+        commission = max(amount * COMMISSION_RATE, MIN_COMMISSION) + amount * STAMP_TAX_RATE
 
         # 在删除持仓前，先用卖出价更新并单独落库，确保当日持仓表记录最终状态
         pos.update_price(price)
@@ -296,9 +286,7 @@ class PaperAccount:
                 }
             )
         self.repo.insert_positions(trade_date, "paper", pos_rows)
-        logger.info(
-            f"模拟盘快照已保存: 总资产{snap.total_value:,.0f} 仓位{len(pos_rows)}只"
-        )
+        logger.info(f"模拟盘快照已保存: 总资产{snap.total_value:,.0f} 仓位{len(pos_rows)}只")
 
     # ===== 恢复 =====
 
@@ -318,27 +306,17 @@ class PaperAccount:
 
             # 校验快照合理性：总资产需 ≈ 现金 + 市值
             expected_total = snap_cash + snap_mv
-            if (
-                snap_total <= 0
-                or abs(snap_total - expected_total) > self._portfolio.initial_cash * 2
-            ):
-                logger.warning(
-                    f"快照数据异常 (total={snap_total:.0f} ≠ cash+mv={expected_total:.0f})，丢弃"
-                )
+            if snap_total <= 0 or abs(snap_total - expected_total) > self._portfolio.initial_cash * 2:
+                logger.warning(f"快照数据异常 (total={snap_total:.0f} ≠ cash+mv={expected_total:.0f})，丢弃")
             else:
                 snap_valid = True
                 self._portfolio.cash = snap_cash
                 snap_peak = snap.get("peak_value", 0) or snap_total
                 if snap_peak <= self._portfolio.initial_cash * 5:
-                    self._portfolio._peak_value = max(
-                        self._portfolio._peak_value, snap_peak
-                    )
+                    self._portfolio._peak_value = max(self._portfolio._peak_value, snap_peak)
                 self._portfolio._prev_total = snap_total
                 snap_date = snap["trade_date"]
-                logger.info(
-                    f"从快照恢复: trade_date={snap_date} cash={snap_cash:,.0f} "
-                    f"total_value={snap_total:,.0f}"
-                )
+                logger.info(f"从快照恢复: trade_date={snap_date} cash={snap_cash:,.0f} total_value={snap_total:,.0f}")
 
         if not snap_valid:
             snap_date = None
@@ -348,20 +326,20 @@ class PaperAccount:
         if not pos_rows:
             pos_rows = self.repo.get_latest_positions("paper")
         if pos_rows:
-            # 过滤今日已卖出的（trade_orders 有 sell 记录）
-            sold_today = set()
+            # 过滤已卖出的（trade_orders 有 sell 记录的，不管哪天卖的都不恢复）
+            sold_codes = set()
             try:
-                orders = self.repo.get_orders_by_date(trade_date, "paper")
-                for o in orders:
-                    if o.get("order_type") == "sell":
-                        sold_today.add(o["stock_code"])
+                # fallback 到历史持仓时，sell 单可能不在今天，需跨日查询
+                codes = [r["stock_code"] for r in pos_rows if r.get("stock_code")]
+                if codes:
+                    sold_codes = self.repo.get_sold_codes(codes, account="paper")
             except Exception:
                 pass
 
             total_cost = 0.0
             for row in pos_rows:
                 code = row["stock_code"]
-                if code in sold_today:
+                if code in sold_codes:
                     logger.info(f"跳过已卖出: {code} {row.get('stock_name', '')}")
                     continue
                 volume = row.get("volume", 0)
@@ -383,16 +361,11 @@ class PaperAccount:
                     holding_days=row.get("holding_days", 0) or 0,
                     pre_close=row.get("pre_close", 0) or 0,
                 )
-                logger.info(
-                    f"恢复持仓: {code} {row.get('stock_name', '')} "
-                    f"{volume}股 成本{avg_cost:.2f}"
-                )
+                logger.info(f"恢复持仓: {code} {row.get('stock_name', '')} {volume}股 成本{avg_cost:.2f}")
             # 扣除已占用资金，确保 cash 与持仓一致
             if not snap_valid:
                 self._portfolio.cash -= total_cost
-                logger.info(
-                    f"无快照恢复：扣除持仓成本 {total_cost:,.0f}，现金余额 {self._portfolio.cash:,.0f}"
-                )
+                logger.info(f"无快照恢复：扣除持仓成本 {total_cost:,.0f}，现金余额 {self._portfolio.cash:,.0f}")
 
         # 无快照时，在持仓恢复后写入正确的初始快照
         if not snap_valid:
@@ -402,9 +375,7 @@ class PaperAccount:
                     "trade_date": trade_date,
                     "total_value": self._portfolio.total_value,
                     "cash": self._portfolio.cash,
-                    "market_value": sum(
-                        p.market_value for p in self._portfolio.positions.values()
-                    ),
+                    "market_value": sum(p.market_value for p in self._portfolio.positions.values()),
                     "daily_pnl": 0,
                     "total_pnl": 0,
                     "drawdown": 0,
@@ -415,8 +386,7 @@ class PaperAccount:
                 }
             )
             logger.info(
-                f"首次运行，写入初始快照: total={self._portfolio.total_value:,.0f} "
-                f"cash={self._portfolio.cash:,.0f}"
+                f"首次运行，写入初始快照: total={self._portfolio.total_value:,.0f} cash={self._portfolio.cash:,.0f}"
             )
 
     # ===== 查询 =====
@@ -500,9 +470,7 @@ class PaperAccount:
             import sqlite3
 
             db = sqlite3.connect(self.db_path)
-            row = db.execute(
-                "SELECT stock_name FROM stock_basic WHERE stock_code=?", (code,)
-            ).fetchone()
+            row = db.execute("SELECT stock_name FROM stock_basic WHERE stock_code=?", (code,)).fetchone()
             db.close()
             if row and row[0]:
                 return row[0]
@@ -532,11 +500,7 @@ class PaperAccount:
             if day_high > 0:
                 pos.day_high = max(getattr(pos, "day_high", 0) or 0, day_high)
             pos_day_high = getattr(pos, "day_high", 0) or pos.current_price
-            dd = (
-                (pos_day_high - pos.current_price) * pos.volume
-                if pos_day_high > 0
-                else 0
-            )
+            dd = (pos_day_high - pos.current_price) * pos.volume if pos_day_high > 0 else 0
             total_drawdown += dd
 
             pos_rows.append(
@@ -564,9 +528,7 @@ class PaperAccount:
                     "trade_date": trade_date,
                     "total_value": p.total_value,
                     "cash": p.cash,
-                    "market_value": sum(
-                        pos.market_value for pos in p.positions.values()
-                    ),
+                    "market_value": sum(pos.market_value for pos in p.positions.values()),
                     "daily_pnl": p.total_value - self._get_today_open_value(),
                     "total_pnl": p.total_pnl,
                     "drawdown": round(total_drawdown, 2),
@@ -644,9 +606,7 @@ class PaperAccount:
             f"   持仓: {pos_count}/{settings.MAX_POSITIONS}  仓位: {pos_pct:.0%}  总资产: {p.total_value:,.0f}"
         )
 
-    def _notify_sell(
-        self, code, name, price, volume, avg_cost, pnl, pnl_pct, commission, reason
-    ):
+    def _notify_sell(self, code, name, price, volume, avg_cost, pnl, pnl_pct, commission, reason):
         p = self._portfolio
         pos_count = len(p.positions)
         pos_pct = (p.total_value - p.cash) / p.total_value if p.total_value > 0 else 0
