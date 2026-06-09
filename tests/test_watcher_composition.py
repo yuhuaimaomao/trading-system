@@ -96,7 +96,8 @@ class MockPosition:
 def _run_scan_loop(w, after_market_side_effect, lunch_break_side_effect=None):
     """Run the scan loop (simulating the while loop inside Watcher.run())."""
     if lunch_break_side_effect is None:
-        lunch_break_side_effect = lambda: False
+        def lunch_break_side_effect():
+            return False
 
     w._after_market = MagicMock(side_effect=after_market_side_effect)
     w._in_lunch_break = MagicMock(side_effect=lunch_break_side_effect)
@@ -557,7 +558,6 @@ class TestScanOrder:
         w = watcher
         w.paper_account.positions = {}  # empty
 
-        after_recv = [False]
         with (
             patch.object(w, "_recv_collector_data") as m_recv,
             patch.object(w, "_check_market_state") as m_state,
@@ -572,7 +572,6 @@ class TestScanOrder:
         w.paper_account.positions = {"000001": MockPosition("000001")}
         w.qmt = None  # causes _get_realtime_prices to return {}
 
-        after_recv = [False]
         with (
             patch.object(w, "_check_market_state") as m_state,
         ):
@@ -775,7 +774,7 @@ class TestLunchBreakTransition:
             with patch("trade.core.watcher.time.sleep") as mock_sleep:
                 Watcher._lunch_break()
                 # Should sleep 1.5 hours = 5400 seconds
-                expected_wait = (dt_time(13, 0).hour * 3600) - (
+                (dt_time(13, 0).hour * 3600) - (
                     lunch_time.hour * 3600 + lunch_time.minute * 60
                 )
                 mock_sleep.assert_called_once()
@@ -944,7 +943,7 @@ class TestCrashRecovery:
 
         w._scan = MagicMock(side_effect=ValueError("Kaboom"))
 
-        with patch("trade.core.watcher.logger") as mock_log:
+        with patch("trade.core.watcher.logger"):
             _run_scan_loop(
                 w,
                 after_market_side_effect=[False, True],

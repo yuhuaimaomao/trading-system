@@ -421,7 +421,7 @@ class TestConcentrationBoundary:
         p = Portfolio(initial_cash=200000)
         p.open_position("000001", "票A", 10000, 10.0)  # 市值 100k
         # 设置 sector_map 使 portfolio.get_sector_exposure 返回值
-        exposure = p.get_sector_exposure({"000001": "科技"})
+        p.get_sector_exposure({"000001": "科技"})
         # 用同一个 sector_map
         ok, msg = check_concentration(
             "000002",

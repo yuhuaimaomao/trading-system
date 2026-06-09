@@ -188,8 +188,8 @@ class TestKDJ:
 
     def test_less_than_n(self):
         """8 个值 < n=9 → 返回默认 50"""
-        h = l = c = [10.0] * 8
-        assert calc_kdj(h, l, c, 9) == {"k": 50.0, "d": 50.0, "j": 50.0}
+        lo = hi = c = [10.0] * 8
+        assert calc_kdj(hi, lo, c, 9) == {"k": 50.0, "d": 50.0, "j": 50.0}
 
     def test_exactly_n(self):
         """正好 9 个值 → 开始计算"""
@@ -202,8 +202,8 @@ class TestKDJ:
 
     def test_flat_prices(self):
         """hh==ll 恒成立 → rsv=50 → K/D/J 收敛到 50"""
-        h = l = c = [50.0] * 30
-        result = calc_kdj(h, l, c)
+        lo = hi = c = [50.0] * 30
+        result = calc_kdj(hi, lo, c)
         assert result["k"] == 50.0
         assert result["d"] == 50.0
         assert result["j"] == 50.0
@@ -367,7 +367,7 @@ class TestATR:
         """TR 数量正好等于 period → 边界，用 SMA 初始化后做一次 Wilder"""
         highs = [10.0 + i * 0.3 for i in range(16)]
         lows = [9.0 - i * 0.2 for i in range(16)]
-        closes = [(h + l) / 2 for h, l in zip(highs, lows)]
+        closes = [(hi + lo) / 2 for hi, lo in zip(highs, lows)]
         atr = calc_atr(highs, lows, closes, 14)
         # 15 个值 → 14 个 TR，正好 period=14
         assert atr > 0
@@ -376,7 +376,7 @@ class TestATR:
         """极端波动 → ATR 大"""
         highs = [100.0] + [100.0 + (-1) ** i * 20 for i in range(1, 20)]
         lows = [80.0] + [80.0 + (-1) ** (i + 1) * 20 for i in range(1, 20)]
-        closes = [(h + l) / 2 for h, l in zip(highs, lows)]
+        closes = [(hi + lo) / 2 for hi, lo in zip(highs, lows)]
         atr = calc_atr(highs, lows, closes, 14)
         assert atr > 10
 
@@ -673,8 +673,6 @@ class TestMACDCross:
 
     def test_cross_outside_lookback_window(self):
         """交叉在 5 天前，但 lookback=3 不检查到"""
-        dif = [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-        dea = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         # 交叉在 i=3, days_ago = 6-3 = 3
         # detect_golden_cross uses lookback=5
         # len=7, start=max(0,7-5-1)=1, 检查 i=2..6

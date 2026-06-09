@@ -19,10 +19,10 @@ from openpyxl.styles import Alignment, Border, Font, Side
 
 from system.utils.logger import get_task_logger
 
-logger = get_task_logger("track")
-
 from data.review.tracker import TrackerRepo
 from system.config.settings import PROJECT_ROOT
+
+logger = get_task_logger("track")
 
 # 项目路径
 BASE_DIR = PROJECT_ROOT
@@ -509,7 +509,7 @@ class StockTracker:
         )
 
         conn = self._connect()
-        cursor = conn.cursor()
+        conn.cursor()
 
         excel_count = 0
         db_count = 0

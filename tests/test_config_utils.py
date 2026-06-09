@@ -600,7 +600,6 @@ class TestDnsBypass:
 
     def test_install_is_idempotent(self):
         """install() 两次调用不报错，socket 函数是同一个"""
-        orig = socket.getaddrinfo
         self.D.install()
         after_first = socket.getaddrinfo
         self.D.install()
@@ -723,7 +722,7 @@ class TestLogger:
         """get_system_logger 无任务上下文时使用原名"""
         self.LG.set_current_task("")  # 清除上下文
         # 确保当前任务为 None
-        orig_task = self.LG.get_current_task()
+        self.LG.get_current_task()
         # 重新设 None
         import contextvars
 

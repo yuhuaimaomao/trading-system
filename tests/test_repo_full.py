@@ -1770,7 +1770,7 @@ class TestTransactionHandling:
                 "account": "paper",
             }
         )
-        oid1 = repo_o.insert(
+        repo_o.insert(
             {
                 "trade_date": "2026-06-01",
                 "order_time": now,
@@ -1782,7 +1782,7 @@ class TestTransactionHandling:
                 "account": "paper",
             }
         )
-        oid2 = repo_o.insert(
+        repo_o.insert(
             {
                 "trade_date": "2026-06-01",
                 "order_time": now,

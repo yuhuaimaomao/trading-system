@@ -1153,11 +1153,10 @@ class TestMultiDayContinuity:
         sim.account._persist_state()
         day1_cost = 50.0 * 200
         day1_commission = max(day1_cost * 0.000085, 5.0)
-        cash_after_buy = DEFAULT_CAPITAL - day1_cost - day1_commission
+        DEFAULT_CAPITAL - day1_cost - day1_commission
 
         # 收盘落库
         sim.account.snapshot("2026-06-01")
-        cash_at_close = sim.account.cash
 
         # Day 2: 恢复并卖出
         sim.restore_next_day("2026-06-02")
@@ -1703,13 +1702,13 @@ class TestRegimeChangesDuringDay:
             risk_level="extreme",
             allow_buy=False,
         )
-        buys_before = len(sim.decisions)
+        len(sim.decisions)
         for i in range(10, 20):
             sim.run_scan_at(i * 60.0, {"000001": 50.0}, index_price=2800.0)
 
         buys_during_panic = len([d for d in sim.decisions if d["type"] == "buy"])
         # 恐慌期间不应该有新买入
-        panic_new_buys = buys_during_panic - buys_before_panic
+        buys_during_panic - buys_before_panic
         # 但注意：恐慌前买入的信号已被触发，恐慌期间不会重复触发
         # 如果信号已被触发（bought），它已经在 _triggered_ids 中
 

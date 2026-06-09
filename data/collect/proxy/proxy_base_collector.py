@@ -384,7 +384,6 @@ class ProxyBaseCollector(ProxyRequester):
                 total_pages = (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE
                 self.cache_data["total_pages"] = total_pages
                 # 更新循环上限
-                max_pages = total_pages
                 self.logger.info(f"📊 共 {total} 条数据，共 {total_pages} 页（动态调整上限）")
 
                 # 如果只有 1 页，直接停止
@@ -674,7 +673,7 @@ class ProxyBaseCollector(ProxyRequester):
             self.logger.error("❌ 缓存文件损坏，删除重建")
             try:
                 os.remove(self.CACHE_FILE)
-            except:
+            except OSError:
                 pass
             return {
                 "trade_date": self.trade_date,

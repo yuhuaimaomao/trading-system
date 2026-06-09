@@ -543,7 +543,7 @@ class TestStopLossSim:
         ]
         sim.run(prices_seq)
 
-        summary = sim.summarize()
+        sim.summarize()
         assert "000001" not in sim.account.positions, "持仓应已关闭"
         sells = [d for d in sim.decisions if d["type"] == "sell"]
         assert len(sells) == 1, "应有 1 笔卖出"
@@ -610,7 +610,7 @@ class TestTakeProfitSim:
             ]
         )
 
-        summary = sim.summarize()
+        sim.summarize()
         assert "000001" not in sim.account.positions, "持仓应已关闭"
         sells = [d for d in sim.decisions if d["type"] == "sell"]
         assert len(sells) == 1, "应有 1 笔卖出"
@@ -672,7 +672,7 @@ class TestTrailingStopSim:
             ]
         )
 
-        summary = sim.summarize()
+        sim.summarize()
         assert "000001" not in sim.account.positions, "持仓应已关闭"
         sells = [d for d in sim.decisions if d["type"] == "sell"]
         assert len(sells) == 1, "应有 1 笔卖出"
@@ -1099,8 +1099,8 @@ class TestSnapshotConsistency:
 
         # 检查最后的内存快照
         if len(sim.snapshots) >= 2:
-            first_dp = sim.snapshots[0]["daily_pnl"]
-            last_dp = sim.snapshots[-1]["daily_pnl"]
+            sim.snapshots[0]["daily_pnl"]
+            sim.snapshots[-1]["daily_pnl"]
             # 时间序列上每天单一基准，没有"中间每天"的概念
             pass
         # 验证 total_pnl 跨快照一致性
@@ -1127,7 +1127,7 @@ class TestSnapshotConsistency:
                 # daily_pnl 是本次拍照时的日盈亏
                 # total_pnl 是累计盈亏
                 assert snap2[0] >= snap1[0], "价格上涨后 total_value 不降"
-                total_diff = snap2[0] - snap1[0]
+                snap2[0] - snap1[0]
                 # 由于没有持仓变动，daily_pnl 的差异 ≈ 市值变化
         finally:
             conn.commit()

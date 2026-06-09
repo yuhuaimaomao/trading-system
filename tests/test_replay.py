@@ -334,7 +334,7 @@ class TestScenarioEngineReplay:
                 ema12_pos=ema12_pos,
                 bounce_from_low=bounce_pct,
             )
-            outlook = engine.update(micro)
+            engine.update(micro)
             assert abs(sum(engine.probs.values()) - 1.0) < 0.01, (
                 f"{trade_date} 迭代 {i}: 概率和 = {sum(engine.probs.values()):.4f}"
             )

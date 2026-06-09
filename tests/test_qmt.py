@@ -1010,7 +1010,7 @@ class TestQMTCollector:
         """_fetch_and_push 获取全市场快照 + 5 个指数并推送。"""
         c = mock_deps["collector"]
         mock_qmt = mock_deps["mock_qmt"]
-        mock_sock = mock_deps["mock_sock"]
+        mock_deps["mock_sock"]
 
         # mock all_quotes — 返回全市场数据
         mock_qmt.all_quotes.return_value = {
@@ -1109,7 +1109,7 @@ class TestQMTCollector:
         """指数获取全部失败时只推送 market。"""
         c = mock_deps["collector"]
         mock_qmt = mock_deps["mock_qmt"]
-        mock_sock = mock_deps["mock_sock"]
+        mock_deps["mock_sock"]
 
         mock_qmt.all_quotes.return_value = {
             "success": True,
@@ -1317,7 +1317,7 @@ class TestQMTCollector:
             patch.object(c, "_init_klines") as mock_init,
             patch.object(c, "run") as mock_run,
             patch.object(c, "_fetch_and_push") as mock_fetch,
-            patch.object(c, "_in_trading_hours", side_effect=[True, False]) as mock_in,
+            patch.object(c, "_in_trading_hours", side_effect=[True, False]),
             patch.object(c, "_after_market", return_value=True),
         ):
             c.run_forever()
@@ -1332,9 +1332,9 @@ class TestQMTCollector:
         c = mock_deps["collector"]
 
         with (
-            patch.object(c, "_init_klines") as mock_init,
-            patch.object(c, "_fetch_and_push") as mock_fetch,
-            patch.object(c, "_in_trading_hours", return_value=False) as mock_in,
+            patch.object(c, "_init_klines"),
+            patch.object(c, "_fetch_and_push"),
+            patch.object(c, "_in_trading_hours", return_value=False),
             patch.object(c, "_after_market", return_value=True),
         ):
             # time.sleep 在盘前循环中不会无限 — _after_market 立即返回 True

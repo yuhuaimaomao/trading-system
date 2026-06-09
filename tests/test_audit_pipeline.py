@@ -745,7 +745,7 @@ class TestStrategyAIAuditor:
 
         repo = TradeRepository(db_path=audit_db_path)
         lessons = repo.get_active_lessons()
-        assert any(l["lesson_key"] == "saved_lesson" for l in lessons)
+        assert any(ls["lesson_key"] == "saved_lesson" for ls in lessons)
 
         improvements = repo.get_pending_improvements()
         assert any("change X" in imp["suggested_change"] for imp in improvements)

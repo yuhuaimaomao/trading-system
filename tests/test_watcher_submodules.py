@@ -1057,7 +1057,7 @@ class TestPositionRiskMixin:
             patch(
                 "trade.exec.paper.executor.execute_paper_sell",
                 return_value={"success": True},
-            ) as mock_sell,
+            ),
             patch.object(watcher, "_log_stop_trigger"),
             patch("trade.risk.position_risk.settings") as mock_s,
         ):

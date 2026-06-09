@@ -745,7 +745,6 @@ class TestClassifyMarketPattern:
 
     def test_double_bottom_w(self):
         """W 型双底在 classify 层应最终匹配"""
-        n = 80
         px = (
             [100.0] * 20
             + [100.0 - i * 0.3 for i in range(10)]
@@ -762,7 +761,6 @@ class TestClassifyMarketPattern:
 
     def test_double_top_m(self):
         """M 型双顶在 classify 层应最终匹配"""
-        n = 60
         px = (
             [100.0] * 10
             + [100.0 + i * 0.2 for i in range(10)]
@@ -780,7 +778,6 @@ class TestClassifyMarketPattern:
 
     def test_fishing_line(self):
         """全天缓慢推升尾盘暴跌 -> fishing_line"""
-        n = 50
         px = [100.0 + i * 0.025 for i in range(40)] + [
             101.0 - i * 0.08 for i in range(10)
         ]

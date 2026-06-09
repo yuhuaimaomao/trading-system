@@ -529,14 +529,8 @@ class MockTradeRepository:
     def get_review_picks_latest(self) -> list[dict]:
         return []
 
-    def get_signal_for_pos_meta(self, code: str) -> dict | None:
-        return None
-
     def get_buy_dates(self, codes: list[str]) -> dict[str, str]:
         return {}
-
-    def get_bought_signals_with_entry(self) -> list[dict]:
-        return []
 
     def get_daily_indicators(self, code: str) -> dict | None:
         return None
@@ -802,7 +796,7 @@ class FaultInjectionHarness:
         # 给 paper_account 注入仓库
         self.watcher.paper_account.repo = self.mock_repo
 
-        before_positions = len(self.watcher.paper_account.positions)
+        len(self.watcher.paper_account.positions)
         before_alerts = len(self.mock_telegram.messages)
 
         try:
@@ -1005,7 +999,7 @@ class TestQMTFailures:
         )
         harness.watcher._watch_codes_stale = True
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         assert harness.mock_qmt._call_count >= 1, "QMT 应被调用了"
@@ -1035,12 +1029,12 @@ class TestQMTFailures:
         harness.watcher._watch_codes_stale = True
 
         harness.inject_qmt_failure("empty")
-        r1 = harness.run_scan_round()
+        harness.run_scan_round()
         assert harness._log_handler.has_message("无实时行情")
 
         harness._log_handler.clear()
         harness.inject_qmt_failure(None)  # 恢复
-        r2 = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         # 恢复后不应再有跳过警告（用已恢复配置再跑，看是否停发跳过警告）
@@ -1084,7 +1078,7 @@ class TestQMTFailures:
         harness.watcher._watch_codes_stale = True
         harness.inject_qmt_failure("timeout")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         assert harness._log_handler.has_message("QMT 行情获取失败", logging.WARNING), (
@@ -1101,7 +1095,7 @@ class TestQMTFailures:
         w._data_ready = True
         w._last_db_ts = time.time() - 200  # 超过 3 分钟 (180s)
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         # _check_data_stale 设 data_ready=False
         assert not w._data_ready, "陈旧数据应暂停 data_ready"
@@ -1119,7 +1113,7 @@ class TestQMTFailures:
         harness.mock_qmt._quotes["002371"]["lastPrice"] = 0.0
         harness.mock_qmt._quotes["002371"]["price"] = 0.0
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         # 零价格不加入 _recent_prices
@@ -1147,7 +1141,7 @@ class TestAIFailures:
         """AI 超时 → 异常被捕获 → 不阻塞扫描。"""
         harness.inject_ai_failure("timeout")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         assert harness.mock_ai._chat_count >= 0  # 可能没触发到 AI 调用，但不应崩溃
@@ -1159,7 +1153,7 @@ class TestAIFailures:
         """AI 返回空 → 优雅处理，无信号生成。"""
         harness.inject_ai_failure("empty")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         # AI 空响应不应触发任何信号
@@ -1172,7 +1166,7 @@ class TestAIFailures:
         """AI 返回乱码 JSON → 解析器容错 → 返回空。"""
         harness.inject_ai_failure("malformed_json")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
 
@@ -1677,7 +1671,7 @@ class TestCombinedFaults:
         harness.inject_qmt_failure("timeout")
         harness.inject_db_failure("locked")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         # 至少应有超时警告
@@ -1692,7 +1686,7 @@ class TestCombinedFaults:
         harness.inject_telegram_failure("unreachable")
         harness.inject_ai_failure("timeout")
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
 
@@ -1705,7 +1699,7 @@ class TestCombinedFaults:
         w._data_ready = True
 
         w._collector_client = harness.mock_collector
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         assert not w._data_ready, "组合故障后 data_ready 应为 False"
         harness.assert_no_crash()
@@ -1771,7 +1765,7 @@ class TestMainLoopFaultTolerance:
     def test_run_without_qmt(self, harness):
         """无 QMT 启动 → 返回空 → 跳过。"""
         harness.watcher.qmt = None
-        result = harness.run_scan_round()
+        harness.run_scan_round()
         harness.assert_no_crash()
 
     # ── 8c. 空监控列表 ──
@@ -1785,7 +1779,7 @@ class TestMainLoopFaultTolerance:
         w._cached_db_watch_codes = set()
         w._watch_codes_stale = True
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
 
         harness.assert_no_crash()
         # 空列表时 _scan 应提前 return
@@ -1810,7 +1804,7 @@ class TestExtremeInputs:
         harness.watcher._cached_db_watch_codes = set(many_codes)
         harness.watcher._watch_codes_stale = True
 
-        result = harness.run_scan_round()
+        harness.run_scan_round()
         harness.assert_no_crash()
 
     # ── 9b. 负价格（QMT 异常返回）──
@@ -1833,7 +1827,6 @@ class TestExtremeInputs:
     # (验证: 任何 AI 生成信号时的 stock_code 验证)
     def test_hallucinated_stock_code(self, harness):
         """AI 返回不存在代码 → 验证逻辑过滤。"""
-        w = harness.watcher
 
         # 模拟 AI 返回非法代码
         fake_signal = {

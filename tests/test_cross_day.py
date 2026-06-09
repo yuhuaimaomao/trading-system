@@ -296,7 +296,7 @@ class TestDailyPnlReset:
         """累计总盈亏跨日延续（不受 snapshot reset 影响）。"""
         acc1 = _account(db_path, "2026-06-01")
         acc1.buy("000001", "平安银行", 50.0, 100, source="test")
-        buy_comm = _buy_commission(50.0, 100)
+        _buy_commission(50.0, 100)
         day1_total_pnl = acc1.total_pnl  # = total_value - 100000 = -buy_comm (approx)
         acc1.snapshot("2026-06-01")
 
@@ -326,12 +326,10 @@ class TestDailyPnlReset:
         assert acc2.daily_pnl == pytest.approx(0, abs=0.01)
 
         # total_pnl 相对 initial_capital，不受 snapshot 影响
-        day1_pnl = acc2.total_pnl  # = Day1 结束时的累计盈亏
         assert acc2.total_pnl != 0, "累计盈亏不应因换日归零"
 
         # 新日 snapshot 后 daily_pnl 以新基准计算
         acc2.update_prices({"000001": 60.0})
-        daily_pnl_before_snap = acc2.daily_pnl  # 500
         total_pnl_before_snap = acc2.total_pnl  # day1_pnl + 500
 
         acc2.snapshot("2026-06-02")

@@ -13,6 +13,11 @@ from stock.signals import (
     StrategyAiDecision,
     StrategyAiResult,
 )
+from stock.stock_schemas import (
+    AnalysisResult,
+    StockAnalysisReport,
+    StockAnalysisRequest,
+)
 from trade.core.scan_state import (
     MarketOutlook,
     MarketRegime,
@@ -1165,12 +1170,6 @@ class TestScanState:
 # ═══════════════════════════════════════════════════════════════
 # Analysis schemas (from stock/schemas.py — light coverage)
 # ═══════════════════════════════════════════════════════════════
-
-from stock.stock_schemas import (
-    AnalysisResult,
-    StockAnalysisReport,
-    StockAnalysisRequest,
-)
 
 
 class TestAnalysisSchemas:
