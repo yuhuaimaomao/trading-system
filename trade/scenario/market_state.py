@@ -3,11 +3,11 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import sqlite3
 import time
 from datetime import datetime
 from datetime import time as dt_time
 
+from data._base import connect
 from system.config import settings
 from system.utils.logger import get_trade_logger
 from trade.core.scan_state import MarketOutlook, MarketRegime, MicroSignals
@@ -71,9 +71,7 @@ class MarketStateMixin:
         if p.drawdown > 0.15:
             self._max_drawdown_alerted = True
             self._alert(
-                f"🚨 最大回撤警报\n"
-                f"   总资产: {p.total_value:.0f}  回撤: {p.drawdown:.1%}\n"
-                f"   → 建议立即清仓所有持仓"
+                f"🚨 最大回撤警报\n   总资产: {p.total_value:.0f}  回撤: {p.drawdown:.1%}\n   → 建议立即清仓所有持仓"
             )
 
     # ━━━━━━━━ 市场宽度 ━━━━━━━━
@@ -238,9 +236,7 @@ class MarketStateMixin:
 
         # 第二底部必须是真实的谷（周围有显著下跌），不是上升趋势中的微小回调
         valley_pos = bottom2[0]
-        surrounding = second_half[
-            max(0, valley_pos - 3) : min(len(second_half), valley_pos + 4)
-        ]
+        surrounding = second_half[max(0, valley_pos - 3) : min(len(second_half), valley_pos + 4)]
         if surrounding:
             valley_depth = (max(surrounding) - b2) / b2 if b2 > 0 else 0
             if valley_depth < 0.005:
@@ -250,24 +246,12 @@ class MarketStateMixin:
         if self._market_turnovers and len(self._market_turnovers) >= n:
             vol1_idx = bottom1[0]
             vol2_idx = mid + bottom2[0]
-            vol_data = (
-                self._market_turnovers[-n:]
-                if len(self._market_turnovers) >= n
-                else self._market_turnovers
-            )
+            vol_data = self._market_turnovers[-n:] if len(self._market_turnovers) >= n else self._market_turnovers
             if vol1_idx < len(vol_data) and vol2_idx < len(vol_data):
-                vol_around_b1 = vol_data[
-                    max(0, vol1_idx - 2) : min(len(vol_data), vol1_idx + 3)
-                ]
-                vol_around_b2 = vol_data[
-                    max(0, vol2_idx - 2) : min(len(vol_data), vol2_idx + 3)
-                ]
-                avg_vol1 = (
-                    sum(vol_around_b1) / len(vol_around_b1) if vol_around_b1 else 0
-                )
-                avg_vol2 = (
-                    sum(vol_around_b2) / len(vol_around_b2) if vol_around_b2 else 0
-                )
+                vol_around_b1 = vol_data[max(0, vol1_idx - 2) : min(len(vol_data), vol1_idx + 3)]
+                vol_around_b2 = vol_data[max(0, vol2_idx - 2) : min(len(vol_data), vol2_idx + 3)]
+                avg_vol1 = sum(vol_around_b1) / len(vol_around_b1) if vol_around_b1 else 0
+                avg_vol2 = sum(vol_around_b2) / len(vol_around_b2) if vol_around_b2 else 0
                 # 二底量高于一底 = 卖压未衰竭，假双底
                 if avg_vol1 > 0 and avg_vol2 > avg_vol1 * 1.1:
                     return False
@@ -342,9 +326,7 @@ class MarketStateMixin:
 
     # ━━━━━━━━ 低开高走 ━━━━━━━━
 
-    def _detect_gap_down_recover(
-        self, px, n, short_chg, pos_in_range, range_pct
-    ) -> bool:
+    def _detect_gap_down_recover(self, px, n, short_chg, pos_in_range, range_pct) -> bool:
         """跳空低开后持续回升，开盘价接近日内低点，当前价接近日内高点。"""
         if range_pct < 0.008:
             return False
@@ -407,20 +389,14 @@ class MarketStateMixin:
         first_80pct = px[: int(n * 0.8)]
         if len(first_80pct) < 15:
             return False
-        first_chg = (
-            (first_80pct[-1] - first_80pct[0]) / first_80pct[0]
-            if first_80pct[0] > 0
-            else 0
-        )
+        first_chg = (first_80pct[-1] - first_80pct[0]) / first_80pct[0] if first_80pct[0] > 0 else 0
         if first_chg < 0.005:  # 前半段涨幅不够
             return False
         # 后半段：急剧下跌
         last_20pct = px[int(n * 0.8) :]
         if len(last_20pct) < 5:
             return False
-        last_chg = (
-            (last_20pct[-1] - last_20pct[0]) / last_20pct[0] if last_20pct[0] > 0 else 0
-        )
+        last_chg = (last_20pct[-1] - last_20pct[0]) / last_20pct[0] if last_20pct[0] > 0 else 0
         return last_chg < -0.005
 
     # ━━━━━━━━ 宽幅震荡 ━━━━━━━━
@@ -521,7 +497,7 @@ class MarketStateMixin:
     def _check_multi_day_downtrend(self) -> bool:
         """检查是否连续多日下跌（从 index_snapshots 查近3天）。"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT DISTINCT trade_date FROM index_snapshots
                    ORDER BY trade_date DESC LIMIT 3"""
@@ -532,7 +508,7 @@ class MarketStateMixin:
             # 检查最近3天每日的收盘价变化
             prices = []
             for (td,) in rows:
-                c2 = sqlite3.connect(self.db_path)
+                c2 = connect(self.db_path)
                 r = c2.execute(
                     "SELECT price FROM index_snapshots WHERE trade_date=? ORDER BY ts DESC LIMIT 1",
                     (td,),
@@ -565,14 +541,10 @@ class MarketStateMixin:
         from trade.detect.micro_signals import extract
 
         # 状态读取（由 Mixin 维护）
-        self._scenario_recent_lows.append(
-            self._index_prices[-1] if self._index_prices else 0
-        )
+        self._scenario_recent_lows.append(self._index_prices[-1] if self._index_prices else 0)
         if len(self._scenario_recent_lows) > 30:
             self._scenario_recent_lows.pop(0)
-        self._scenario_recent_highs.append(
-            self._index_prices[-1] if self._index_prices else 0
-        )
+        self._scenario_recent_highs.append(self._index_prices[-1] if self._index_prices else 0)
         if len(self._scenario_recent_highs) > 20:
             self._scenario_recent_highs.pop(0)
 
@@ -634,9 +606,7 @@ class MarketStateMixin:
         if hi > 0 and hi > cur:
             candidates.append((hi, "日内高点"))
 
-        support = sorted(
-            set(round(v, 2) for v, _ in candidates if v < cur), reverse=True
-        )
+        support = sorted(set(round(v, 2) for v, _ in candidates if v < cur), reverse=True)
         resistance = sorted(set(round(v, 2) for v, _ in candidates if v > cur))
         return support[:3], resistance[:3]
 
@@ -984,9 +954,7 @@ class MarketStateMixin:
 
         # —— V反转/GapDown恢复解锁：反转信号优先于下游安全闸 ——
         _reversal_patterns = {"v_reversal", "gap_down_recover"}
-        _vrev_override = (
-            pattern in _reversal_patterns and regime.allow_buy
-        )
+        _vrev_override = pattern in _reversal_patterns and regime.allow_buy
 
         # —— 涨跌比两极分化追加检测 ——
         if regime.allow_buy and regime.breadth_healthy and not _vrev_override:
@@ -1059,7 +1027,7 @@ class MarketStateMixin:
                     self._panic_fade_alerted = True
                     self._alert(
                         f"🟢 恐慌衰减\n"
-                        f"   开盘后回升 {_fade['recovery_pct']*100:.1f}%  "
+                        f"   开盘后回升 {_fade['recovery_pct'] * 100:.1f}%  "
                         f"涨家+{_fade['breadth_delta']}\n"
                         f"   → 恢复买入信号（保守仓位 {regime.position_mult:.0%}）"
                     )
@@ -1096,19 +1064,11 @@ class MarketStateMixin:
             prev = getattr(self, "_last_logged_pattern", "")
             if pattern != prev and self._scan_count > 0:
                 top3 = sorted(
-                    [
-                        (k, v[-1])
-                        for k, v in self._sector_trend_history.items()
-                        if len(v) >= 3
-                    ],
+                    [(k, v[-1]) for k, v in self._sector_trend_history.items() if len(v) >= 3],
                     key=lambda x: -x[1],
                 )[:3]
                 bottom3 = sorted(
-                    [
-                        (k, v[-1])
-                        for k, v in self._sector_trend_history.items()
-                        if len(v) >= 3
-                    ],
+                    [(k, v[-1]) for k, v in self._sector_trend_history.items() if len(v) >= 3],
                     key=lambda x: x[1],
                 )[:3]
                 self._log_regime_change(
@@ -1117,16 +1077,8 @@ class MarketStateMixin:
                     prev_pattern=prev,
                     index_price=index_price,
                     index_change=change_pct,
-                    up_count=sum(
-                        1
-                        for s in self._market_snapshot.values()
-                        if float(s.get("changePct", 0)) > 0
-                    ),
-                    down_count=sum(
-                        1
-                        for s in self._market_snapshot.values()
-                        if float(s.get("changePct", 0)) < 0
-                    ),
+                    up_count=sum(1 for s in self._market_snapshot.values() if float(s.get("changePct", 0)) > 0),
+                    down_count=sum(1 for s in self._market_snapshot.values() if float(s.get("changePct", 0)) < 0),
                     top_sectors=[[n, round(v, 2)] for n, v in top3],
                     worst_sectors=[[n, round(v, 2)] for n, v in bottom3],
                 )
@@ -1168,10 +1120,7 @@ class MarketStateMixin:
         if count >= getattr(settings, "REGIME_STABLE_SCANS", 5):
             self._regime_pending_pattern = ""
             self._regime_confirm_count = 0
-            logger.info(
-                f"regime 确认切换: {current_pattern} → {raw_pattern} "
-                f"(经 {count} 轮确认)"
-            )
+            logger.info(f"regime 确认切换: {current_pattern} → {raw_pattern} (经 {count} 轮确认)")
             return raw_pattern
 
         return current_pattern
@@ -1180,9 +1129,7 @@ class MarketStateMixin:
         """5 分钟内 regime 切换超过 REGIME_JITTER_MAX 次时记录告警。"""
         from system.config import settings
 
-        current_pattern = (
-            getattr(self._regime, "pattern", "") if hasattr(self, "_regime") else ""
-        )
+        current_pattern = getattr(self._regime, "pattern", "") if hasattr(self, "_regime") else ""
 
         if pattern == current_pattern:
             return
@@ -1353,9 +1300,7 @@ class MarketStateMixin:
         except (TypeError, ValueError):
             recovery_min = 0.005
         if recovery_pct < recovery_min:
-            result["reasons"].append(
-                f"指数回升不足: {recovery_pct*100:.2f}% < {recovery_min*100:.1f}%"
-            )
+            result["reasons"].append(f"指数回升不足: {recovery_pct * 100:.2f}% < {recovery_min * 100:.1f}%")
             return result
 
         # 条件 C：近期宽度改善（滚动窗口）
@@ -1369,13 +1314,9 @@ class MarketStateMixin:
             down_delta = rolling.get("down_delta", 0)
             result["breadth_delta"] = up_delta
             if up_delta >= breadth_improve_min:
-                result["reasons"].append(
-                    f"宽度改善: 涨家+{up_delta} 跌家{down_delta:+d}"
-                )
+                result["reasons"].append(f"宽度改善: 涨家+{up_delta} 跌家{down_delta:+d}")
             else:
-                result["reasons"].append(
-                    f"宽度改善不足: 涨家+{up_delta} < {breadth_improve_min}"
-                )
+                result["reasons"].append(f"宽度改善不足: 涨家+{up_delta} < {breadth_improve_min}")
                 return result
         else:
             result["reasons"].append("滚动宽度数据不足或无改善")
@@ -1385,7 +1326,7 @@ class MarketStateMixin:
         short_n = min(10, len(prices) // 2)
         if short_n >= 3:
             recent = prices[-short_n:]
-            earlier = prices[-2 * short_n:-short_n] if len(prices) >= 2 * short_n else prices[:short_n]
+            earlier = prices[-2 * short_n : -short_n] if len(prices) >= 2 * short_n else prices[:short_n]
             avg_recent = sum(recent) / len(recent)
             avg_earlier = sum(earlier) / len(earlier)
             if avg_recent <= avg_earlier:
@@ -1394,8 +1335,7 @@ class MarketStateMixin:
 
         result["faded"] = True
         result["reasons"].append(
-            f"恐慌衰减: 开盘{minutes_since_open:.0f}分 回升{recovery_pct*100:.2f}% "
-            f"涨家+{result['breadth_delta']}"
+            f"恐慌衰减: 开盘{minutes_since_open:.0f}分 回升{recovery_pct * 100:.2f}% 涨家+{result['breadth_delta']}"
         )
         return result
 
@@ -1473,9 +1413,7 @@ class MarketStateMixin:
                 st["macd_cross"] = cross_type
                 days = recent_cross["days_ago"]
                 label = "金叉" if cross_type == "golden" else "死叉"
-                alerts.append(
-                    f"MACD{label}({days}根前) DIF={macd['dif']:.2f} DEA={macd['dea']:.2f}"
-                )
+                alerts.append(f"MACD{label}({days}根前) DIF={macd['dif']:.2f} DEA={macd['dea']:.2f}")
 
         for period, val, key in [(6, rsi6, "rsi6_zone"), (12, rsi12, "rsi12_zone")]:
             # 滞后带防止 RSI 在阈值附近反复横跳刷屏
@@ -1488,9 +1426,7 @@ class MarketStateMixin:
             elif val > 80 and prev_zone != "overbought":
                 zone = "overbought"
                 label = f"RSI{period}超买({val:.1f})"
-            elif prev_zone == "oversold" and val > 25:
-                zone = "normal"
-            elif prev_zone == "overbought" and val < 75:
+            elif prev_zone == "oversold" and val > 25 or prev_zone == "overbought" and val < 75:
                 zone = "normal"
             else:
                 # 滞后期内保持原状态，不触发告警
@@ -1511,9 +1447,7 @@ class MarketStateMixin:
         elif kdj["j"] > 100 and prev_kdj_zone != "overbought":
             j_zone = "overbought"
             j_label = f"KDJ J值超买(K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f})"
-        elif prev_kdj_zone == "oversold" and kdj["j"] > 10:
-            j_zone = "normal"
-        elif prev_kdj_zone == "overbought" and kdj["j"] < 90:
+        elif prev_kdj_zone == "oversold" and kdj["j"] > 10 or prev_kdj_zone == "overbought" and kdj["j"] < 90:
             j_zone = "normal"
         else:
             j_zone = prev_kdj_zone  # 滞后期保持，不触发变化
@@ -1534,9 +1468,7 @@ class MarketStateMixin:
             if kd_cross and st["kdj_cross"] != kd_cross:
                 st["kdj_cross"] = kd_cross
                 label = "KDJ金叉" if kd_cross == "golden" else "KDJ死叉"
-                alerts.append(
-                    f"{label} K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}"
-                )
+                alerts.append(f"{label} K={kdj['k']:.1f} D={kdj['d']:.1f} J={kdj['j']:.1f}")
 
         recent_div = divergences[-1] if divergences else None
         if recent_div:
@@ -1581,11 +1513,7 @@ class MarketStateMixin:
         if window < 5:
             window = len(prices) // 2
         recent = prices[-window:]
-        earlier = (
-            prices[-2 * window : -window]
-            if len(prices) >= 2 * window
-            else prices[:window]
-        )
+        earlier = prices[-2 * window : -window] if len(prices) >= 2 * window else prices[:window]
         avg_recent = sum(recent) / len(recent)
         avg_earlier = sum(earlier) / len(earlier) if earlier else avg_recent
         # 涨跌幅基准应是昨收而非 prices[0]（开盘跳空会导致偏差）
@@ -1602,12 +1530,8 @@ class MarketStateMixin:
     def _index_tech_advice(self, alerts: list[str], st: dict) -> str:
         has_div_bottom = any("底背离" in a for a in alerts)
         has_div_top = any("顶背离" in a for a in alerts)
-        has_rsi_os = (
-            st.get("rsi6_zone") == "oversold" or st.get("rsi12_zone") == "oversold"
-        )
-        has_rsi_ob = (
-            st.get("rsi6_zone") == "overbought" or st.get("rsi12_zone") == "overbought"
-        )
+        has_rsi_os = st.get("rsi6_zone") == "oversold" or st.get("rsi12_zone") == "oversold"
+        has_rsi_ob = st.get("rsi6_zone") == "overbought" or st.get("rsi12_zone") == "overbought"
         macd_cross = st.get("macd_cross")
 
         if has_div_bottom:
@@ -1633,7 +1557,7 @@ class MarketStateMixin:
             return self._ma_baseline_cache
 
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             # 取每个交易日的收盘价（当日最后一条记录），最近 30 天
             rows = conn.execute(
                 """SELECT trade_date, close_price
@@ -1673,7 +1597,7 @@ class MarketStateMixin:
     def _get_index_ma60(self) -> float:
         """获取上证指数 MA60（从 index_realtime_data 日线收盘价计算）。"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT trade_date, close_price
                    FROM index_realtime_data
@@ -1743,36 +1667,22 @@ class MarketStateMixin:
         if pre_close > 0:
             change_from_first = (current - pre_close) / pre_close * 100
         else:
-            change_from_first = (
-                (prices[-1] - prices[0]) / prices[0] * 100 if prices[0] else 0
-            )
+            change_from_first = (prices[-1] - prices[0]) / prices[0] * 100 if prices[0] else 0
 
         bar_count = min(10, len(closes))
         recent_bars = []
         for i in range(len(closes) - bar_count + 1, len(closes)):
-            chg = (
-                (closes[i] - closes[i - 1]) / closes[i - 1] * 100
-                if closes[i - 1]
-                else 0
-            )
+            chg = (closes[i] - closes[i - 1]) / closes[i - 1] * 100 if closes[i - 1] else 0
             recent_bars.append(f"{closes[i]:.2f}({chg:+.1f}%)")
 
         ma_parts = []
         for label, ma_val in [("MA5", ma5), ("MA10", ma10), ("MA20", ma20)]:
             if ma_val and ma_val > 0:
                 pos = "上方" if current > ma_val else "下方"
-                ma_parts.append(
-                    f"{label}={ma_val:.0f}({pos}{abs(current - ma_val):.0f})"
-                )
+                ma_parts.append(f"{label}={ma_val:.0f}({pos}{abs(current - ma_val):.0f})")
 
-        cross_info = (
-            ", ".join([f"{c['days_ago']}根前{c['type']}" for c in crosses])
-            if crosses
-            else "近期无交叉"
-        )
-        div_info = (
-            ", ".join([d["type"] for d in divergences]) if divergences else "无背离"
-        )
+        cross_info = ", ".join([f"{c['days_ago']}根前{c['type']}" for c in crosses]) if crosses else "近期无交叉"
+        div_info = ", ".join([d["type"] for d in divergences]) if divergences else "无背离"
 
         prompt = f"""分析上证指数当前走势，预判方向和企稳点位。
 

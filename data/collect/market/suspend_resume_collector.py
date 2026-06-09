@@ -108,15 +108,12 @@ class SuspendResumeCollector(ProxyBaseCollector):
             from system.config.settings import DATABASE_PATH
 
             trade_date = self.trade_date
-            trade_time = datetime.now().strftime("%H:%M:%S")
 
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
 
             # 删除旧数据
-            cursor.execute(
-                "DELETE FROM stock_suspend_resume WHERE trade_date = ?", (trade_date,)
-            )
+            cursor.execute("DELETE FROM stock_suspend_resume WHERE trade_date = ?", (trade_date,))
             conn.commit()
 
             save_count = 0

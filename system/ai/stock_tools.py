@@ -5,10 +5,10 @@
 """
 
 import contextlib
-import sqlite3
 from typing import Dict, List
 
-from system.config.settings import DATABASE_PATH
+from data._base import connect
+from system.config.settings import DATABASE_PATH, STORAGE_PATH
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("ai")
@@ -43,7 +43,7 @@ class StockTools:
             }
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             # 查询最新交易日的数据
@@ -114,7 +114,7 @@ class StockTools:
             }
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             cursor.execute(
@@ -192,7 +192,7 @@ class StockTools:
             股票列表
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             # 查询最新交易日
@@ -259,7 +259,7 @@ class StockTools:
             }
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             if not trade_date:
@@ -377,7 +377,7 @@ class StockTools:
             }
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             if trade_date:
@@ -439,7 +439,7 @@ class StockTools:
              "stocks": [{"code": "001259", "name": "利仁科技", "change": 10.0, ...}]}
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             if not trade_date:
@@ -517,7 +517,7 @@ class StockTools:
             {"trade_date": "2026-05-20", "total": 40, "stocks": [...]}
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             if not trade_date:
@@ -601,8 +601,7 @@ class StockTools:
         try:
             from data.readers.sector_reader import SectorReader
 
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
 
             if not trade_date:
                 cursor = conn.cursor()
@@ -717,7 +716,7 @@ class StockTools:
              "trade_date": "2026-05-20", "stocks": [...]}
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             cursor = conn.cursor()
 
             if not trade_date:
@@ -884,8 +883,8 @@ class StockTools:
         在 stock_basic 表中 LIKE 匹配，返回候选列表供 AI 精选。
         """
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             like = f"%{name}%"
             cursor = conn.execute(
                 """
@@ -910,8 +909,8 @@ class StockTools:
         返回候选列表（含 sector_name、sector_code、type）供 AI 精选。
         """
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             like = f"%{keyword}%"
             cursor = conn.execute(
                 """
@@ -941,8 +940,7 @@ class StockTools:
             trade_date = _dt.now().strftime("%Y-%m-%d")
 
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
 
             cursor = conn.execute(
                 """
@@ -1027,7 +1025,6 @@ class StockTools:
     def get_yesterday_review(self, trade_date: str = None) -> Dict:
         """读取昨日复盘报告全文"""
         from datetime import datetime as _dt
-        from pathlib import Path
 
         if trade_date is None:
             trade_date = _dt.now().strftime("%Y-%m-%d")
@@ -1045,7 +1042,7 @@ class StockTools:
                 "error": "无法确定上一个交易日",
             }
 
-        reports_dir = Path(__file__).parent.parent.parent / "storage" / "reports"
+        reports_dir = STORAGE_PATH / "reports"
         matches = sorted(reports_dir.glob(f"review_reports_{yesterday}_*.txt"))
         if not matches:
             return {
@@ -1088,8 +1085,8 @@ class StockTools:
             }
 
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             cursor = conn.execute(
                 """
                 SELECT t.stock_code, t.stock_name, t.plate, t.star_rating,
@@ -1177,8 +1174,8 @@ class StockTools:
             }
 
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             ph = ",".join("?" * len(recent_days))
             cursor = conn.execute(
                 f"""
@@ -1335,8 +1332,8 @@ class StockTools:
             trade_date = _dt.now().strftime("%Y-%m-%d")
 
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             # 已核对的预测
             rows = [
                 dict(r)
@@ -1396,8 +1393,8 @@ class StockTools:
         返回所有活跃教训，AI 据此规避重复犯错。
         """
         try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             rows = [
                 dict(r)
                 for r in conn.execute(
@@ -1450,8 +1447,8 @@ class StockTools:
 
                 trade_date = get_previous_trading_day(_dt.now().strftime("%Y-%m-%d"))
 
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
+            conn = connect(self.db_path)
+
             rows = conn.execute(
                 """
                 SELECT stock_code, stock_name, signal_source, buy_zone_min, buy_zone_max,

@@ -6,9 +6,9 @@
   - 否则 → MA20 回踩买入
 """
 
-import sqlite3
 from typing import Optional
 
+from data._base import connect
 from system.utils.logger import get_trade_logger
 
 logger = get_trade_logger("core")
@@ -30,7 +30,7 @@ class ReviewPickMonitor:
         self._loaded = False
 
     def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        return connect(self.db_path)
 
     # ------------------------------------------------------------------
     # 加载
@@ -64,7 +64,6 @@ class ReviewPickMonitor:
     def _load_from_tracker(self) -> list[dict]:
         try:
             conn = self._get_conn()
-            conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """SELECT * FROM stock_tracker
                    WHERE push_date = (

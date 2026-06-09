@@ -394,7 +394,6 @@ class TelegraphCollector:
         except Exception as e:
             conn.rollback()
             self.logger.error(f"保存电报失败：{e}")
-            raise
         finally:
             conn.close()
 

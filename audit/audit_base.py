@@ -56,7 +56,7 @@ class BaseAIAuditor:
 
             text = ai.chat(
                 prompt=prompt,
-                model="review",
+                model="audit",
                 system_prompt=system or "你是审计分析师。",
                 max_tokens=4096,
             )

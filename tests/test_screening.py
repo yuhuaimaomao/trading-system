@@ -1707,6 +1707,7 @@ class TestProfileBuilderInternals:
 
     def test_load_telegraphs_no_match(self, db_path):
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         conn.execute(
             "CREATE TABLE IF NOT EXISTS cls_telegraph (trade_date TEXT, ctime TEXT, title TEXT, stock_tags TEXT)"
         )
@@ -1716,7 +1717,8 @@ class TestProfileBuilderInternals:
         conn.commit()
 
         pb = ProfileBuilder(db_path=db_path)
-        result = pb._load_telegraphs(conn, _make_stock_score(), "2026-06-01")
+        all_telegraphs = pb._load_all_telegraphs(conn, "2026-06-01")
+        result = pb._match_telegraphs(all_telegraphs, "002371")
         conn.close()
         assert result == []
 

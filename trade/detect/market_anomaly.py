@@ -3,10 +3,10 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import sqlite3
 import time
 from datetime import datetime
 
+from data._base import connect
 from system.config import settings
 from system.utils.logger import get_trade_logger
 
@@ -546,7 +546,7 @@ def _rule_swap_target(self, new_code: str, new_score: float) -> str | None:
 def _load_reviews(self) -> dict:
     """加载最新 AI 持仓审查建议。"""
     try:
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT stock_code, action, tomorrow_outlook, reason
                FROM trade_holdings_review
@@ -554,7 +554,7 @@ def _load_reviews(self) -> dict:
                  AND account='paper'"""
         ).fetchall()
         conn.close()
-        conn2 = sqlite3.connect(self.db_path)
+        conn2 = connect(self.db_path)
         scores = conn2.execute(
             """SELECT stock_code, signal_score FROM trade_signals
                WHERE status='bought'"""

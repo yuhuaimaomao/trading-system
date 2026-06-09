@@ -3,11 +3,11 @@
 不参与任何决策（仓位计算/止损止盈/换仓评估均由盯盘系统负责）。
 """
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 
+from data._base import connect
 from data.repo import TradeRepository
 from system.config import settings
 from system.utils.logger import get_trade_logger
@@ -369,7 +369,6 @@ class PaperAccount:
 
         # 无快照时，在持仓恢复后写入正确的初始快照
         if not snap_valid:
-            init_cash = self._portfolio.initial_cash
             self.repo.insert_snapshot(
                 {
                     "trade_date": trade_date,
@@ -467,9 +466,7 @@ class PaperAccount:
         if fallback:
             return fallback
         try:
-            import sqlite3
-
-            db = sqlite3.connect(self.db_path)
+            db = connect(self.db_path)
             row = db.execute("SELECT stock_name FROM stock_basic WHERE stock_code=?", (code,)).fetchone()
             db.close()
             if row and row[0]:
@@ -583,7 +580,7 @@ class PaperAccount:
     @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
     def _resolve_name(code: str) -> str:
         try:
-            conn = sqlite3.connect(settings.DATABASE_PATH)
+            conn = connect(settings.DATABASE_PATH)
             row = conn.execute(
                 """SELECT stock_name FROM stock_basic
                    WHERE stock_code=? AND trade_date=(SELECT MAX(trade_date) FROM stock_basic)

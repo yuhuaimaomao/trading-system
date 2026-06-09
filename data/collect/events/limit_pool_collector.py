@@ -59,9 +59,7 @@ class LimitPoolCollector:
                 trade_date = trade_date.replace("-", "")
 
             # 标准化日期格式(YYYY-MM-DD 用于数据库,YYYYMMDD 用于接口)
-            trade_date_db = (
-                trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
-            )
+            trade_date_db = trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
 
             logger.info(f"开始获取涨停池数据(日期:{trade_date})...")
 
@@ -81,30 +79,16 @@ class LimitPoolCollector:
                     "close_price": float(row.get("最新价", 0)),
                     "change_percent": float(row.get("涨跌幅", 0)),
                     "limit_price": float(row.get("涨停价", 0)),
-                    "turnover_amount": float(row.get("成交额", 0))
-                    if "成交额" in row
-                    else 0,  # 成交额(元)
-                    "float_market_cap": float(row.get("流通市值", 0)) * 100000000
-                    if "流通市值" in row
-                    else 0,  # 亿→万
-                    "total_market_cap": float(row.get("总市值", 0)) * 100000000
-                    if "总市值" in row
-                    else 0,
+                    "turnover_amount": float(row.get("成交额", 0)) if "成交额" in row else 0,  # 成交额(元)
+                    "float_market_cap": float(row.get("流通市值", 0)) * 100000000 if "流通市值" in row else 0,  # 亿→万
+                    "total_market_cap": float(row.get("总市值", 0)) * 100000000 if "总市值" in row else 0,
                     "turnover_rate": float(row.get("换手率", 0)),
-                    "seal_amount": float(row.get("封板资金", 0))
-                    if "封板资金" in row
-                    else 0,  # 封板资金(元)
-                    "zt_stat": str(row.get("涨停统计", "0/0"))
-                    if "涨停统计" in row
-                    else "0/0",  # 涨停统计（近N天M板）
+                    "seal_amount": float(row.get("封板资金", 0)) if "封板资金" in row else 0,  # 封板资金(元)
+                    "zt_stat": str(row.get("涨停统计", "0/0")) if "涨停统计" in row else "0/0",  # 涨停统计（近N天M板）
                     "first_seal_time": format_seal_time(row.get("首次封板时间", "")),
                     "last_seal_time": format_seal_time(row.get("最后封板时间", "")),
-                    "open_count": int(row.get("炸板次数", 0))
-                    if "炸板次数" in row
-                    else 0,  # 炸板次数
-                    "consecutive_boards": int(row.get("连板数", 0))
-                    if "连板数" in row
-                    else 0,  # 连板数
+                    "open_count": int(row.get("炸板次数", 0)) if "炸板次数" in row else 0,  # 炸板次数
+                    "consecutive_boards": int(row.get("连板数", 0)) if "连板数" in row else 0,  # 连板数
                     "industry": str(row.get("所属行业", "")),
                     "reason": str(row.get("涨停原因", "")),
                 }
@@ -135,9 +119,7 @@ class LimitPoolCollector:
             elif "-" in trade_date:
                 trade_date = trade_date.replace("-", "")
 
-            trade_date_db = (
-                trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
-            )
+            trade_date_db = trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
 
             logger.info(f"开始获取炸板池数据(日期:{trade_date})...")
 
@@ -160,9 +142,7 @@ class LimitPoolCollector:
                     "turnover_rate": float(row.get("换手率", 0)),
                     "first_seal_time": format_seal_time(row.get("首次封板时间", "")),
                     "open_count": int(row.get("炸板次数", 0)),
-                    "consecutive_boards": int(
-                        str(row.get("涨停统计", "0/0")).split("/")[0]
-                    ),
+                    "consecutive_boards": int(str(row.get("涨停统计", "0/0")).split("/")[0]),
                     "industry": str(row.get("所属行业", "")),
                 }
                 result.append(stock_data)
@@ -194,9 +174,7 @@ class LimitPoolCollector:
                 trade_date = trade_date.replace("-", "")
 
             # 标准化日期格式
-            trade_date_db = (
-                trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
-            )
+            trade_date_db = trade_date[:4] + "-" + trade_date[4:6] + "-" + trade_date[6:]
 
             logger.info(f"开始获取跌停池数据(日期:{trade_date})...")
 
@@ -215,18 +193,10 @@ class LimitPoolCollector:
                     "stock_name": str(row.get("名称", "")),
                     "close_price": float(row.get("最新价", 0)),
                     "change_percent": float(row.get("涨跌幅", 0)),
-                    "limit_down_price": float(row.get("跌停价", 0))
-                    if "跌停价" in row
-                    else 0,
-                    "turnover_amount": float(row.get("成交额", 0)) * 10000
-                    if "成交额" in row
-                    else 0,
-                    "float_market_cap": float(row.get("流通市值", 0)) * 100000000
-                    if "流通市值" in row
-                    else 0,
-                    "total_market_cap": float(row.get("总市值", 0)) * 100000000
-                    if "总市值" in row
-                    else 0,
+                    "limit_down_price": float(row.get("跌停价", 0)) if "跌停价" in row else 0,
+                    "turnover_amount": float(row.get("成交额", 0)) * 10000 if "成交额" in row else 0,
+                    "float_market_cap": float(row.get("流通市值", 0)) * 100000000 if "流通市值" in row else 0,
+                    "total_market_cap": float(row.get("总市值", 0)) * 100000000 if "总市值" in row else 0,
                     "turnover_rate": float(row.get("换手率", 0)),
                     "industry": str(row.get("所属行业", "")),
                 }
@@ -403,7 +373,6 @@ class LimitPoolCollector:
             if "conn" in locals() and conn:
                 conn.rollback()
             logger.error(f"保存到数据库失败:{e}")
-            raise
         finally:
             if "conn" in locals() and conn:
                 conn.close()
@@ -497,12 +466,8 @@ class LimitPoolCollector:
             print("\n【连板梯队】")
             print(f"{'股票名称':<12} {'连板数':>6} {'所属行业':<15}")
             print("-" * 35)
-            for stock in sorted(
-                ladder_data, key=lambda x: x.get("consecutive_boards", 0), reverse=True
-            )[:10]:
-                print(
-                    f"{stock['stock_name']:<12} {stock['consecutive_boards']:>6}板 {stock.get('industry', ''):<15}"
-                )
+            for stock in sorted(ladder_data, key=lambda x: x.get("consecutive_boards", 0), reverse=True)[:10]:
+                print(f"{stock['stock_name']:<12} {stock['consecutive_boards']:>6}板 {stock.get('industry', ''):<15}")
 
 
 # ==================== 测试入口 ====================

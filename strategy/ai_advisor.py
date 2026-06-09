@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import List, Optional
 
 from stock.signals import (
     AccountSummary,
@@ -84,9 +85,7 @@ class AIAdvisor:
             logger.info("候选股票池为空，跳过分析")
             return [], []
 
-        prompt = self._build_prompt(
-            candidates, trade_date, holdings, account_summaries, review_context
-        )
+        prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries, review_context)
         self._save_prompt(prompt, trade_date)
 
         # 调用 AI
@@ -97,10 +96,7 @@ class AIAdvisor:
             signals, hr_list, ai_result = result
             if signals:
                 raw_signals.append(signals)
-                logger.info(
-                    f"AI 分析完成: 生成 {len(signals)} 个信号, "
-                    f"决策 {len(ai_result.decisions)} 条"
-                )
+                logger.info(f"AI 分析完成: 生成 {len(signals)} 个信号, 决策 {len(ai_result.decisions)} 条")
             if hr_list:
                 all_holdings_reviews.extend(hr_list)
 
@@ -108,7 +104,7 @@ class AIAdvisor:
             logger.error("所有模型分析均失败，返回空列表")
             return [], all_holdings_reviews
 
-        return raw_signals[0] if raw_signals else ([], all_holdings_reviews)
+        return (raw_signals[0], all_holdings_reviews) if raw_signals else ([], all_holdings_reviews)
 
     # ------------------------------------------------------------------
     # Prompt 构建
@@ -149,6 +145,11 @@ class AIAdvisor:
             holdings_data=holdings_text,
             candidates_data=candidates_text,
         )
+        # 无持仓时砍掉【持仓审查要求】及之后内容，避免 AI 对着空气生成建议
+        if not holdings:
+            cut = prompt.find("【持仓审查要求】")
+            if cut > 0:
+                prompt = prompt[:cut].rstrip()
         return prompt
 
     @staticmethod
@@ -158,7 +159,7 @@ class AIAdvisor:
     ) -> str:
         """格式化持仓数据为 prompt 文本。"""
         if not holdings:
-            return ""
+            return "## 当前持仓\n\n（无持仓，跳过审查）"
 
         lines = ["## 当前持仓（需要你审查）", ""]
 
@@ -185,9 +186,7 @@ class AIAdvisor:
             for h in acct_holdings:
                 pnl_emoji = "🟢" if h.pnl_pct > 2 else "🟡" if h.pnl_pct > -2 else "🔴"
                 t1_lock = " 🔒T+1" if h.is_today_buy else ""
-                time_warn = (
-                    " ⚠️时间止损预警" if (h.holding_days > 10 and h.pnl_pct < 0) else ""
-                )
+                time_warn = " ⚠️时间止损预警" if (h.holding_days > 10 and h.pnl_pct < 0) else ""
 
                 lines.append(
                     f"  {h.stock_code} {h.stock_name} | {h.industry or '未知行业'} | "
@@ -200,14 +199,10 @@ class AIAdvisor:
                 detail_parts = []
                 if h.stop_loss > 0:
                     sl_dist = (h.current_price - h.stop_loss) / h.current_price * 100
-                    detail_parts.append(
-                        f"止损 {h.stop_loss:.2f} (距现价{sl_dist:.1f}%)"
-                    )
+                    detail_parts.append(f"止损 {h.stop_loss:.2f} (距现价{sl_dist:.1f}%)")
                 if h.take_profit > 0:
                     tp_dist = (h.take_profit - h.current_price) / h.current_price * 100
-                    detail_parts.append(
-                        f"止盈 {h.take_profit:.2f} (距现价{tp_dist:+.1f}%)"
-                    )
+                    detail_parts.append(f"止盈 {h.take_profit:.2f} (距现价{tp_dist:+.1f}%)")
                 if h.ma5 > 0:
                     detail_parts.append(f"MA5={h.ma5:.2f}")
                 if h.ma20 > 0:
@@ -262,14 +257,10 @@ class AIAdvisor:
         trade_date: Optional[str] = None,
         model_name: str = "strategy",
     ) -> Optional[tuple[List[OrderSignal], List[HoldingReview], StrategyAiResult]]:
-        import time
-
         from system.ai import ai
 
-        start = time.time()
         system_prompt = (
-            "你是专业的A股趋势交易分析师。请严格按要求的JSON格式输出，"
-            "只输出JSON（用```json包裹），不要额外解释。"
+            "你是专业的A股趋势交易分析师。请严格按要求的JSON格式输出，只输出JSON（用```json包裹），不要额外解释。"
         )
         try:
             text = ai.chat(
@@ -278,14 +269,11 @@ class AIAdvisor:
                 system_prompt=system_prompt,
                 max_tokens=16384,
             )
-            elapsed = int((time.time() - start) * 1000)
             if not text:
                 logger.warning("AI 返回空内容")
                 return None
 
-            signals, holdings_review, ai_result = AIAdvisor._parse_json_response(
-                text, "strategy"
-            )
+            signals, holdings_review, ai_result = AIAdvisor._parse_json_response(text, "strategy")
             ai_result.model_used = model_name
             ai_result.raw_response = text
 
@@ -367,9 +355,7 @@ class AIAdvisor:
         report_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%H%M%S")
 
-        report_path = (
-            report_dir / f"strategy_ai_response_{date_str}_{model_name}_{ts}.txt"
-        )
+        report_path = report_dir / f"strategy_ai_response_{date_str}_{model_name}_{ts}.txt"
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(f"模型: {model_name}\n")
             f.write(f"日期: {date_str}\n")
@@ -392,9 +378,7 @@ class AIAdvisor:
             return (
                 [],
                 [],
-                StrategyAiResult(
-                    model_used=model_name, decisions=[], holdings_review=[]
-                ),
+                StrategyAiResult(model_used=model_name, decisions=[], holdings_review=[]),
             )
 
         json_str = json_str[start : end + 1]
@@ -410,9 +394,7 @@ class AIAdvisor:
                 return (
                     [],
                     [],
-                    StrategyAiResult(
-                        model_used=model_name, decisions=[], holdings_review=[]
-                    ),
+                    StrategyAiResult(model_used=model_name, decisions=[], holdings_review=[]),
                 )
 
         stocks = data.get("stocks", [])
@@ -545,9 +527,7 @@ class AIAdvisor:
             stop_loss = AIAdvisor._safe_float(item, "stop_loss")
             take_profit = AIAdvisor._safe_float(item, "take_profit")
             # 旧格式用 expected_trend 作为定价逻辑
-            pricing_logic = item.get("expected_trend", "") or item.get(
-                "pricing_logic", ""
-            )
+            pricing_logic = item.get("expected_trend", "") or item.get("pricing_logic", "")
 
         return StrategyAiDecision(
             stock_code=str(item.get("stock_code", "")),
@@ -661,9 +641,7 @@ class AIAdvisor:
                     buy_zone_max=buy_max,
                     stop_loss=sl,
                     take_profit=tp,
-                    target_position=s1.target_position
-                    or s2.target_position
-                    or settings.DEFAULT_POSITION_PCT,
+                    target_position=s1.target_position or s2.target_position or settings.DEFAULT_POSITION_PCT,
                     signal_score=round(score, 1),
                     strategy_name="ai_advisor_merged",
                     reason=reason,

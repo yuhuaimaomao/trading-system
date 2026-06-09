@@ -1,10 +1,10 @@
 """预测核验器 — 收盘对比 AI 预测 vs 次日实际，写入 is_correct 形成闭环。"""
 
 import re
-import sqlite3
 from datetime import datetime
 from typing import Optional
 
+from data._base import connect
 from system.config.settings import DATABASE_PATH
 from system.config.trading_calendar import get_next_trading_day
 from system.utils.logger import get_review_logger
@@ -87,8 +87,7 @@ _DEFAULT_THRESHOLD = _INDEX_THRESHOLDS["上证指数"]
 SECTOR_DIRECTION_RULES = {
     "主线延续": lambda chg, rank, up, down: chg > 0 and (rank is None or rank <= 10),
     "分歧后回流": lambda chg, rank, up, down: chg > 0,
-    "一日游风险": lambda chg, rank, up, down: chg < 0
-    or (rank is not None and rank > 15),
+    "一日游风险": lambda chg, rank, up, down: chg < 0 or (rank is not None and rank > 15),
     "新方向发酵": lambda chg, rank, up, down: chg > 0,
     "退潮": lambda chg, rank, up, down: chg < 0,
 }
@@ -108,8 +107,8 @@ class PredictionVerifier:
 
     def verify(self, push_date: str) -> dict:
         """核验指定日期所有未核验预测。返回 dict(total/correct/incorrect/accuracy/details/...)."""
-        conn = sqlite3.connect(str(DATABASE_PATH))
-        conn.row_factory = sqlite3.Row
+        conn = connect(DATABASE_PATH)
+        # conn.row_factory = sqlite3.Row  # connect() 已设置
 
         next_date = get_next_trading_day(push_date)
         if not next_date:
@@ -131,9 +130,7 @@ class PredictionVerifier:
             logger.info(f"✅ {push_date} 无待核验预测")
             return self._empty_report(None)
 
-        logger.info(
-            f"开始核验 {push_date} 的 {len(rows)} 条预测（对比 {next_date} 实际数据）…"
-        )
+        logger.info(f"开始核验 {push_date} 的 {len(rows)} 条预测（对比 {next_date} 实际数据）…")
 
         details = []
         correct = 0
@@ -227,10 +224,7 @@ class PredictionVerifier:
             "error": None,
         }
 
-        logger.info(
-            f"✅ 核验完成: {correct}/{total_verifiable} 正确 ({accuracy:.1f}%), "
-            f"未匹配 {unmatched} 条"
-        )
+        logger.info(f"✅ 核验完成: {correct}/{total_verifiable} 正确 ({accuracy:.1f}%), 未匹配 {unmatched} 条")
         return report
 
     # ------------------------------------------------------------------
@@ -263,9 +257,7 @@ class PredictionVerifier:
         change_pct = row["change_percent"] or 0
 
         # 方向判定
-        dir_ok = self._match_index_direction(
-            direction, change_pct, close, open_, high, low, target
-        )
+        dir_ok = self._match_index_direction(direction, change_pct, close, open_, high, low, target)
 
         # 支撑/压力判定
         support, resistance = self._parse_support_resistance(detail)
@@ -282,9 +274,7 @@ class PredictionVerifier:
         chg_word = "涨" if change_pct >= 0 else "跌"
         parts = [f"{target}次日{chg_word}{abs(change_pct):+.2f}%"]
 
-        actual_label = self._classify_actual(
-            change_pct, close, open_, high, low, target
-        )
+        actual_label = self._classify_actual(change_pct, close, open_, high, low, target)
         parts.append(f"实际={actual_label}")
 
         if support is not None:
@@ -299,9 +289,7 @@ class PredictionVerifier:
                 parts.append(f"最高{high:.0f}未触压力{resistance:.0f}")
             else:
                 pct_over = (high - resistance) / resistance * 100
-                parts.append(
-                    f"最高{high:.0f}突破压力{resistance:.0f}({pct_over:+.1f}%)"
-                )
+                parts.append(f"最高{high:.0f}突破压力{resistance:.0f}({pct_over:+.1f}%)")
 
         if not dir_ok:
             parts.append(f"方向预测[{direction}]与实际[{actual_label}]不符")
@@ -327,17 +315,13 @@ class PredictionVerifier:
         sname = sector["sector_name"]
         source = sector["_source_table"]
 
-        is_correct = self._check_sector_direction(
-            direction, change_pct, rank, up_count, down_count
-        )
+        is_correct = self._check_sector_direction(direction, change_pct, rank, up_count, down_count)
 
         chg_word = "涨" if change_pct >= 0 else "跌"
         rank_str = f"排名第{rank}" if rank is not None else "排名未知"
         source_label = "行业" if source == "sector_industry" else "概念"
 
-        result = (
-            f"{sname}({source_label})次日{chg_word}{abs(change_pct):+.1f}%，{rank_str}"
-        )
+        result = f"{sname}({source_label})次日{chg_word}{abs(change_pct):+.1f}%，{rank_str}"
         if not is_correct:
             result += f"，预测[{direction}]与实际不符"
 
@@ -360,8 +344,7 @@ class PredictionVerifier:
         direction = pred.get("pred_direction", "")
 
         row = conn.execute(
-            "SELECT change_percent FROM index_realtime_data "
-            "WHERE index_code = 'sh000001' AND trade_date = ? LIMIT 1",
+            "SELECT change_percent FROM index_realtime_data WHERE index_code = 'sh000001' AND trade_date = ? LIMIT 1",
             (next_date,),
         ).fetchone()
 
@@ -371,12 +354,7 @@ class PredictionVerifier:
         sh_change = row["change_percent"] or 0
 
         is_correct = False
-        if (
-            "主线延续" in direction
-            and sh_change > 0
-            or "退潮" in direction
-            and sh_change < 0
-        ):
+        if "主线延续" in direction and sh_change > 0 or "退潮" in direction and sh_change < 0:
             is_correct = True
         else:
             # 综合判定：板块准确率 >= 60%
@@ -386,10 +364,7 @@ class PredictionVerifier:
                 is_correct = True
 
         chg_word = "涨" if sh_change >= 0 else "跌"
-        result = (
-            f"主导情景[{direction}]：上证次日{chg_word}{abs(sh_change):+.2f}%"
-            f"，板块核验{sec_correct}/{sec_total}"
-        )
+        result = f"主导情景[{direction}]：上证次日{chg_word}{abs(sh_change):+.2f}%，板块核验{sec_correct}/{sec_total}"
 
         return (result, is_correct)
 
@@ -472,11 +447,7 @@ class PredictionVerifier:
             "偏弱",
         ):
             rule = thresholds.get(label)
-            if (
-                rule
-                and rule[0] <= change_pct <= rule[1]
-                and _EXTRA[rule[2]](close, open_)
-            ):
+            if rule and rule[0] <= change_pct <= rule[1] and _EXTRA[rule[2]](close, open_):
                 return label
         chg_word = "涨" if change_pct >= 0 else "跌"
         return f"{chg_word}{abs(change_pct):.1f}%"

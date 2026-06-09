@@ -3,9 +3,9 @@
 
 import json
 import re
-import sqlite3
 from datetime import datetime
 
+from data._base import connect
 from system.ai.prompts.watcher_audit import WATCHER_AUDIT_SYSTEM, WATCHER_AUDIT_USER
 
 
@@ -40,9 +40,7 @@ class AIAuditor:
         if prompt is None:
             return None
 
-        text = self.ai.chat(
-            prompt=prompt, system_prompt=WATCHER_AUDIT_SYSTEM, max_tokens=4096
-        )
+        text = self.ai.chat(prompt=prompt, system_prompt=WATCHER_AUDIT_SYSTEM, max_tokens=4096)
         if not text:
             return None
 
@@ -55,34 +53,26 @@ class AIAuditor:
 
         timeline_lines = []
         for log in logs:
-            data = (
-                json.loads(log["decision_data"])
-                if isinstance(log["decision_data"], str)
-                else log["decision_data"]
-            )
+            data = json.loads(log["decision_data"]) if isinstance(log["decision_data"], str) else log["decision_data"]
             code = log.get("stock_code") or "-"
             data_str = json.dumps(data, ensure_ascii=False)[:200]
-            timeline_lines.append(
-                f"[{log['ts']}] {log['decision_type']} {code} | {data_str}"
-            )
+            timeline_lines.append(f"[{log['ts']}] {log['decision_type']} {code} | {data_str}")
         decision_timeline = "\n".join(timeline_lines)
 
         findings = self.repo.get_audit_findings(trade_date)
         sev_emoji = {"P0": "🚨", "P1": "⚠️", "P2": "📝", "P3": "💡"}
         finding_lines = []
         for f in findings:
-            finding_lines.append(
-                f"{sev_emoji.get(f['severity'], '')} [{f['severity']}] {f['pattern_desc']}"
-            )
+            finding_lines.append(f"{sev_emoji.get(f['severity'], '')} [{f['severity']}] {f['pattern_desc']}")
         rule_findings = "\n".join(finding_lines) if finding_lines else "无 P0/P1 发现"
 
         market_structure = self._build_market_structure(trade_date)
 
         lessons = self.repo.get_active_watcher_lessons()
         lesson_lines = []
-        for l in lessons[:20]:
+        for lesson in lessons[:20]:
             lesson_lines.append(
-                f"[{l['lesson_type']}] ({l['occurrence_count']}次) {l['lesson_content']}"
+                f"[{lesson['lesson_type']}] ({lesson['occurrence_count']}次) {lesson['lesson_content']}"
             )
         historical_lessons = "\n".join(lesson_lines) if lesson_lines else "无历史教训"
 
@@ -97,7 +87,7 @@ class AIAuditor:
         )
 
     def _build_market_structure(self, trade_date: str) -> str:
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT ts, sector_name, avg_change FROM sector_snapshots WHERE trade_date=? ORDER BY ts",
             (trade_date,),
@@ -107,17 +97,11 @@ class AIAuditor:
             return "无板块数据"
         sampled = {}
         for ts, name, chg in rows:
-            hour = (
-                ts[:13]
-                if isinstance(ts, str)
-                else datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%dT%H")
-            )
+            hour = ts[:13] if isinstance(ts, str) else datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%dT%H")
             key = (hour, name)
             if key not in sampled:
                 sampled[key] = chg
-        return "\n".join(
-            f"{h} {n}: {c:+.2f}%" for (h, n), c in sorted(sampled.items())[:50]
-        )
+        return "\n".join(f"{h} {n}: {c:+.2f}%" for (h, n), c in sorted(sampled.items())[:50])
 
     def _get_current_params(self) -> str:
         from system.config import settings

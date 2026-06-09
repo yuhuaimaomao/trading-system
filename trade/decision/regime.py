@@ -89,7 +89,7 @@ PATTERN_REGIME = {
         allow_buy=True,
         position_mult=0.3,
         stop_mult=1.3,
-        entry_rule="range_boundary",
+        entry_rule="standard",  # 仓位已降至30%，不再额外限制入场位置
         urgent_action="",
         alert_level="warn",
     ),
@@ -305,11 +305,7 @@ def assess_regime(
                 base["position_mult"] = max(0.3, base["position_mult"] * 0.5)
                 if not base["urgent_action"]:
                     base["urgent_action"] = "tighten_stops"
-        elif (
-            primary.direction == "bearish"
-            and outlook.urgency == "watch"
-            and prob > 0.35
-        ):
+        elif primary.direction == "bearish" and outlook.urgency == "watch" and prob > 0.35:
             base["stop_mult"] = base.get("stop_mult", 1.0) * 1.1
             if base["entry_rule"] == "standard":
                 base["entry_rule"] = "confirm"

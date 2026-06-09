@@ -118,9 +118,7 @@ class ZTPerformanceProcessor:
             logger.error(f"获取昨日涨停股失败：{e}")
             return []
 
-    def get_today_data(
-        self, stock_codes: List[str], trade_date: str = None
-    ) -> Dict[str, Dict]:
+    def get_today_data(self, stock_codes: List[str], trade_date: str = None) -> Dict[str, Dict]:
         """
         获取股票今日表现（从 stock_basic 表读取）
 
@@ -193,9 +191,7 @@ class ZTPerformanceProcessor:
 
         return change_percent >= threshold * 100  # 数据库存的是百分比
 
-    def calculate_premium_rate(
-        self, yesterday_close: float, today_open: float
-    ) -> float:
+    def calculate_premium_rate(self, yesterday_close: float, today_open: float) -> float:
         """
         计算溢价率（开盘价 - 昨日收盘价）/ 昨日收盘价
 
@@ -210,9 +206,7 @@ class ZTPerformanceProcessor:
             return 0.0
         return (today_open - yesterday_close) / yesterday_close * 100
 
-    def calculate_performance(
-        self, yesterday_date: str = None, today_date: str = None
-    ) -> List[Dict]:
+    def calculate_performance(self, yesterday_date: str = None, today_date: str = None) -> List[Dict]:
         """
         计算昨日涨停今日表现
 
@@ -274,9 +268,7 @@ class ZTPerformanceProcessor:
                     "stock_name": zt["stock_name"],
                     "yesterday_close": yesterday_close,
                     "yesterday_change": yesterday_change,
-                    "yesterday_seal_time": str(yesterday_seal_time)
-                    if yesterday_seal_time
-                    else "",
+                    "yesterday_seal_time": str(yesterday_seal_time) if yesterday_seal_time else "",
                     "yesterday_board_count": yesterday_board_count,
                     "today_open": today_open,
                     "today_close": today_close,
@@ -403,9 +395,7 @@ class ZTPerformanceProcessor:
                     if perf["stock_code"].startswith(("688", "300", "301"))
                     else perf["yesterday_close"] * 1.1
                 )
-                speed = (
-                    perf["turnover_rate"] / 10 if perf["turnover_rate"] > 0 else 0
-                )  # 封板速度（估算）
+                speed = perf["turnover_rate"] / 10 if perf["turnover_rate"] > 0 else 0  # 封板速度（估算）
                 zt_statistics = f"{perf['premium_rate']:.2f}%"
 
                 cursor.execute(
@@ -590,9 +580,7 @@ class ZTPerformanceProcessor:
                 f"{stock['stock_name']:<12} {stock['yesterday_close']:>8.2f} {stock['today_open']:>8.2f} {stock['premium_rate']:>9.2f}% {stock['status']:>8}"
             )
 
-    def _get_status_label(
-        self, premium_rate: float, is_limit_up: bool, today_change: float
-    ) -> str:
+    def _get_status_label(self, premium_rate: float, is_limit_up: bool, today_change: float) -> str:
         """获取状态标签"""
         if is_limit_up:
             return "涨停"
@@ -626,7 +614,7 @@ class ZTPerformanceProcessor:
 
             calendar = TradingCalendar()
             return calendar.is_trading_day(date_str)
-        except:
+        except Exception:
             # 如果没有交易日历，简单判断周末
             date = datetime.strptime(date_str, "%Y-%m-%d")
             return date.weekday() < 5

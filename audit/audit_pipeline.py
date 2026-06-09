@@ -6,8 +6,7 @@
     # result = {"findings": [...], "improvements": [...], "lessons": [...]}
 """
 
-import sqlite3
-
+from data._base import connect
 from system.utils.logger import get_audit_logger
 
 logger = get_audit_logger("pipeline")
@@ -72,9 +71,7 @@ class AuditPipeline:
         ai_result = {"improvements": [], "lessons": []}
         if not rule_only and self.ai_auditor is not None:
             try:
-                ai_result = self.ai_auditor.review(
-                    findings, {"date": push_date, "domain": self.domain}
-                )
+                ai_result = self.ai_auditor.review(findings, {"date": push_date, "domain": self.domain})
                 logger.info(
                     f"[{self.domain}] AI 审计: "
                     f"{len(ai_result.get('improvements', []))} 条改进, "
@@ -108,7 +105,7 @@ class AuditPipeline:
         if not self.db_path:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS audit_findings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +140,7 @@ class AuditPipeline:
         if not self.db_path:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS watcher_improvements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,9 +178,7 @@ class AuditPipeline:
 
     # ── 推送 ──────────────────────────────────────────
 
-    def _push_report(
-        self, push_date: str, findings: list[dict], improvements: list[dict]
-    ):
+    def _push_report(self, push_date: str, findings: list[dict], improvements: list[dict]):
         """推送审计报告到 Telegram。"""
         try:
             imp_count = len(improvements)

@@ -1,8 +1,8 @@
 """板块热度监控 — 每 5 轮用全市场快照算板块涨跌排名（行业 + 概念）"""
 
-import sqlite3
 from collections import defaultdict
 
+from data._base import connect
 from system.utils.logger import get_trade_logger
 
 logger = get_trade_logger("sector")
@@ -19,15 +19,13 @@ class SectorHeatMonitor:
         self._concept_history: dict[str, list[float]] = defaultdict(list)
 
     def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        return connect(self.db_path)
 
     # ------------------------------------------------------------------
     # 主入口
     # ------------------------------------------------------------------
 
-    def check(
-        self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None
-    ) -> list[str]:
+    def check(self, snapshot: dict[str, dict], resonance_labels: dict[str, str] | None = None) -> list[str]:
         """用全市场快照计算板块热度（行业 + 概念）。
 
         snapshot: {code: {price, changePct}} 来自 watcher 的 _market_snapshot
@@ -109,16 +107,12 @@ class SectorHeatMonitor:
                 if len(history) < 3:
                     continue
                 delta = history[-1] - history[0]
-                rank = next(
-                    (i + 1 for i, (n, _) in enumerate(ranked) if n == ind), None
-                )
+                rank = next((i + 1 for i, (n, _) in enumerate(ranked) if n == ind), None)
                 total = len(ranked)
                 avg = history[-1]
                 rank_str = f" 排名: {rank}/{total}" if rank else ""
                 if delta < -1.0:
-                    warnings.append(
-                        f"   ⚠️ {ind}: {avg:+.1f}%  ↓{delta:+.1f}%{rank_str}"
-                    )
+                    warnings.append(f"   ⚠️ {ind}: {avg:+.1f}%  ↓{delta:+.1f}%{rank_str}")
                 elif delta > 1.0:
                     good.append(f"   ✅ {ind}: {avg:+.1f}%  ↑{delta:+.1f}%{rank_str}")
             return warnings, good
@@ -163,9 +157,7 @@ class SectorHeatMonitor:
                 else:
                     delta_str = ""
                 prefix = medals[i - 1] if i <= 3 else f" {i}."
-                concept_lines.append(
-                    f"   {prefix} {c}: {avg:+.1f}%{delta_str}  ({stock_count}只)"
-                )
+                concept_lines.append(f"   {prefix} {c}: {avg:+.1f}%{delta_str}  ({stock_count}只)")
             messages.append("")  # 空行分隔
             messages.append("\n".join(concept_lines))
 

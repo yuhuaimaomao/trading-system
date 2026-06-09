@@ -32,9 +32,7 @@ class LHBCollector:
         self.db_path = db_path
         self.logger.info(f"龙虎榜采集器初始化完成，数据库：{self.db_path}")
 
-    def fetch_and_save(
-        self, date: Optional[str] = None, trade_date: Optional[str] = None
-    ) -> Dict:
+    def fetch_and_save(self, date: Optional[str] = None, trade_date: Optional[str] = None) -> Dict:
         """
         获取龙虎榜数据并保存到数据库
 
@@ -58,9 +56,7 @@ class LHBCollector:
                 date = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
             elif date == "last_friday" and datetime.now().weekday() in [5, 6]:
                 # 周末传入'last_friday'，自动获取上周五
-                date = (
-                    datetime.now() - timedelta(days=datetime.now().weekday() + 2)
-                ).strftime("%Y%m%d")
+                date = (datetime.now() - timedelta(days=datetime.now().weekday() + 2)).strftime("%Y%m%d")
 
             # 确保日期格式为 YYYYMMDD（去掉横杠）
             if isinstance(date, str) and "-" in date:
@@ -70,9 +66,12 @@ class LHBCollector:
 
             # 2. 获取龙虎榜个股列表
             self.logger.info("获取龙虎榜个股列表...")
-            lhb_list_df = get_akshare().stock_lhb_detail_em(
-                start_date=date, end_date=date
-            )
+            try:
+                lhb_list_df = get_akshare().stock_lhb_detail_em(start_date=date, end_date=date)
+            except TypeError as e:
+                # akshare bug: API 返回 result:null 时直接崩溃，非交易日/无数据时触发
+                self.logger.warning(f"{date} 龙虎榜 API 返回空（{e}），可能非交易日或无数据")
+                return {"success": False, "count": 0, "total": 0, "data": []}
 
             if lhb_list_df is None or lhb_list_df.empty:
                 self.logger.warning(f"{date} 无龙虎榜数据")
@@ -152,9 +151,7 @@ class LHBCollector:
 
             conn.commit()
 
-            self.logger.info(
-                f"✅ 采集完成：{len(stocks_to_save)}只个股，{len(seats_to_save)}个席位"
-            )
+            self.logger.info(f"✅ 采集完成：{len(stocks_to_save)}只个股，{len(seats_to_save)}个席位")
             result = {
                 "success": True,
                 "count": len(stocks_to_save),
@@ -165,12 +162,11 @@ class LHBCollector:
         except Exception as e:
             if "conn" in locals() and conn:
                 conn.rollback()
-            self.logger.error(f"❌ 保存失败：{e}")
+            self.logger.error(f"❌ 采集失败：{e}")
             import traceback
 
             self.logger.error(traceback.format_exc())
             result = {"success": False, "count": 0, "total": 0, "data": []}
-            raise
 
         finally:
             if "conn" in locals() and conn:
@@ -228,7 +224,6 @@ class LHBCollector:
 
                 for seat in cursor.fetchall():
                     buyer = seat[4] or ""  # seat_name
-                    seller = seat[4] or ""  # seat_name
                     buy_amt = seat[5] or 0  # buy_amount
                     sell_amt = seat[6] or 0  # sell_amount
 
@@ -387,17 +382,13 @@ class LHBCollector:
 
             # 分别获取买入席位和卖出席位（买五 + 卖五）
             try:
-                buy_df = get_akshare().stock_lhb_stock_detail_em(
-                    symbol=stock_code, date=trade_date, flag="买入"
-                )
-            except:
+                buy_df = get_akshare().stock_lhb_stock_detail_em(symbol=stock_code, date=trade_date, flag="买入")
+            except Exception:
                 buy_df = None
 
             try:
-                sell_df = get_akshare().stock_lhb_stock_detail_em(
-                    symbol=stock_code, date=trade_date, flag="卖出"
-                )
-            except:
+                sell_df = get_akshare().stock_lhb_stock_detail_em(symbol=stock_code, date=trade_date, flag="卖出")
+            except Exception:
                 sell_df = None
 
             # 处理买入席位（买五）
@@ -407,16 +398,8 @@ class LHBCollector:
                     if not seat_name:
                         continue
 
-                    buy_amt = (
-                        float(row.get("买入金额", 0))
-                        if str(row.get("买入金额")) != "nan"
-                        else 0
-                    )
-                    sell_amt = (
-                        float(row.get("卖出金额", 0))
-                        if str(row.get("卖出金额")) != "nan"
-                        else 0
-                    )
+                    buy_amt = float(row.get("买入金额", 0)) if str(row.get("买入金额")) != "nan" else 0
+                    sell_amt = float(row.get("卖出金额", 0)) if str(row.get("卖出金额")) != "nan" else 0
 
                     seats.append(
                         (
@@ -439,16 +422,8 @@ class LHBCollector:
                     if not seat_name:
                         continue
 
-                    buy_amt = (
-                        float(row.get("买入金额", 0))
-                        if str(row.get("买入金额")) != "nan"
-                        else 0
-                    )
-                    sell_amt = (
-                        float(row.get("卖出金额", 0))
-                        if str(row.get("卖出金额")) != "nan"
-                        else 0
-                    )
+                    buy_amt = float(row.get("买入金额", 0)) if str(row.get("买入金额")) != "nan" else 0
+                    sell_amt = float(row.get("卖出金额", 0)) if str(row.get("卖出金额")) != "nan" else 0
 
                     seats.append(
                         (

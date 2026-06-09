@@ -9,22 +9,16 @@
 """
 
 import re
-import sqlite3
 import time
 from datetime import datetime
-from pathlib import Path
 
 import requests
 
-from system.config import settings
-from system.config.settings import DATABASE_PATH, LOGS_DIR
-from system.utils.dns_bypass import install as install_dns_bypass
-
-# 绕过 Shadowrocket/Surge 本地代理的 DNS 劫持
-install_dns_bypass()
+from data._base import connect
 from data.readers.limit_pool_reader import LimitPoolReader  # noqa: E402
 from data.readers.sector_reader import SectorReader  # noqa: E402
 from data.readers.stock_reader import StockReader  # noqa: E402
+from data.review.predictions import PredictionRepo  # noqa: E402
 from review.review_formatter import (  # noqa: E402
     calc_position_cap,
     fmt_change,
@@ -48,6 +42,8 @@ from review.review_formatter import (  # noqa: E402
 from system.ai import ai  # noqa: E402
 from system.ai.function_calling import FunctionCallingEngine  # noqa: E402
 from system.ai.prompts.review import REVIEW_REPORT_PROMPT  # noqa: E402
+from system.config import settings
+from system.config.settings import DATABASE_PATH, LOGS_DIR, STORAGE_PATH
 from system.utils.logger import get_review_logger  # noqa: E402
 
 
@@ -59,7 +55,7 @@ class ReviewAnalyzer:
         # 加载板块名称→编码映射（用于 formatter 输出 sector_code）
         self.sector_code_map = {}
         try:
-            conn = sqlite3.connect(str(DATABASE_PATH))
+            conn = connect(DATABASE_PATH)
             try:
                 cursor = conn.execute("SELECT sector_code, sector_name FROM sector_info")
                 for row in cursor.fetchall():
@@ -98,14 +94,14 @@ class ReviewAnalyzer:
         # CLS 复盘新闻已在采集阶段落盘（collect() 模块 13），分析阶段直接通过 FC 工具读取
         # 电报由 FC 工具 get_telegraph_news 直接从 DB 查询
 
-        conn = sqlite3.connect(str(DATABASE_PATH))
-        conn.row_factory = sqlite3.Row
+        conn = connect(DATABASE_PATH)
+        # conn.row_factory = sqlite3.Row  # connect() 已设置
 
         try:
             # 读取昨日复盘报告（AI 自我校准）
             # 文件名格式 review_reports_{date}_{model}.txt，需 glob 匹配模型后缀
             yesterday_report = ""
-            reports_dir = Path(__file__).parent.parent.parent / "storage" / "reports"
+            reports_dir = STORAGE_PATH / "reports"
             yesterday_matches = sorted(reports_dir.glob(f"review_reports_{yesterday}_*.txt"))
             if yesterday_matches:
                 yesterday_report = yesterday_matches[-1].read_text(encoding="utf-8")
@@ -1025,8 +1021,9 @@ class ReviewAnalyzer:
                 "10. **绝对禁止**在报告中出现：工具调用过程、打分排名（如'得分XX分'）、prompt指令、数据筛选条件——报告只呈现判断结论和逻辑推演"  # noqa: E501
             )
 
+            review_model = settings.AI_MODEL_REVIEW or settings.AI_MODEL
             models_to_run = [
-                (settings.AI_MODEL, settings.AI_MODEL),
+                (review_model, review_model),
             ]
 
             reports = {}  # {model_name: report_text}
@@ -1049,7 +1046,7 @@ class ReviewAnalyzer:
 
             # 保存报告到文件（供下次复盘自我校准）
             try:
-                reports_dir = Path(__file__).parent.parent.parent / "storage" / "reports"
+                reports_dir = STORAGE_PATH / "reports"
                 reports_dir.mkdir(parents=True, exist_ok=True)
 
                 for model_name, report_text in reports.items():
@@ -1101,7 +1098,6 @@ class ReviewAnalyzer:
     def _extract_predictions(self, report_text: str, trade_date: str):
         """从报告中解析 <<<PREDICTIONS>>> 结构化预测，存入 review_predictions 表"""
         import json as _json
-        import sqlite3
 
         match = re.search(r"<<<PREDICTIONS>>>(.*?)<<<END>>>", report_text, re.DOTALL)
         if not match:
@@ -1117,39 +1113,36 @@ class ReviewAnalyzer:
             self.logger.warning(f"PREDICTIONS JSON 解析失败: {e}")
             return
 
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = connect(DATABASE_PATH)
         count = 0
         # 指数预测
         for idx in data.get("index", []):
-            conn.execute(
-                "INSERT INTO review_predictions (push_date, pred_type, target_name, pred_direction, pred_detail, prob) VALUES (?, 'index', ?, ?, ?, ?)",  # noqa: E501
-                (
-                    trade_date,
-                    idx.get("name", ""),
-                    idx.get("direction", ""),
-                    f"支撑{idx.get('support', '?')}/压力{idx.get('resistance', '?')}",
-                    None,
-                ),
+            PredictionRepo.insert_index_prediction(
+                conn,
+                trade_date,
+                idx.get("name", ""),
+                idx.get("direction", ""),
+                f"支撑{idx.get('support', '?')}/压力{idx.get('resistance', '?')}",
+                None,
             )
             count += 1
         # 板块预测
         for sec in data.get("sectors", []):
-            conn.execute(
-                "INSERT INTO review_predictions (push_date, pred_type, target_name, pred_direction, pred_detail, prob) VALUES (?, 'sector', ?, ?, '', ?)",  # noqa: E501
-                (
-                    trade_date,
-                    sec.get("name", ""),
-                    sec.get("prediction", ""),
-                    sec.get("prob"),
-                ),
+            PredictionRepo.insert_sector_prediction(
+                conn,
+                trade_date,
+                sec.get("name", ""),
+                sec.get("prediction", ""),
+                sec.get("prob"),
             )
             count += 1
         # 主导情景
         scenario = data.get("dominant_scenario", "")
         if scenario:
-            conn.execute(
-                "INSERT INTO review_predictions (push_date, pred_type, target_name, pred_direction, pred_detail, prob) VALUES (?, 'scenario', '主导情景', ?, '第五节日均推演', NULL)",  # noqa: E501
-                (trade_date, scenario),
+            PredictionRepo.insert_scenario_prediction(
+                conn,
+                trade_date,
+                scenario,
             )
             count += 1
         conn.commit()
@@ -1164,7 +1157,6 @@ class ReviewAnalyzer:
         同类教训合并（增加 occurrence_count），新教训追加。
         """
         import json as _json
-        import sqlite3
 
         # 只取报告中的偏差校准 + 自我诊断部分，减少 prompt 长度
         cali_match = re.search(
@@ -1175,14 +1167,8 @@ class ReviewAnalyzer:
         excerpt = cali_match.group(0)[:1200] if cali_match else report_text[-3000:]
 
         # 拉取已有教训（用于合并对比）
-        conn = sqlite3.connect(str(DATABASE_PATH))
-        conn.row_factory = sqlite3.Row
-        existing = [
-            dict(r)
-            for r in conn.execute(
-                "SELECT id, lesson_type, lesson_key, lesson_content, occurrence_count FROM review_lessons WHERE is_active=1"  # noqa: E501
-            ).fetchall()
-        ]
+        conn = connect(DATABASE_PATH)
+        existing = PredictionRepo.get_active_lessons(conn)
         conn.close()
 
         existing_text = (
@@ -1240,7 +1226,7 @@ class ReviewAnalyzer:
             return
 
         # 合并入库
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = connect(DATABASE_PATH)
         new_count, merge_count = 0, 0
         for lesson in lessons:
             lt = lesson.get("lesson_type", "")
@@ -1248,21 +1234,19 @@ class ReviewAnalyzer:
             lc = lesson.get("lesson_content", "")
             if not lt or not lk or not lc:
                 continue
-            # 尝试更新已有教训
+            # 判断是否已存在（用于日志区分）
             cur = conn.execute(
-                "UPDATE review_lessons SET occurrence_count=occurrence_count+1, last_date=?, lesson_content=?, is_active=1 WHERE lesson_type=? AND lesson_key=?",  # noqa: E501
-                (trade_date, lc, lt, lk),
+                "SELECT COUNT(*) FROM review_lessons WHERE lesson_type=? AND lesson_key=?",
+                (lt, lk),
             )
-            if cur.rowcount > 0:
-                merge_count += 1
-                self.logger.info(f"  合并教训: [{lt}] {lk}")
-            else:
-                conn.execute(
-                    "INSERT INTO review_lessons (lesson_type, lesson_key, lesson_content, occurrence_count, first_date, last_date, is_active) VALUES (?, ?, ?, 1, ?, ?, 1)",  # noqa: E501
-                    (lt, lk, lc, trade_date, trade_date),
-                )
+            is_new = cur.fetchone()[0] == 0
+            PredictionRepo.upsert_lesson(conn, lt, lk, lc, trade_date)
+            if is_new:
                 new_count += 1
                 self.logger.info(f"  新增教训: [{lt}] {lk}")
+            else:
+                merge_count += 1
+                self.logger.info(f"  合并教训: [{lt}] {lk}")
         conn.commit()
         conn.close()
         self.logger.info(f"✅ 教训提取完成：新增{new_count}条，合并{merge_count}条")
@@ -1573,9 +1557,10 @@ class ReviewAnalyzer:
 
         _fc_log("=" * 60)
         _fc_log(f"复盘 FC 多轮对话日志 - {trade_date}")
-        _fc_log("模型: review (system.ai)")
+        _fc_log(f"模型: review (system.ai) | 模式: {'预计算' if precomputed else '标准FC'}")
         _fc_log(f"可用工具 ({len(all_tool_names)}): {', '.join(all_tool_names)}")
-        _fc_log(f"必修工具 ({len(mandatory_tools)}): {', '.join(mandatory_tools)}")
+        if not precomputed:
+            _fc_log(f"必修工具 ({len(mandatory_tools)}): {', '.join(mandatory_tools)}")
         _fc_log("=" * 60)
 
         messages = [
@@ -1596,9 +1581,8 @@ class ReviewAnalyzer:
                     break
                 tools = TOOLS_DEFINITION
                 tool_choice = "auto"
-                mandatory_done = set(mandatory_tools).issubset(called_tools)
-                fc_timeout = 600 if mandatory_done else 180
-                _fc_log(f"\n第 {round_num} 轮（{len(tools)} 个工具，tool_choice=auto，超时{fc_timeout}s）")
+                # 预计算模式无必修约束，始终 600s；标准模式首轮也 600s 防止大盘普跌时模型思考超时
+                _fc_log(f"\n第 {round_num} 轮（{len(tools)} 个工具，tool_choice=auto，超时600s）")
 
                 response = ai.chat_with_tools_raw(
                     messages,
@@ -2305,8 +2289,8 @@ class ReviewAnalyzer:
         import json as _json
 
         try:
-            conn = sqlite3.connect(str(DATABASE_PATH))
-            conn.row_factory = sqlite3.Row
+            conn = connect(DATABASE_PATH)
+            # conn.row_factory = sqlite3.Row  # connect() 已设置
             cursor = conn.execute(
                 """
                 SELECT * FROM cls_telegraph

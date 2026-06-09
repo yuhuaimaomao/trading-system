@@ -114,9 +114,7 @@ class SectorStocksCollector(ProxyBaseCollector):
             return dict(row)
         return None
 
-    def _save_progress(
-        self, sector_code: str, sector_name: str, sector_type: str, **kwargs
-    ):
+    def _save_progress(self, sector_code: str, sector_name: str, sector_type: str, **kwargs):
         """
         保存/更新板块采集进度
 
@@ -231,9 +229,7 @@ class SectorStocksCollector(ProxyBaseCollector):
             (sector_type,),
         )
 
-        sectors = [
-            {"sector_code": row[0], "sector_name": row[1]} for row in cursor.fetchall()
-        ]
+        sectors = [{"sector_code": row[0], "sector_name": row[1]} for row in cursor.fetchall()]
 
         conn.close()
         self.logger.info(f"从数据库获取到 {len(sectors)} 个{sector_type}板块")
@@ -299,9 +295,7 @@ class SectorStocksCollector(ProxyBaseCollector):
 
         conn.commit()
         conn.close()
-        self.logger.info(
-            f"校准完成：删除{len(deleted_codes)}个，新增{len(new_codes)}个"
-        )
+        self.logger.info(f"校准完成：删除{len(deleted_codes)}个，新增{len(new_codes)}个")
 
     def _fetch_page(self, sector_code: str, page_num: int, proxy: Dict) -> Dict:
         params = {
@@ -381,7 +375,6 @@ class SectorStocksCollector(ProxyBaseCollector):
         except Exception as e:
             conn.rollback()
             self.logger.error(f"保存失败：{e}")
-            raise
 
         finally:
             conn.close()
@@ -438,9 +431,7 @@ class SectorStocksCollector(ProxyBaseCollector):
 
     # ==================== 核心采集方法 ====================
 
-    def _collect_single_sector(
-        self, sector_type: str, sector_code: str, sector_name: str
-    ) -> bool:
+    def _collect_single_sector(self, sector_type: str, sector_code: str, sector_name: str) -> bool:
         """
         采集单个板块的成分股 (支持断点续传)
 
@@ -465,10 +456,7 @@ class SectorStocksCollector(ProxyBaseCollector):
             # 恢复进度
             start_page = progress["completed_pages"] + 1
             total_pages = progress["total_pages"]
-            total_stocks = progress["total_stocks"]
-            self.logger.info(
-                f"📋 恢复进度：{sector_name} 第{start_page}/{total_pages}页"
-            )
+            self.logger.info(f"📋 恢复进度：{sector_name} 第{start_page}/{total_pages}页")
 
             # 如果已经采完所有页，标记完成
             if start_page > total_pages:
@@ -478,7 +466,6 @@ class SectorStocksCollector(ProxyBaseCollector):
             # 新建进度
             start_page = 1
             total_pages = 0
-            total_stocks = 0
             self._save_progress(sector_code, sector_name, sector_type, status="pending")
 
         # 2. 第 1 页：获取总数量 (如果还没获取)
@@ -517,9 +504,7 @@ class SectorStocksCollector(ProxyBaseCollector):
 
                     # 数据不完整 → 删除旧数据 → 重新采集
                     if db_count > 0:
-                        self.logger.info(
-                            f"数据不完整（{db_count}/{total}），删除旧数据..."
-                        )
+                        self.logger.info(f"数据不完整（{db_count}/{total}），删除旧数据...")
                         self._delete_sector_stocks(sector_code)
 
                     # 解析第 1 页数据
@@ -573,11 +558,7 @@ class SectorStocksCollector(ProxyBaseCollector):
                     return True
                 else:
                     self.logger.warning(f"第 1 页第{retry + 1}次失败，等待后重试...")
-                    time.sleep(
-                        self.RETRY_DELAYS[retry]
-                        if retry < len(self.RETRY_DELAYS)
-                        else 10
-                    )
+                    time.sleep(self.RETRY_DELAYS[retry] if retry < len(self.RETRY_DELAYS) else 10)
             else:
                 self.logger.error(f"{sector_name} 第 1 页采集失败")
                 self._save_progress(
@@ -624,11 +605,7 @@ class SectorStocksCollector(ProxyBaseCollector):
                     break
                 else:
                     self.logger.warning(f"第{page}页第{retry + 1}次失败，等待后重试...")
-                    time.sleep(
-                        self.RETRY_DELAYS[retry]
-                        if retry < len(self.RETRY_DELAYS)
-                        else 10
-                    )
+                    time.sleep(self.RETRY_DELAYS[retry] if retry < len(self.RETRY_DELAYS) else 10)
 
             if not success:
                 self.logger.error(f"第{page}页采集失败，记录到失败列表")
@@ -637,9 +614,7 @@ class SectorStocksCollector(ProxyBaseCollector):
         # 4. 第 2 轮：重试失败页
         if failed_pages:
             self.logger.warning(f"\n{'=' * 60}")
-            self.logger.warning(
-                f"第 1 轮结束，{len(failed_pages)}页采集失败，开始第 2 轮重试..."
-            )
+            self.logger.warning(f"第 1 轮结束，{len(failed_pages)}页采集失败，开始第 2 轮重试...")
             self.logger.warning(f"{'=' * 60}\n")
 
             for page in failed_pages[:]:
@@ -672,11 +647,7 @@ class SectorStocksCollector(ProxyBaseCollector):
                         failed_pages.remove(page)
                         break
                     else:
-                        time.sleep(
-                            self.RETRY_DELAYS[retry]
-                            if retry < len(self.RETRY_DELAYS)
-                            else 10
-                        )
+                        time.sleep(self.RETRY_DELAYS[retry] if retry < len(self.RETRY_DELAYS) else 10)
 
         # 5. 最终检查
         if failed_pages:
@@ -731,13 +702,9 @@ class SectorStocksCollector(ProxyBaseCollector):
         failed_count = 0
 
         for i, sector in enumerate(sectors, 1):
-            self.logger.info(
-                f"\n[{i}/{len(sectors)}] {sector['sector_name']}({sector['sector_code']})"
-            )
+            self.logger.info(f"\n[{i}/{len(sectors)}] {sector['sector_name']}({sector['sector_code']})")
 
-            result = self._collect_single_sector(
-                sector_type, sector["sector_code"], sector["sector_name"]
-            )
+            result = self._collect_single_sector(sector_type, sector["sector_code"], sector["sector_name"])
 
             if result:
                 success_count += 1

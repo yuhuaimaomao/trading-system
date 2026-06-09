@@ -3,8 +3,7 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import sqlite3
-
+from data._base import connect
 from system.config import settings
 from system.utils.logger import get_trade_logger
 
@@ -51,18 +50,12 @@ class CloseSummaryMixin:
                         except Exception:
                             pass
                         if not new_price:
-                            new_price = (
-                                item.get("lastPrice")
-                                or item.get("last_price")
-                                or item.get("price")
-                            )
+                            new_price = item.get("lastPrice") or item.get("last_price") or item.get("price")
                         if new_price:
                             pos.update_price(float(new_price))
                         day_high = item.get("high") or 0
                         if day_high:
-                            pos.day_high = max(
-                                getattr(pos, "day_high", 0) or 0, float(day_high)
-                            )
+                            pos.day_high = max(getattr(pos, "day_high", 0) or 0, float(day_high))
                         pre_close = item.get("preClose") or item.get("pre_close") or 0
                         if pre_close and not getattr(pos, "pre_close", 0):
                             pos.pre_close = float(pre_close)
@@ -82,12 +75,10 @@ class CloseSummaryMixin:
             from datetime import datetime as _dt
             from datetime import timedelta
 
-            next_date = (
-                _dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)
-            ).strftime("%Y-%m-%d")
+            next_date = (_dt.strptime(self._trade_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             logger.warning(f"交易日历不可用，回退到自然日+1: {next_date}")
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             # 快照
             snap = conn.execute(
                 """SELECT total_value, cash, market_value, total_pnl, position_count, sector_exposure
@@ -139,9 +130,7 @@ class CloseSummaryMixin:
                 )
             conn.commit()
             conn.close()
-            logger.info(
-                f"持仓已复制到 {next_date}，{len(self.paper_account.positions)} 只"
-            )
+            logger.info(f"持仓已复制到 {next_date}，{len(self.paper_account.positions)} 只")
         except Exception as e:
             logger.warning(f"持仓复制失败: {e}")
 
@@ -210,9 +199,7 @@ class CloseSummaryMixin:
                             + "\n\n   💡 使用 /apply N 应用具体改进"
                         )
                         self._alert_private(msg)
-                        self._alert(
-                            f"🔧 收盘审计完成 → {len(imps)}条改进建议（详情私聊）"
-                        )
+                        self._alert(f"🔧 收盘审计完成 → {len(imps)}条改进建议（详情私聊）")
         except Exception as e:
             logger.warning(f"收盘审计异常（不阻塞主流程）: {e}")
 
@@ -264,7 +251,7 @@ class CloseSummaryMixin:
         all_traded_codes.update(p.positions.keys())
         prev_cost: dict[str, float] = {}
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             prev_date = conn.execute(
                 """SELECT trade_date FROM trade_portfolio_positions
                    WHERE trade_date < ? AND account='paper'
@@ -320,9 +307,7 @@ class CloseSummaryMixin:
             lines.append("   ── 今日交易 ──")
             for code, s in stocks.items():
                 # 计算总盈亏
-                sell_total = sum(
-                    r["filled_amount"] - (r.get("commission") or 0) for r in s["sells"]
-                )
+                sell_total = sum(r["filled_amount"] - (r.get("commission") or 0) for r in s["sells"])
                 sell_vol = sum(r["filled_volume"] for r in s["sells"])
 
                 if s["is_held"]:
@@ -407,8 +392,7 @@ class CloseSummaryMixin:
                     pnl_pct = (price - cost) / cost if cost > 0 else 0
                     emoji = _pnl_emoji(pnl_pct)
                     lines.append(
-                        f"   {emoji} {code}  {vol}股  成本: {cost:.2f}  "
-                        f"现价: {price:.2f}  盈亏: {pnl_pct:+.2%}"
+                        f"   {emoji} {code}  {vol}股  成本: {cost:.2f}  现价: {price:.2f}  盈亏: {pnl_pct:+.2%}"
                     )
                 else:
                     lines.append(f"   {code}  {vol}股  成本: {cost:.2f}  现价: ---")
@@ -423,11 +407,7 @@ class CloseSummaryMixin:
             for t in filled:
                 otype = "买入" if t["order_type"] == "buy" else "卖出"
                 code = t["stock_code"]
-                t_name = (
-                    self.paper_account.positions[code].stock_name
-                    if code in self.paper_account.positions
-                    else code
-                )
+                t_name = self.paper_account.positions[code].stock_name if code in self.paper_account.positions else code
                 lines.append(
                     f"   📝 {otype} {code} {t_name}  "
                     f"{t['filled_price']:.2f} × {t['filled_volume']}股  "
@@ -444,7 +424,7 @@ class CloseSummaryMixin:
 
 def _derive_real_positions(db_path: str) -> list[dict]:
     """从 trade_orders 推算实盘当前持仓（所有历史 filled 订单 net）。"""
-    conn = sqlite3.connect(db_path)
+    conn = connect(db_path)
     rows = conn.execute(
         """SELECT stock_code, order_type,
                   SUM(filled_volume) as total_vol,

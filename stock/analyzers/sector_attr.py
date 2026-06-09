@@ -1,7 +1,6 @@
 """板块归因分析器 — 板块归属/相关性/强度。"""
 
-import sqlite3
-
+from data._base import connect
 from stock.analyzers import BaseAnalyzer
 from stock.stock_schemas import AnalysisResult
 from system.config import settings
@@ -18,7 +17,7 @@ class SectorAttrAnalyzer(BaseAnalyzer):
         risk_flags = []
 
         try:
-            conn = sqlite3.connect(db_path)
+            conn = connect(db_path)
             # 查行业和概念
             row = conn.execute(
                 """SELECT industry, concepts FROM stock_basic
@@ -49,9 +48,7 @@ class SectorAttrAnalyzer(BaseAnalyzer):
         concepts_raw = row[1] or ""
 
         # 解析概念（逗号或竖线分隔）
-        concepts = [
-            c.strip() for c in concepts_raw.replace("|", ",").split(",") if c.strip()
-        ]
+        concepts = [c.strip() for c in concepts_raw.replace("|", ",").split(",") if c.strip()]
 
         data = {
             "industry": industry,
@@ -69,9 +66,7 @@ class SectorAttrAnalyzer(BaseAnalyzer):
             if len(concepts) <= 3:
                 conclusions.append(f"概念板块：{'、'.join(concepts)}")
             else:
-                conclusions.append(
-                    f"概念板块：{'、'.join(concepts[:3])}等{len(concepts)}个"
-                )
+                conclusions.append(f"概念板块：{'、'.join(concepts[:3])}等{len(concepts)}个")
                 conclusions.append("概念覆盖广，主题催化概率高")
         else:
             risk_flags.append("无概念板块归属，缺乏主题催化")

@@ -22,36 +22,48 @@ def adjust_tightening(risk_level: str, sector_trend: str) -> tuple[float, float,
     is_accel = "持续走弱" in sector_trend and "加速" in sector_trend
 
     if is_accel:
-        sl *= 0.90; tp *= 0.90; trail *= 0.90
+        sl *= 0.90
+        tp *= 0.90
+        trail *= 0.90
     elif is_weak:
-        sl *= 0.95; tp *= 0.95; trail *= 0.95
+        sl *= 0.95
+        tp *= 0.95
+        trail *= 0.95
 
     return sl, tp, trail
 
 
 def check_position_stop_loss(
-    price: float, avg_cost: float, sl: float, sl_tighten: float,
+    price: float,
+    avg_cost: float,
+    sl: float,
+    sl_tighten: float,
 ) -> tuple[bool, float]:
     """检查止损。返回 (triggered, effective_sl)。"""
     return should_stop_loss(price, avg_cost, sl, sl_tighten)
 
 
 def check_position_take_profit(
-    price: float, avg_cost: float, tp: float, tp_lower: float,
+    price: float,
+    avg_cost: float,
+    tp: float,
+    tp_lower: float,
 ) -> bool:
     """检查目标止盈。"""
     return should_take_profit(price, avg_cost, tp, tp_lower)
 
 
 def check_trailing_stop(
-    price: float, highest_price: float, trailing_stop: float, trail_tighten: float,
+    price: float,
+    highest_price: float,
+    trailing_stop: float,
+    trail_tighten: float,
 ) -> bool:
     """检查移动止盈。"""
     return should_trailing_stop(price, highest_price, trailing_stop, trail_tighten)
 
 
-def check_retracement_stop(price: float, highest_price: float,
-                           avg_cost: float, risk_level: str) -> bool:
+def check_retracement_stop(price: float, highest_price: float, avg_cost: float, risk_level: str) -> bool:
     """检查利润回撤止盈 — 三级分级保护。
 
     Returns True 表示应触发。

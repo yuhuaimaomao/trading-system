@@ -1517,6 +1517,7 @@ class Watcher(
         intra_str: str = "",
         alert_key: str = "",
         chase_key: str = "",
+        source: str = "",
     ) -> str:
         """追高/被拒场景提交 AI 异步评估。返回空字符串（异步，不阻塞扫描）。"""
         from system.ai import ai
@@ -1565,6 +1566,7 @@ class Watcher(
                 "intra_str": intra_str,
                 "alert_key": alert_key,
                 "chase_key": chase_key,
+                "source": source,
                 "submitted_at": time.time(),
             }
         return ""
@@ -1604,6 +1606,10 @@ class Watcher(
 
             # 冷却检查：同票 15 轮内且价格变化 < 2% → 跳过
             if self._should_throttle(code, ctx["price"]):
+                continue
+
+            # 复盘/板块发现不到下单不推送 AI 异步结果
+            if ctx.get("source", "") != "signal":
                 continue
 
             # 提取板块行业名

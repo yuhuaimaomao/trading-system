@@ -80,9 +80,7 @@ class StrategyPipeline:
             logger.info(f"昨日遗留: {len(legacy_candidates)} 只")
             # 去重（同日已筛选出的不再重复）
             screened_codes = {c.stock_code for c in candidates}
-            legacy_candidates = [
-                c for c in legacy_candidates if c.stock_code not in screened_codes
-            ]
+            legacy_candidates = [c for c in legacy_candidates if c.stock_code not in screened_codes]
             candidates = candidates + legacy_candidates
 
         if not candidates:
@@ -113,9 +111,7 @@ class StrategyPipeline:
             )
 
         # 步骤 3: AI 分析
-        signals, holdings_review = self._analyze(
-            profiles, trade_date, holdings, account_summaries, review_ctx
-        )
+        signals, holdings_review = self._analyze(profiles, trade_date, holdings, account_summaries, review_ctx)
 
         # 步骤 3.1: 持仓审查落库 + 应用止损止盈
         if holdings_review:
@@ -123,16 +119,12 @@ class StrategyPipeline:
 
         # 步骤 3.5: 复盘趋势精选 → 结构化信号（与 AI 信号合并，统一盯盘）
         if review_ctx and review_ctx.review_stocks_raw:
-            review_signals = self._build_review_signals(
-                review_ctx.review_stocks_raw, trade_date
-            )
+            review_signals = self._build_review_signals(review_ctx.review_stocks_raw, trade_date)
             # 去重：复盘信号中与 AI 信号重复的股票跳过
             ai_codes = {s.stock_code for s in signals}
             new_review = [rs for rs in review_signals if rs.stock_code not in ai_codes]
             signals = signals + new_review
-            logger.info(
-                f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)"
-            )
+            logger.info(f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)")
 
         # 即使没有买入信号，持仓审查也要推送
         if not signals and not holdings_review:
@@ -186,120 +178,74 @@ class StrategyPipeline:
     # 步骤 0.5: 加载持仓（实盘 + 模拟盘独立统计）
     # ------------------------------------------------------------------
 
-    def _load_holdings(
-        self, trade_date: str
-    ) -> tuple[list[HoldingInfo], list[AccountSummary]]:
-        """查询当前持仓（实盘+模拟盘），返回 (持仓列表, 账户概况)。
+    def _load_holdings(self, trade_date: str) -> tuple[list[HoldingInfo], list[AccountSummary]]:
+        """查询当前持仓（模拟盘），返回 (持仓列表, 账户概况)。
 
-        数据来源：模拟盘收盘快照 (trade_portfolio_positions / trade_portfolio_snapshots)
-        + stock_basic 行情 + trade_signals 止损止盈。
+        全部通过 repo 层查询，业务代码不含 SQL。
         """
-        import sqlite3
         from datetime import date
 
         holdings: list[HoldingInfo] = []
         summaries: list[AccountSummary] = []
 
         try:
-            conn = sqlite3.connect(self.screener.db_path)
-
-            # 1. 从持仓表读取最新持仓（模拟盘收盘快照，实盘从订单推算）
-            pos_rows = conn.execute(
-                """SELECT stock_code, stock_name, volume, avg_cost, current_price,
-                          market_value, pnl_pct, entry_date, account
-                   FROM trade_portfolio_positions
-                   WHERE trade_date=(SELECT MAX(trade_date) FROM trade_portfolio_positions WHERE account='paper')
-                     AND account='paper'"""
-            ).fetchall()
-
+            # 1. 当日持仓（收盘时 _finalize_close 已复制到当日，无持仓则为空）
+            pos_rows = self.repo.get_positions_by_date(trade_date, "paper")
             if not pos_rows:
-                conn.close()
                 return [], []
 
-            codes = [r[0] for r in pos_rows]
-            placeholders = ",".join("?" for _ in codes)
+            codes = [r["stock_code"] for r in pos_rows]
 
-            # 2. 当前行情 + 均线
-            price_rows = conn.execute(
-                f"""SELECT stock_code, stock_name, price, ma5, ma10, ma20, industry
-                    FROM stock_basic
-                    WHERE trade_date=(SELECT MAX(trade_date) FROM stock_basic)
-                      AND stock_code IN ({placeholders})""",
-                codes,
-            ).fetchall()
-            price_map = {r[0]: r for r in price_rows}
+            # 2. 当前行情 + 均线（批量查最新 stock_basic）
+            price_map = self.repo.get_latest_stock_basic_batch(codes)
 
-            # 3. 止盈止损（从 trade_signals）
-            sl_rows = conn.execute(
-                f"""SELECT stock_code, stop_loss, take_profit, signal_score
-                    FROM trade_signals
-                    WHERE status='bought' AND stock_code IN ({placeholders})
-                    ORDER BY id DESC""",
-                codes,
-            ).fetchall()
-            sl_map: dict[str, dict] = {}
-            for r in sl_rows:
-                if r[0] not in sl_map:
-                    sl_map[r[0]] = {
-                        "stop_loss": r[1] or 0,
-                        "take_profit": r[2] or 0,
-                        "score": r[3] or 0,
-                    }
-
-            conn.close()
+            # 3. 止盈止损（从 bought 信号批量查）
+            sl_map = self.repo.get_bought_sl_tp_batch(codes)
 
             today = date.today()
             td = date.fromisoformat(trade_date) if trade_date else today
 
             # 4. 组装 HoldingInfo
             for row in pos_rows:
-                (
-                    code,
-                    name,
-                    vol,
-                    avg_cost,
-                    cur_price,
-                    mkt_val,
-                    pnl_pct,
-                    entry_date,
-                    account,
-                ) = row
+                code = row["stock_code"]
+                name = row.get("stock_name", "")
+                vol = row.get("volume", 0)
+                avg_cost = row.get("avg_cost", 0)
+                cur_price = row.get("current_price", 0)
+                pnl_pct = row.get("pnl_pct", 0)
+                entry_date_str = row.get("entry_date", "") or trade_date
+                account = row.get("account", "paper")
+
                 if vol <= 0:
                     continue
 
                 pinfo = price_map.get(code)
-                cur_price = pinfo[2] if pinfo and pinfo[2] else cur_price
+                if pinfo and pinfo.get("price"):
+                    cur_price = pinfo["price"]
                 if cur_price <= 0:
                     continue
 
-                entry_date_str = entry_date or trade_date
-                hold_days = (
-                    (td - date.fromisoformat(entry_date_str)).days
-                    if entry_date_str and entry_date_str != ""
-                    else 0
-                )
+                hold_days = (td - date.fromisoformat(entry_date_str)).days if entry_date_str else 0
 
                 sl_info = sl_map.get(code, {})
                 holdings.append(
                     HoldingInfo(
                         stock_code=code,
-                        stock_name=pinfo[1] if pinfo else name,
-                        account=account or "paper",
+                        stock_name=pinfo["name"] if pinfo else name,
+                        account=account,
                         entry_date=entry_date_str,
                         holding_days=hold_days,
                         avg_cost=round(avg_cost, 3),
                         volume=int(vol),
                         current_price=cur_price,
-                        pnl_pct=round(pnl_pct, 2)
-                        if pnl_pct
-                        else round((cur_price - avg_cost) / avg_cost * 100, 2),
+                        pnl_pct=round(pnl_pct, 2) if pnl_pct else round((cur_price - avg_cost) / avg_cost * 100, 2),
                         market_value=round(cur_price * vol, 2),
                         stop_loss=sl_info.get("stop_loss", 0),
                         take_profit=sl_info.get("take_profit", 0),
-                        industry=pinfo[6] if pinfo else "",
-                        ma5=pinfo[3] if pinfo else 0,
-                        ma10=pinfo[4] if pinfo else 0,
-                        ma20=pinfo[5] if pinfo else 0,
+                        industry=pinfo.get("industry", "") if pinfo else "",
+                        ma5=pinfo.get("ma5", 0) if pinfo else 0,
+                        ma10=pinfo.get("ma10", 0) if pinfo else 0,
+                        ma20=pinfo.get("ma20", 0) if pinfo else 0,
                         highest_price=0,
                         signal_score=sl_info.get("score", 0),
                         is_today_buy=(entry_date_str == trade_date),
@@ -308,25 +254,15 @@ class StrategyPipeline:
 
             # 5. 账户概况（从快照表读）
             for account, label in [("paper", "模拟盘"), ("real", "实盘")]:
-                conn2 = sqlite3.connect(self.screener.db_path)
-                snap = conn2.execute(
-                    """SELECT total_value, cash, market_value, daily_pnl, position_count
-                       FROM trade_portfolio_snapshots
-                       WHERE account=? ORDER BY trade_date DESC LIMIT 1""",
-                    (account,),
-                ).fetchone()
-                conn2.close()
-
+                snap = self.repo.get_account_summary(account)
                 if snap:
-                    total_val, cash, mkt_val, daily_pnl, pos_count = snap
-                    pos_ratio = (
-                        mkt_val / total_val if total_val and total_val > 0 else 0
-                    )
-                    initial = (
-                        settings.PAPER_INITIAL_CAPITAL
-                        if account == "paper"
-                        else settings.REAL_INITIAL_CAPITAL
-                    )
+                    total_val = snap.get("total_value", 0)
+                    cash = snap.get("cash", 0)
+                    mkt_val = snap.get("market_value", 0)
+                    daily_pnl = snap.get("daily_pnl", 0)
+                    pos_count = snap.get("position_count", 0)
+                    pos_ratio = mkt_val / total_val if total_val > 0 else 0
+                    initial = settings.PAPER_INITIAL_CAPITAL if account == "paper" else settings.REAL_INITIAL_CAPITAL
                     summaries.append(
                         AccountSummary(
                             account=account,
@@ -337,8 +273,7 @@ class StrategyPipeline:
                             market_value=round(mkt_val, 2),
                             position_ratio=round(pos_ratio, 4),
                             daily_pnl=round(daily_pnl or 0, 2),
-                            position_count=pos_count
-                            or len([h for h in holdings if h.account == account]),
+                            position_count=pos_count or len([h for h in holdings if h.account == account]),
                         )
                     )
 
@@ -401,9 +336,7 @@ class StrategyPipeline:
                 ctx.avoid_direction = avoid_m.group(1).strip()
 
         # 第七节: 从 STOCKS JSON 提取趋势精选 codes + 结构化数据
-        ctx.review_picks, ctx.review_stocks_raw = self._extract_review_picks(
-            text, with_raw=True
-        )
+        ctx.review_picks, ctx.review_stocks_raw = self._extract_review_picks(text, with_raw=True)
 
         logger.info(
             f"复盘上下文提取完成: 情绪={ctx.sentiment_cycle[:30] if ctx.sentiment_cycle else '无'}..., "
@@ -412,16 +345,12 @@ class StrategyPipeline:
         return ctx
 
     @staticmethod
-    def _extract_report_section(
-        text: str, section_num: str, next_num: Optional[str]
-    ) -> str:
+    def _extract_report_section(text: str, section_num: str, next_num: Optional[str]) -> str:
         """提取复盘报告中两个节标题之间的内容。"""
         import re
 
         # 节标题: 行首 emoji + 空格 + 中文数字 + 、
-        start_pattern = re.compile(
-            rf"^[^\x00-\x7F].*?{re.escape(section_num)}、", re.MULTILINE
-        )
+        start_pattern = re.compile(rf"^[^\x00-\x7F].*?{re.escape(section_num)}、", re.MULTILINE)
         start_m = start_pattern.search(text)
         if not start_m:
             return ""
@@ -431,9 +360,7 @@ class StrategyPipeline:
             content_start = nl + 1
 
         if next_num:
-            next_pattern = re.compile(
-                rf"^[^\x00-\x7F].*?{re.escape(next_num)}、", re.MULTILINE
-            )
+            next_pattern = re.compile(rf"^[^\x00-\x7F].*?{re.escape(next_num)}、", re.MULTILINE)
             next_m = next_pattern.search(text, content_start)
             content_end = next_m.start() if next_m else len(text)
         else:
@@ -495,9 +422,7 @@ class StrategyPipeline:
         if candidates:
             strong = sum(1 for c in candidates if c.trend_mode == "strong")
             normal = len(candidates) - strong
-            logger.info(
-                f"趋势筛选: {len(candidates)} 只 (5日强:{strong} 20日稳:{normal})"
-            )
+            logger.info(f"趋势筛选: {len(candidates)} 只 (5日强:{strong} 20日稳:{normal})")
             self._save_funnel(candidates, trade_date)
         else:
             logger.info("趋势筛选: 0 只候选")
@@ -566,53 +491,39 @@ class StrategyPipeline:
             return [], {}
 
         reasons = {s["stock_code"]: s.get("reason", "") for s in legacy_signals}
-
         codes = [s["stock_code"] for s in legacy_signals]
-        # 从 stock_basic 取今日基础数据
-        try:
-            import sqlite3
 
-            conn = sqlite3.connect(self.screener.db_path)
-            placeholders = ",".join(["?" for _ in codes])
-            rows = conn.execute(
-                f"""SELECT stock_code, stock_name, price, change_pct, total_market_cap,
-                           circ_market_cap, turnover_rate, volume_ratio,
-                           ma5, ma10, ma20, ma5_angle, industry,
-                           main_force_net, main_force_ratio
-                    FROM stock_basic
-                    WHERE trade_date=? AND stock_code IN ({placeholders})""",
-                [trade_date] + codes,
-            ).fetchall()
-            conn.close()
+        # 从 stock_basic 取今日基础数据（批量查）
+        try:
+            row_map = self.repo.get_stock_basic_batch(trade_date, codes)
         except Exception as e:
             logger.warning(f"加载遗留股票基础数据失败: {e}")
             return [], {}
 
-        row_map = {r[0]: r for r in rows}
         candidates = []
         for sig in legacy_signals:
             code = sig["stock_code"]
             row = row_map.get(code)
-            if not row or not row[2]:
+            if not row or not row.get("price"):
                 continue
             ss = StockScore(
                 stock_code=code,
-                stock_name=row[1],
+                stock_name=row["name"],
                 trend_mode="normal",
                 score=sig.get("signal_score") or 50,
-                price=float(row[2]) if row[2] else 0,
-                change_pct=float(row[3]) if row[3] else 0,
-                mcap=(float(row[4]) / 1e8) if row[4] else 0,
-                circ_mcap=(float(row[5]) / 1e8) if row[5] else 0,
-                turnover_rate=float(row[6]) if row[6] else 0,
-                volume_ratio=float(row[7]) if row[7] else 0,
-                ma5=float(row[8]) if row[8] else 0,
-                ma10=float(row[9]) if row[9] else 0,
-                ma20=float(row[10]) if row[10] else 0,
-                ma5_angle=float(row[11]) if row[11] else 0,
-                industry=row[12] or "",
-                mf_wan=float(row[13]) if row[13] else 0,
-                mf_ratio=float(row[14]) if row[14] else 0,
+                price=float(row["price"]),
+                change_pct=float(row.get("change_pct", 0) or 0),
+                mcap=(float(row.get("mcap", 0) or 0) / 1e8),
+                circ_mcap=(float(row.get("circ_mcap", 0) or 0) / 1e8),
+                turnover_rate=float(row.get("turnover_rate", 0) or 0),
+                volume_ratio=float(row.get("volume_ratio", 0) or 0),
+                ma5=float(row.get("ma5", 0) or 0),
+                ma10=float(row.get("ma10", 0) or 0),
+                ma20=float(row.get("ma20", 0) or 0),
+                ma5_angle=float(row.get("ma5_angle", 0) or 0),
+                industry=row.get("industry", "") or "",
+                mf_wan=(float(row.get("mf_net", 0) or 0) / 10000),
+                mf_ratio=float(row.get("mf_ratio", 0) or 0),
                 tags=["昨日遗留"],
                 scenarios=[],
             )
@@ -624,9 +535,7 @@ class StrategyPipeline:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_review_signals(
-        raw_stocks: list[dict], trade_date: str
-    ) -> list[OrderSignal]:
+    def _build_review_signals(raw_stocks: list[dict], trade_date: str) -> list[OrderSignal]:
         """将复盘 STOCKS JSON 中的全部推荐票（龙头/中军/补涨/趋势票）转为 OrderSignal。"""
         import re
 
@@ -653,9 +562,7 @@ class StrategyPipeline:
 
             # 缺止损/止盈时从技术指标自动补算
             if sl <= 0 or tp <= 0:
-                calc_sl, calc_tp = StrategyPipeline._calc_fallback_sl_tp(
-                    code, trade_date
-                )
+                calc_sl, calc_tp = StrategyPipeline._calc_fallback_sl_tp(code, trade_date)
                 if sl <= 0:
                     sl = calc_sl
                 if tp <= 0:
@@ -699,84 +606,48 @@ class StrategyPipeline:
         market_state: str = "",
     ):
         """为持仓构建完整 StockProfile 画像，注入 AI 审查用技术数据。"""
-        import sqlite3
-
         codes = [h.stock_code for h in holdings]
         if not codes:
             return
 
-        conn = sqlite3.connect(self.screener.db_path)
-        try:
-            placeholders = ",".join("?" for _ in codes)
-            rows = conn.execute(
-                f"""SELECT stock_code, stock_name, price, change_pct,
-                          total_market_cap, turnover_rate, volume_ratio,
-                          ma5, ma10, ma20, ma5_angle, industry,
-                          main_force_net, main_force_ratio
-                   FROM stock_basic
-                   WHERE trade_date=(SELECT MAX(trade_date) FROM stock_basic)
-                     AND stock_code IN ({placeholders})""",
-                codes,
-            ).fetchall()
-            basic_map = {r[0]: r for r in rows}
-        finally:
-            conn.close()
+        # 批量查最新 stock_basic
+        basic_map = self.repo.get_latest_stock_basic_batch(codes)
 
         scores = []
         for h in holdings:
             row = basic_map.get(h.stock_code)
             if not row:
                 continue
-            (
-                _,
-                name,
-                price,
-                chg,
-                mcap,
-                turnover,
-                vol_ratio,
-                ma5,
-                ma10,
-                ma20,
-                ma5_angle,
-                industry,
-                mf_net,
-                mf_ratio,
-            ) = row
-            mcap_yi = (mcap or 0) / 1_0000_0000
+            mcap_yi = (row.get("mcap", 0) or 0) / 1_0000_0000
             scores.append(
                 StockScore(
                     stock_code=h.stock_code,
-                    stock_name=name or h.stock_name,
+                    stock_name=row.get("name", "") or h.stock_name,
                     trend_mode="",
                     score=0,
-                    price=price or 0,
-                    change_pct=chg or 0,
+                    price=row.get("price", 0) or 0,
+                    change_pct=row.get("change_pct", 0) or 0,
                     mcap=round(mcap_yi, 1),
                     circ_mcap=round(mcap_yi, 1),
-                    turnover_rate=turnover or 0,
-                    volume_ratio=vol_ratio or 0,
-                    ma5=ma5 or 0,
-                    ma10=ma10 or 0,
-                    ma20=ma20 or 0,
-                    ma5_angle=ma5_angle or 0,
-                    industry=industry or h.industry,
-                    mf_wan=(mf_net or 0) / 10000,
-                    mf_ratio=mf_ratio or 0,
+                    turnover_rate=row.get("turnover_rate", 0) or 0,
+                    volume_ratio=row.get("volume_ratio", 0) or 0,
+                    ma5=row.get("ma5", 0) or 0,
+                    ma10=row.get("ma10", 0) or 0,
+                    ma20=row.get("ma20", 0) or 0,
+                    ma5_angle=row.get("ma5_angle", 0) or 0,
+                    industry=row.get("industry", "") or h.industry,
+                    mf_wan=(row.get("mf_net", 0) or 0) / 10000,
+                    mf_ratio=row.get("mf_ratio", 0) or 0,
                 )
             )
 
         if scores:
-            holding_profiles = self.profiler.build(
-                scores, trade_date, market_state=market_state
-            )
+            holding_profiles = self.profiler.build(scores, trade_date, market_state=market_state)
             profile_map = {p.code: p for p in holding_profiles}
             for h in holdings:
                 h.profile = profile_map.get(h.stock_code)
 
-        logger.info(
-            f"持仓画像富化: {len(scores)} 只 → {len([h for h in holdings if h.profile])} 个完整画像"
-        )
+        logger.info(f"持仓画像富化: {len(scores)} 只 → {len([h for h in holdings if h.profile])} 个完整画像")
 
     # ------------------------------------------------------------------
     # 步骤 3: AI 分析
@@ -800,9 +671,7 @@ class StrategyPipeline:
                 review_context=review_ctx,
             )
             if signals:
-                logger.info(
-                    f"AI 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查"
-                )
+                logger.info(f"AI 分析: {len(signals)} 个买入信号, {len(holdings_review)} 条持仓审查")
                 return signals, holdings_review
             logger.warning("AI 分析返回空结果")
         except Exception as e:
@@ -815,26 +684,14 @@ class StrategyPipeline:
     # 安全网: 验证 AI 输出的股票确实通过硬关卡
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _validate_signal(signal: OrderSignal) -> bool:
+    def _validate_signal(self, signal: OrderSignal) -> bool:
         """防止 AI 幻觉生成未通过筛选的股票。"""
-        import sqlite3
-
         from strategy.screening.factors import check_hard_gates
-        from system.config import settings
 
         try:
-            conn = sqlite3.connect(settings.DATABASE_PATH)
-            row = conn.execute(
-                """SELECT * FROM stock_basic
-                   WHERE stock_code=? AND trade_date=(SELECT MAX(trade_date) FROM stock_basic)""",
-                (signal.stock_code,),
-            ).fetchone()
-            conn.close()
-            if not row:
+            data = self.repo.get_stock_basic(signal.stock_code)
+            if not data:
                 return False
-            cols = [d[0] for d in row.cursor.description]
-            data = dict(zip(cols, row))
             return check_hard_gates(data)
         except Exception:
             return True  # 无法验证时放行，避免阻塞管线
@@ -871,9 +728,7 @@ class StrategyPipeline:
                     new_stop_loss=hr.new_stop_loss,
                     new_take_profit=hr.new_take_profit,
                 )
-                logger.info(
-                    f"  已应用止损止盈: {hr.stock_code} sl={hr.new_stop_loss} tp={hr.new_take_profit}"
-                )
+                logger.info(f"  已应用止损止盈: {hr.stock_code} sl={hr.new_stop_loss} tp={hr.new_take_profit}")
 
     # ------------------------------------------------------------------
     # 步骤 4: 信号入库
@@ -885,14 +740,10 @@ class StrategyPipeline:
         # 先清理旧 pending 信号（避免多日积压）
         self.repo.expire_old_pending_signals(trade_date)
         # AI 精选信号后保存，确保 REPLACE 时覆盖复盘精选的同票记录
-        ordered = sorted(
-            signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1
-        )
+        ordered = sorted(signals, key=lambda s: 0 if s.source == SignalSource.REVIEW else 1)
         for s in ordered:
             if s.source != SignalSource.REVIEW and not self._validate_signal(s):
-                logger.warning(
-                    f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过"
-                )
+                logger.warning(f"  安全网拦截: {s.stock_code} {s.stock_name} 未通过硬关卡，跳过")
                 continue
             signal_dict = {
                 "trade_date": trade_date,
@@ -916,39 +767,20 @@ class StrategyPipeline:
             sid = self.repo.insert_signal(signal_dict)
             if sid:
                 saved += 1
-                logger.info(
-                    f"  信号入库: {s.stock_code} {s.stock_name} zone={s.buy_zone_min}-{s.buy_zone_max}"
-                )
+                logger.info(f"  信号入库: {s.stock_code} {s.stock_name} zone={s.buy_zone_min}-{s.buy_zone_max}")
 
         logger.info(f"信号入库: {saved}/{len(signals)}")
         return saved
 
     def _backfill_signal_ids(self, signals: list[OrderSignal], trade_date: str):
         """AI 信号入库后，把 signal_id 回填到 strategy_ai_decisions"""
-        import sqlite3
-
-        repo = self.repo
-        conn = sqlite3.connect(repo.db_path)
-        try:
-            rows = conn.execute(
-                "SELECT id, stock_code FROM trade_signals WHERE trade_date=? AND signal_source='AI_ENHANCED'",
-                (trade_date,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        code_to_signal_id = {r[1]: r[0] for r in rows}
+        rows = self.repo.get_signals_by_date_source(trade_date, "AI_ENHANCED")
+        code_to_signal_id = {r["stock_code"]: r["id"] for r in rows}
 
         for s in signals:
             sid = code_to_signal_id.get(s.stock_code)
             if sid:
-                conn = sqlite3.connect(repo.db_path)
-                conn.execute(
-                    "UPDATE strategy_ai_decisions SET signal_id=? WHERE push_date=? AND stock_code=?",
-                    (sid, trade_date, s.stock_code),
-                )
-                conn.commit()
-                conn.close()
+                self.repo.update_decision_signal_id(trade_date, s.stock_code, sid)
 
     # ------------------------------------------------------------------
     # 推送摘要
@@ -1001,9 +833,7 @@ class StrategyPipeline:
         # 推送到群（仅模拟盘内容）
         if TELEGRAM_REPORT_CHAT_ID:
             try:
-                sender = MessageSender(
-                    chat_id=TELEGRAM_REPORT_CHAT_ID, bot_token=TELEGRAM_REPORT_BOT_TOKEN
-                )
+                sender = MessageSender(chat_id=TELEGRAM_REPORT_CHAT_ID, bot_token=TELEGRAM_REPORT_BOT_TOKEN)
                 sender.send(group_msg)
                 logger.info("交易信号推送成功 (群)")
             except Exception as e:
@@ -1030,12 +860,8 @@ class StrategyPipeline:
             if mcap:
                 mcap_str = f"，市值{mcap:.0f}亿"
 
-        source_tag = (
-            "🤖AI精选" if s.source == SignalSource.AI_ENHANCED else "📊复盘精选"
-        )
-        lines = [
-            f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）{source_tag}"
-        ]
+        source_tag = "🤖AI精选" if s.source == SignalSource.AI_ENHANCED else "📊复盘精选"
+        lines = [f"{index}. {s.stock_name}（{s.stock_code}，{sec}{mcap_str}）{source_tag}"]
 
         # 趋势定级
         trend_rating = StrategyPipeline._derive_trend_rating(s, p)
@@ -1106,11 +932,7 @@ class StrategyPipeline:
 
     @staticmethod
     def _build_buy_note(s: OrderSignal, p: Optional[StockProfile]) -> str:
-        zone = (
-            f"{s.buy_zone_min:.2f}-{s.buy_zone_max:.2f}"
-            if s.buy_zone_min and s.buy_zone_max
-            else "待定"
-        )
+        zone = f"{s.buy_zone_min:.2f}-{s.buy_zone_max:.2f}" if s.buy_zone_min and s.buy_zone_max else "待定"
         if not p:
             return f"买入区间 {zone}"
         h = p.history
@@ -1154,30 +976,21 @@ class StrategyPipeline:
     @staticmethod
     def _calc_fallback_sl_tp(code: str, trade_date: str) -> tuple[float, float]:
         """AI 未给止损/止盈时，从技术指标自动补算。"""
-        import sqlite3
-
-        from data.readers.stock_reader import StockReader
+        from data.repo import TradeRepository
 
         sl = 0.0
         tp = 0.0
+        repo = TradeRepository()
         try:
-            conn = sqlite3.connect(settings.DATABASE_PATH)
-            row = conn.execute(
-                """SELECT price FROM stock_basic
-                   WHERE stock_code=? AND trade_date=?
-                   ORDER BY trade_date DESC LIMIT 1""",
-                (code, trade_date),
-            ).fetchone()
-            price = float(row[0]) if row and row[0] else 0
+            price = repo.get_stock_price(code, trade_date) or 0
             if price > 0:
-                sr = StockReader.get_support_resistance(conn, code, price)
+                sr = repo.get_support_resistance(code, price)
                 supports = sr.get("supports", [])
                 resistances = sr.get("resistances", [])
                 if supports:
                     sl = round(supports[0][0] * 0.99, 2)
                 if resistances:
                     tp = round(resistances[0][0], 2)
-            conn.close()
         except Exception:
             pass
         if sl <= 0:

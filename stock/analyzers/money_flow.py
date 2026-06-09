@@ -1,7 +1,6 @@
 """资金面分析器 — 主力资金/北向/龙虎榜/大单流向。"""
 
-import sqlite3
-
+from data._base import connect
 from data.readers.stock_reader import StockReader
 from stock.analyzers import BaseAnalyzer
 from stock.stock_schemas import AnalysisResult
@@ -19,7 +18,7 @@ class MoneyFlowAnalyzer(BaseAnalyzer):
         risk_flags = []
 
         try:
-            conn = sqlite3.connect(db_path)
+            conn = connect(db_path)
             mf = StockReader.get_money_flow(conn, symbol)
             conn.close()
         except Exception as e:
@@ -49,24 +48,16 @@ class MoneyFlowAnalyzer(BaseAnalyzer):
 
         if mf_net > 0:
             if mf_ratio > 5:
-                conclusions.append(
-                    f"主力大幅流入{mf_net / 1e4:.0f}万（占比{mf_ratio:.1f}%）"
-                )
+                conclusions.append(f"主力大幅流入{mf_net / 1e4:.0f}万（占比{mf_ratio:.1f}%）")
             elif mf_ratio > 2:
-                conclusions.append(
-                    f"主力温和流入{mf_net / 1e4:.0f}万（占比{mf_ratio:.1f}%）"
-                )
+                conclusions.append(f"主力温和流入{mf_net / 1e4:.0f}万（占比{mf_ratio:.1f}%）")
             else:
                 conclusions.append(f"主力小幅流入{mf_net / 1e4:.0f}万")
         elif mf_net < 0:
             if mf_ratio < -5:
-                risk_flags.append(
-                    f"主力大幅流出{abs(mf_net) / 1e4:.0f}万（占比{abs(mf_ratio):.1f}%）"
-                )
+                risk_flags.append(f"主力大幅流出{abs(mf_net) / 1e4:.0f}万（占比{abs(mf_ratio):.1f}%）")
             elif mf_ratio < -2:
-                risk_flags.append(
-                    f"主力温和流出{abs(mf_net) / 1e4:.0f}万（占比{abs(mf_ratio):.1f}%）"
-                )
+                risk_flags.append(f"主力温和流出{abs(mf_net) / 1e4:.0f}万（占比{abs(mf_ratio):.1f}%）")
             conclusions.append(f"主力净流出{abs(mf_net) / 1e4:.0f}万")
         else:
             conclusions.append("主力资金基本平衡")
@@ -91,9 +82,7 @@ class MoneyFlowAnalyzer(BaseAnalyzer):
         if circ_cap > 0:
             cap_yi = circ_cap / 1e8
             if cap_yi > 1000:
-                conclusions.append(
-                    f"流通市值{cap_yi:.0f}亿，大盘股，资金推动需较大成交量"
-                )
+                conclusions.append(f"流通市值{cap_yi:.0f}亿，大盘股，资金推动需较大成交量")
             elif cap_yi > 100:
                 conclusions.append(f"流通市值{cap_yi:.0f}亿，中盘股")
             else:

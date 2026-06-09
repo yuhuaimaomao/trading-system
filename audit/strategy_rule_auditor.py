@@ -9,8 +9,8 @@
 """
 
 import json
-import sqlite3
 
+from data._base import connect
 from data.repo import TradeRepository
 from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_audit_logger
@@ -44,7 +44,7 @@ class RuleAuditor:
 
     def _factor_winrate(self, push_date: str) -> list[dict]:
         """每个因子标签的 buy 票平均涨跌"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT d.stock_code, d.verdict, d.day_change_pct, f.factors_passed
                FROM strategy_ai_decisions d
@@ -75,16 +75,8 @@ class RuleAuditor:
 
         findings = []
         for factor, stats in factor_stats.items():
-            buy_avg = (
-                sum(stats["buy_returns"]) / len(stats["buy_returns"])
-                if stats["buy_returns"]
-                else 0
-            )
-            skip_avg = (
-                sum(stats["skip_returns"]) / len(stats["skip_returns"])
-                if stats["skip_returns"]
-                else 0
-            )
+            buy_avg = sum(stats["buy_returns"]) / len(stats["buy_returns"]) if stats["buy_returns"] else 0
+            skip_avg = sum(stats["skip_returns"]) / len(stats["skip_returns"]) if stats["skip_returns"] else 0
 
             if stats["buy_returns"] and stats["skip_returns"] and buy_avg < skip_avg:
                 findings.append(
@@ -106,7 +98,7 @@ class RuleAuditor:
 
     def _factor_interaction(self, push_date: str) -> list[dict]:
         """分析多因子组合的胜率"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT d.verdict, d.day_change_pct, f.factors_passed, f.score
                FROM strategy_ai_decisions d
@@ -153,7 +145,7 @@ class RuleAuditor:
 
     def _threshold_analysis(self, push_date: str) -> list[dict]:
         """分析因子阈值敏感性：margin 小的票实际表现"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT f.stock_code, f.factors_detail, f.score, d.verdict, d.day_change_pct
                FROM strategy_funnel f
@@ -198,7 +190,7 @@ class RuleAuditor:
 
     def _skip_counterfactual(self, push_date: str) -> list[dict]:
         """统计 skip 票如果买入的假想收益"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT stock_code, stock_name, skip_reason, day_change_pct
                FROM strategy_ai_decisions
@@ -241,7 +233,7 @@ class RuleAuditor:
 
     def _scenario_analysis(self, push_date: str) -> list[dict]:
         """按场景标签统计 buy/skip 收益"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             """SELECT d.verdict, d.day_change_pct, f.scenarios
                FROM strategy_ai_decisions d
@@ -271,11 +263,7 @@ class RuleAuditor:
 
         findings = []
         for sc, stats in scenario_stats.items():
-            buy_avg = (
-                sum(stats["buy_returns"]) / len(stats["buy_returns"])
-                if stats["buy_returns"]
-                else 0
-            )
+            buy_avg = sum(stats["buy_returns"]) / len(stats["buy_returns"]) if stats["buy_returns"] else 0
             if stats["buy_count"] >= 2:
                 f = {
                     "type": "scenario_performance",

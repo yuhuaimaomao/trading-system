@@ -4,9 +4,9 @@ import sys
 
 # 全局：绕过 Shadowrocket/Surge/Clash 的 DNS 劫持
 # 必须在所有网络请求之前安装
-from system.utils.dns_bypass import install as _install_dns_bypass
-
-_install_dns_bypass()
+# TODO: 2026-06-08 临时禁用，观察 curl_cffi 连接是否恢复正常
+# from system.utils.dns_bypass import install as _install_dns_bypass
+# _install_dns_bypass()
 
 COMMANDS = [
     "review",
@@ -58,7 +58,7 @@ def cmd_morning():
     except Exception as e:
         logger.warning(f"Telegram 初始化失败（将只输出日志）: {e}")
 
-    brief =  MorningBrief(telegram_bot=telegram)
+    brief = MorningBrief(telegram_bot=telegram)
     brief.generate_and_send()
 
 
@@ -73,9 +73,7 @@ def cmd_monitor():
 
     from system.config.settings import PROJECT_ROOT
 
-    _log_dir = (
-        PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
-    )
+    _log_dir = PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
     _log_dir.mkdir(parents=True, exist_ok=True)
     _monitor_fh = open(  # noqa: SIM115
         str(_log_dir / "monitor.log"), "a", encoding="utf-8", buffering=1
@@ -305,9 +303,7 @@ def cmd_portfolio():
     from trade.exec.paper.portfolio import Portfolio
 
     p = Portfolio()
-    print(
-        f"  现金: {p.cash:.2f}  总资产: {p.total_value:.2f}  持仓数: {len(p.positions)}"
-    )
+    print(f"  现金: {p.cash:.2f}  总资产: {p.total_value:.2f}  持仓数: {len(p.positions)}")
 
 
 def cmd_strategy():
@@ -321,9 +317,7 @@ def cmd_strategy():
     set_current_task("strategy")
     logger = get_task_logger("strategy")
 
-    trade_date = (
-        sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
-    )
+    trade_date = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else None
     if trade_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", trade_date):
         logger.error(f"日期格式无效: {trade_date}，需为 YYYY-MM-DD")
         sys.exit(1)
@@ -390,7 +384,7 @@ def cmd_track():
     set_current_task("track")
     logger = get_task_logger("track")
 
-    tracker =  StockTracker()
+    tracker = StockTracker()
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -398,9 +392,7 @@ def cmd_track():
     tracker.update_next_day_data(yesterday, today)
 
     stats = tracker.get_statistics()
-    logger.info(
-        f"总推荐: {stats['total']} | 胜率: {stats['win_rate']:.1f}% | 平均收益: {stats['avg_return']:.2f}%"
-    )
+    logger.info(f"总推荐: {stats['total']} | 胜率: {stats['win_rate']:.1f}% | 平均收益: {stats['avg_return']:.2f}%")
 
 
 def cmd_listen():
@@ -467,9 +459,7 @@ def cmd_qmt_collect():
     from system.utils.logger import get_task_logger, set_current_task
 
     # stdout/stderr → qmt_collect.log（含所有 logging.getLogger 的输出）
-    _log_dir = (
-        PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
-    )
+    _log_dir = PROJECT_ROOT / "storage" / "logs" / _dt.now().strftime("%Y-%m-%d") / "tasks"
     _log_dir.mkdir(parents=True, exist_ok=True)
     _collect_fh = open(  # noqa: SIM115
         str(_log_dir / "qmt_collect.log"), "a", encoding="utf-8", buffering=1
@@ -521,16 +511,12 @@ def cmd_strategy_audit():
         return
     if "--list" in sys.argv:
         for imp in list_pending(repo):
-            print(
-                f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
-            )
+            print(f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}")
         return
 
     pipeline = AuditPipeline("strategy", SRule(), SAI(), repo=repo)
     result = pipeline.run(push_date)
-    print(
-        f"  规则发现: {len(result['findings'])} 条  改进建议: {len(result['improvements'])} 条"
-    )
+    print(f"  规则发现: {len(result['findings'])} 条  改进建议: {len(result['improvements'])} 条")
 
 
 def cmd_audit():
@@ -559,9 +545,7 @@ def cmd_audit():
 
     if "--list" in sys.argv:
         for imp in list_pending(repo):
-            print(
-                f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}"
-            )
+            print(f"  #{imp['id']} [{imp['improvement_type']}] {imp['suggested_change'][:80]}")
         if not list_pending(repo):
             print("无待处理改进建议")
         return

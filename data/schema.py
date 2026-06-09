@@ -167,21 +167,60 @@ def ensure_tables():
         );
     """)
 
-    # stock_basic 基础表（测试环境可能不存在）
+    # stock_basic 基础表（与生产库一致，共 50 字段含 id）
+    # 注意：DDL 仅作文档用，生产库由采集器 INSERT 自动创建列，不要手动 ALTER
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_basic (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             trade_date TEXT NOT NULL,
             stock_code TEXT NOT NULL,
             stock_name TEXT,
-            price REAL, open REAL, high REAL, low REAL, prev_close REAL,
-            change_pct REAL, total_market_cap REAL, circ_market_cap REAL,
-            turnover_rate REAL, volume_ratio REAL, amplitude REAL, volume REAL,
-            ma5 REAL, ma10 REAL, ma20 REAL, ma5_angle REAL,
-            industry TEXT, concepts TEXT,
-            main_force_net REAL, main_force_ratio REAL,
-            super_large_net REAL, large_net REAL, medium_net REAL, small_net REAL,
-            avg_vol_5d REAL, avg_vol_20d REAL,
-            pe_ttm REAL, pb_ratio REAL, revenue_growth REAL, profit_growth REAL
+            price REAL,
+            change_pct REAL,
+            change_amount REAL,
+            volume REAL,
+            turnover REAL,
+            amplitude REAL,
+            turnover_rate REAL,
+            pe_dynamic REAL,
+            volume_ratio REAL,
+            high REAL,
+            low REAL,
+            open REAL,
+            prev_close REAL,
+            total_market_cap REAL,
+            circ_market_cap REAL,
+            pb_ratio REAL,
+            total_shares REAL,
+            circ_shares REAL,
+            revenue_growth REAL,
+            profit_growth REAL,
+            undistributed_profit REAL,
+            asset_liability_ratio REAL,
+            main_force_net REAL,
+            super_large_net REAL,
+            large_net REAL,
+            medium_net REAL,
+            small_net REAL,
+            main_force_ratio REAL,
+            super_large_ratio REAL,
+            large_ratio REAL,
+            medium_ratio REAL,
+            small_ratio REAL,
+            pe_ttm REAL,
+            industry TEXT,
+            region TEXT,
+            concepts TEXT,
+            bps REAL,
+            listing_date TEXT,
+            updated_at TEXT,
+            avg_price REAL,
+            ma5 REAL,
+            ma20 REAL,
+            ma5_angle REAL,
+            ma10 REAL,
+            avg_vol_5d REAL,
+            avg_vol_20d REAL
         );
     """)
 

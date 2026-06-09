@@ -7,9 +7,9 @@
   - 大盘状态参数控制策略倾向（恐慌空仓/普跌禁追）
 """
 
-import sqlite3
 from typing import Optional
 
+from data._base import connect
 from stock.signals import StockScore
 from strategy.screening.factors import (
     check_amplitude_contract,
@@ -136,7 +136,7 @@ class TrendScreener:
             logger.info("大盘恐慌状态，跳过筛选")
             return []
 
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         try:
             rows = self._fetch_base(conn, trade_date)
             sector_data = self._load_sector_data(conn, trade_date, rows)
@@ -145,8 +145,7 @@ class TrendScreener:
         finally:
             conn.close()
 
-    def _fetch_base(self, conn: sqlite3.Connection, trade_date: str) -> list[dict]:
-        conn.row_factory = sqlite3.Row
+    def _fetch_base(self, conn, trade_date: str) -> list[dict]:
         cursor = conn.execute(_BASE_SQL, (trade_date,))
         return [dict(r) for r in cursor.fetchall()]
 
@@ -154,7 +153,7 @@ class TrendScreener:
 
     def _load_sector_data(
         self,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
         rows: list[dict],
     ) -> dict:
@@ -184,16 +183,9 @@ class TrendScreener:
 
     @staticmethod
     def _load_stock_sectors(conn, codes: list[str]) -> dict[str, list[str]]:
-        result: dict[str, list[str]] = {}
-        if not codes:
-            return result
-        placeholders = ",".join("?" for _ in codes)
-        for row in conn.execute(
-            f"SELECT stock_code, sector_code FROM sector_stocks WHERE stock_code IN ({placeholders})",
-            codes,
-        ):
-            result.setdefault(row["stock_code"], []).append(row["sector_code"])
-        return result
+        from data.strategy.screening import ScreeningReader
+
+        return ScreeningReader.get_sector_stocks_batch(conn, codes)
 
     @staticmethod
     def _load_sector_changes(conn, trade_date: str) -> dict[str, float]:
@@ -266,7 +258,7 @@ class TrendScreener:
 
     @staticmethod
     def _load_serious_risks(
-        conn: sqlite3.Connection,
+        conn,
         codes: list[str],
         trade_date: str,
     ) -> set[str]:
@@ -310,7 +302,7 @@ class TrendScreener:
 
     @staticmethod
     def _load_weekly_bbi(
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
         codes: list[str],
     ) -> dict[str, float]:
@@ -329,7 +321,7 @@ class TrendScreener:
 
     def _screen_rows(
         self,
-        conn: sqlite3.Connection,
+        conn,
         rows: list[dict],
         trade_date: str,
         market_state: str,
@@ -443,12 +435,11 @@ class TrendScreener:
 
     def _get_history(
         self,
-        conn: sqlite3.Connection,
+        conn,
         stock_code: str,
         trade_date: str,
         days: int,
     ) -> list[dict]:
-        conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """SELECT trade_date, price, open, high, low, prev_close,
                       change_pct, volume_ratio, ma5, ma10, ma20

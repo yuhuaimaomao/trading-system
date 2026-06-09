@@ -54,9 +54,7 @@ def get_today_filled_orders(conn):
 
 
 def get_pending_signals(conn):
-    rows = conn.execute(
-        "SELECT id, stock_code, stock_name FROM trade_signals WHERE status='pending'"
-    ).fetchall()
+    rows = conn.execute("SELECT id, stock_code, stock_name FROM trade_signals WHERE status='pending'").fetchall()
     return rows
 
 
@@ -75,7 +73,6 @@ def compute_portfolio():
     positions = []
     total_mv = 0
     total_cost = 0
-    drawdown = 0
 
     for code, (name, vol, cost) in BUYS.items():
         close = CLOSE_PRICES[code]
@@ -307,11 +304,7 @@ def main():
 
     for p in positions:
         emoji = (
-            "✅"
-            if p["pnl_pct"] > 0.03
-            else (
-                "🟢" if p["pnl_pct"] > 0 else ("🟡" if p["pnl_pct"] > -0.03 else "🔴")
-            )
+            "✅" if p["pnl_pct"] > 0.03 else ("🟢" if p["pnl_pct"] > 0 else ("🟡" if p["pnl_pct"] > -0.03 else "🔴"))
         )
         print(
             f"   {emoji} {p['code']} {p['name']}  "
@@ -378,8 +371,7 @@ def main():
                 result = ai.run_and_save(TODAY)
                 if result:
                     print(
-                        f"  AI 审计: {len(result.get('improvements', []))} 改进, "
-                        f"{len(result.get('lessons', []))} 教训"
+                        f"  AI 审计: {len(result.get('improvements', []))} 改进, {len(result.get('lessons', []))} 教训"
                     )
             print("✅ 步骤7: 审计完成")
         except Exception as e:

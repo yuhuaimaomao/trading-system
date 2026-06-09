@@ -1,7 +1,6 @@
 """技术面分析器 — 复用 analysis/indicators + data/readers。"""
 
-import sqlite3
-
+from data._base import connect
 from data.readers.stock_reader import StockReader
 from stock.analyzers import BaseAnalyzer
 from stock.stock_schemas import AnalysisResult
@@ -19,7 +18,7 @@ class TechnicalAnalyzer(BaseAnalyzer):
         risk_flags = []
 
         try:
-            conn = sqlite3.connect(db_path)
+            conn = connect(db_path)
             ind = StockReader.get_daily_indicators(conn, symbol)
             conn.close()
         except Exception as e:
@@ -64,7 +63,6 @@ class TechnicalAnalyzer(BaseAnalyzer):
         # ── MACD ──
         macd_dif = ind.get("macd_dif", 0) or 0
         macd_dea = ind.get("macd_dea", 0) or 0
-        macd_bar = ind.get("macd_bar", 0) or 0
         if macd_dif > macd_dea:
             conclusions.append(f"MACD日线多头(DIF={macd_dif:.2f}, DEA={macd_dea:.2f})")
         else:

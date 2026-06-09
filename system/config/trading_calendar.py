@@ -5,10 +5,10 @@
 QMT 不可用时回退到硬编码节假日后排除周末。
 """
 
-import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from data._base import connect
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("misc")
@@ -58,10 +58,8 @@ def _load_qmt_calendar():
     if _qmt_cache is not None:
         return _qmt_cache
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        rows = conn.execute(
-            "SELECT DISTINCT trade_date FROM qmt_calendar WHERE market='sh'"
-        ).fetchall()
+        conn = connect(str(DB_PATH))
+        rows = conn.execute("SELECT DISTINCT trade_date FROM qmt_calendar WHERE market='sh'").fetchall()
         conn.close()
         if rows:
             _qmt_cache = {r[0] for r in rows}

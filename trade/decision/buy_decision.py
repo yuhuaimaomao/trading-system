@@ -38,9 +38,7 @@ class BuyDecisionMixin:
             morning_sector_bias=self._morning_sector_bias,
         )
 
-    def _analyze_buy_context(
-        self, code: str, price: float, buy_min: float, buy_max: float
-    ) -> str:
+    def _analyze_buy_context(self, code: str, price: float, buy_min: float, buy_max: float) -> str:
         """分析买入时的盘面上下文，返回人性化的决策提示。
 
         结合：趋势方向、买入区位置、布林带位置、是否回踩支撑
@@ -125,9 +123,7 @@ class BuyDecisionMixin:
 
             intra_parts = [f"RSI6={r6:.0f} RSI12={r12:.0f}"]
             intra_parts.append(f"MACD={macd_dir}(bar={intra['macd_bar']:.2f})")
-            intra_parts.append(
-                f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={j:.1f}"
-            )
+            intra_parts.append(f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={j:.1f}")
             if vs_ma5 != 0:
                 side = "上" if vs_ma5 > 0 else "下"
                 intra_parts.append(f"价在MA5{side}{abs(vs_ma5):.1f}%")
@@ -152,10 +148,7 @@ class BuyDecisionMixin:
 
     def _get_intraday_indicators(self, code: str) -> dict:
         """获取个股日内分钟级技术指标。缓存同一扫描轮内复用。"""
-        if (
-            self._intraday_cache_scan == self._scan_count
-            and code in self._intraday_cache
-        ):
+        if self._intraday_cache_scan == self._scan_count and code in self._intraday_cache:
             return self._intraday_cache[code]
 
         result = {
@@ -277,9 +270,7 @@ class BuyDecisionMixin:
                             factors["day_high"] = dh
                             factors["day_low"] = dl
                             factors["day_open"] = do
-                            factors["day_change_pct"] = (
-                                (price - do) / do * 100 if do > 0 else 0
-                            )
+                            factors["day_change_pct"] = (price - do) / do * 100 if do > 0 else 0
                 except Exception:
                     pass
 
@@ -291,25 +282,15 @@ class BuyDecisionMixin:
                     raw_5m = self.qmt.get_kline(code, period="5m", count=50)
                     if raw_5m:
                         if isinstance(raw_5m, list) and len(raw_5m) >= 26:
-                            c5 = [
-                                float(b.get("close", 0))
-                                for b in raw_5m
-                                if b.get("close")
-                            ]
+                            c5 = [float(b.get("close", 0)) for b in raw_5m if b.get("close")]
                             if len(c5) >= 26:
                                 m5 = calc_macd(c5)
                                 factors["m5_macd_dif"] = m5["dif"]
                                 factors["m5_macd_dea"] = m5["dea"]
                                 factors["m5_macd_bar"] = m5["bar"]
                                 factors["m5_rsi6"] = calc_rsi(c5, 6)
-                                m5_ma20 = (
-                                    sum(c5[-20:]) / 20 if len(c5) >= 20 else c5[-1]
-                                )
-                                factors["m5_vs_ma20"] = (
-                                    (c5[-1] - m5_ma20) / m5_ma20 * 100
-                                    if m5_ma20 > 0
-                                    else 0
-                                )
+                                m5_ma20 = sum(c5[-20:]) / 20 if len(c5) >= 20 else c5[-1]
+                                factors["m5_vs_ma20"] = (c5[-1] - m5_ma20) / m5_ma20 * 100 if m5_ma20 > 0 else 0
                 except Exception:
                     pass
 
@@ -424,25 +405,17 @@ class BuyDecisionMixin:
         except Exception:
             return 0.5, ""
 
-    def _calc_unified_sl(
-        self, code: str, price: float, trend: str = "", strategy: str = "standard"
-    ) -> float:
+    def _calc_unified_sl(self, code: str, price: float, trend: str = "", strategy: str = "standard") -> float:
         """委托至统一止损计算（无 DB 查询版本，盘中性能优先）。"""
         from trade.decision.sizing import calc_unified_stop_loss
 
-        return calc_unified_stop_loss(
-            code, price, trend=trend, daily_indicators=None, strategy_type=strategy
-        )
+        return calc_unified_stop_loss(code, price, trend=trend, daily_indicators=None, strategy_type=strategy)
 
-    def _calc_unified_tp(
-        self, code: str, price: float, trend: str = "", strategy: str = "standard"
-    ) -> float:
+    def _calc_unified_tp(self, code: str, price: float, trend: str = "", strategy: str = "standard") -> float:
         """委托至统一止盈计算（无 DB 查询版本，盘中性能优先）。"""
         from trade.decision.sizing import calc_unified_take_profit
 
-        return calc_unified_take_profit(
-            code, price, trend=trend, daily_indicators=None, strategy_type=strategy
-        )
+        return calc_unified_take_profit(code, price, trend=trend, daily_indicators=None, strategy_type=strategy)
 
     def _calc_fallback_sl_tp(self, code: str, price: float) -> tuple[float, float]:
         """AI 未给止损/止盈时，从技术指标自动补算。
@@ -657,9 +630,7 @@ class BuyDecisionMixin:
             return "declining", f"持续创新低({drop_pct:.1f}%)"
 
         # 后5分钟振幅 < 1% → 横盘止跌
-        second_range = (
-            (second_high - second_low) / second_low * 100 if second_low > 0 else 0
-        )
+        second_range = (second_high - second_low) / second_low * 100 if second_low > 0 else 0
         if second_range < 1.0:
             return "stabilizing", f"横盘止跌(振幅{second_range:.1f}%)"
 
@@ -712,18 +683,14 @@ class BuyDecisionMixin:
                     recent = ticks[-half:]
                     earlier = ticks[:half]
                     recent_vol = sum(
-                        float(recent[i].get("amount", 0))
-                        - float(recent[i - 1].get("amount", 0))
+                        float(recent[i].get("amount", 0)) - float(recent[i - 1].get("amount", 0))
                         for i in range(1, len(recent))
-                        if float(recent[i].get("amount", 0))
-                        > float(recent[i - 1].get("amount", 0))
+                        if float(recent[i].get("amount", 0)) > float(recent[i - 1].get("amount", 0))
                     )
                     earlier_vol = sum(
-                        float(earlier[i].get("amount", 0))
-                        - float(earlier[i - 1].get("amount", 0))
+                        float(earlier[i].get("amount", 0)) - float(earlier[i - 1].get("amount", 0))
                         for i in range(1, len(earlier))
-                        if float(earlier[i].get("amount", 0))
-                        > float(earlier[i - 1].get("amount", 0))
+                        if float(earlier[i].get("amount", 0)) > float(earlier[i - 1].get("amount", 0))
                     )
                     if earlier_vol > 0 and recent_vol > 0:
                         vol_ratio = recent_vol / earlier_vol
@@ -843,10 +810,7 @@ class BuyDecisionMixin:
         down_up = breadth.get("down", 0) / breadth["up"]
         idx_quote = getattr(self, "_last_index_quote", None) or {}
         idx_change = idx_quote.get("change_pct", 0)
-        return (
-            down_up > getattr(settings, "BREADTH_DOWN_UP_RATIO", 3.0)
-            and idx_change < 0
-        )
+        return down_up > getattr(settings, "BREADTH_DOWN_UP_RATIO", 3.0) and idx_change < 0
 
     def _check_buy_candidates(self, state, candidates: list[dict], regime):
         """统一买入候选处理：信号 + 复盘推荐共用管线。
@@ -899,9 +863,7 @@ class BuyDecisionMixin:
         breadth_blocked = False
         try:
             if hasattr(self, "_compute_rolling_breadth"):
-                breadth_roll = self._compute_rolling_breadth(
-                    window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT
-                )
+                breadth_roll = self._compute_rolling_breadth(window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT)
                 if breadth_roll and breadth_roll.get("improving"):
                     up_delta = breadth_roll.get("up_delta", 0)
                     if up_delta < settings.BREADTH_IMPROVEMENT_THRESHOLD:
@@ -932,9 +894,7 @@ class BuyDecisionMixin:
                 down_up = breadth.get("down", 0) / max(breadth.get("up", 0), 1)
                 idx_quote = getattr(self, "_last_index_quote", None) or {}
                 idx_change = idx_quote.get("change_pct", 0)
-                logger.warning(
-                    f"市场宽度过滤: 下跌/上涨={down_up:.1f} 指数{idx_change:+.2%}，暂停新开仓"
-                )
+                logger.warning(f"市场宽度过滤: 下跌/上涨={down_up:.1f} 指数{idx_change:+.2%}，暂停新开仓")
                 self._alert(
                     f"🛑 市场宽度预警\n"
                     f"   下跌/上涨: {down_up:.1f}  指数变化: {idx_change:+.2%}\n"
@@ -946,13 +906,10 @@ class BuyDecisionMixin:
         # 早盘 AI 板块倾向：focus 板块候选优先处理
         if self._morning_sector_bias:
             candidates.sort(
-                key=lambda c: -self._morning_sector_bias.get(
-                    self._industry_cache.get(c["code"], ""), {}
-                ).get("priority", 0)
-                if self._morning_sector_bias.get(
-                    self._industry_cache.get(c["code"], ""), {}
-                ).get("bias")
-                == "focus"
+                key=lambda c: -self._morning_sector_bias.get(self._industry_cache.get(c["code"], ""), {}).get(
+                    "priority", 0
+                )
+                if self._morning_sector_bias.get(self._industry_cache.get(c["code"], ""), {}).get("bias") == "focus"
                 else 0
             )
 
@@ -963,6 +920,7 @@ class BuyDecisionMixin:
             if source == "signal":
                 alert_state = self._signal_alert_state
                 tag = ""
+                quiet = False
 
                 def on_abandon(sid=c["signal_id"]):
                     if sid:
@@ -974,6 +932,7 @@ class BuyDecisionMixin:
                 alert_state = self._review_alert_state
                 tag = "复盘"
                 on_abandon = None
+                quiet = True  # 复盘/板块发现不到下单决策不推送
 
             code = c["code"]
 
@@ -1000,9 +959,7 @@ class BuyDecisionMixin:
                 continue
 
             # —— 动态买入区修正：三层联动，市场偏空时下调买入区（静默生效）——
-            adj_buy_min, adj_buy_max, adj_reason = self._calc_dynamic_buy_zone(
-                code, price, buy_min, buy_max, trend
-            )
+            adj_buy_min, adj_buy_max, adj_reason = self._calc_dynamic_buy_zone(code, price, buy_min, buy_max, trend)
             buy_min, buy_max = adj_buy_min, adj_buy_max
 
             in_zone = buy_min <= price <= buy_max
@@ -1035,29 +992,23 @@ class BuyDecisionMixin:
                     ):
                         approach_key = f"approach:{c['alert_key']}"
                         last_scan = alert_state.get(approach_key, 0)
-                        if (
-                            self._scan_count - last_scan >= 15
-                            and not self._should_throttle(code, price)
-                        ):
+                        if self._scan_count - last_scan >= 15 and not self._should_throttle(code, price):
                             alert_state[approach_key] = self._scan_count
-                            self._alert(
-                                f"🔔 {tag}买入区接近 — {code} {name}\n"
-                                f"   现价: {price:.2f}  距区间: {above_pct:.1f}%  "
-                                f"区间: {buy_min:.2f}~{buy_max:.2f}\n"
-                                f"   止损: {sl:.2f}  止盈: {tp:.2f}\n"
-                                f"   板块:{trend}\n"
-                                f"   🔮 {outlook.primary.label} ({outlook.primary.probability:.0%})"
-                                f"  → 市场回调中，关注买入区"
-                            )
+                            if not quiet:
+                                self._alert(
+                                    f"🔔 {tag}买入区接近 — {code} {name}\n"
+                                    f"   现价: {price:.2f}  距区间: {above_pct:.1f}%  "
+                                    f"区间: {buy_min:.2f}~{buy_max:.2f}\n"
+                                    f"   止损: {sl:.2f}  止盈: {tp:.2f}\n"
+                                    f"   板块:{trend}\n"
+                                    f"   🔮 {outlook.primary.label} ({outlook.primary.probability:.0%})"
+                                    f"  → 市场回调中，关注买入区"
+                                )
                         continue
 
                 # 追高提醒：仅板块走强时才有追的价值，弱板块涨了也不跟
-                is_sector_strong = "持续走强" in trend or (
-                    "走强" in trend and "弱" not in trend
-                )
-                is_sector_weak = any(
-                    w in trend for w in ("持续走弱", "弱于大盘", "普跌", "横盘")
-                )
+                is_sector_strong = "持续走强" in trend or ("走强" in trend and "弱" not in trend)
+                is_sector_weak = any(w in trend for w in ("持续走弱", "弱于大盘", "普跌", "横盘"))
                 if is_sector_strong and not is_sector_weak:
                     chase_key = f"chase:{c['alert_key']}"
                     last_chase = alert_state.get(chase_key, 0)
@@ -1076,9 +1027,7 @@ class BuyDecisionMixin:
                                 else "震荡"
                             )
                             intra_parts = [f"RSI6={r6:.0f} RSI12={r12:.0f}"]
-                            intra_parts.append(
-                                f"MACD={macd_dir}({intra['macd_bar']:.2f})"
-                            )
+                            intra_parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
                             intra_parts.append(
                                 f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}"
                             )
@@ -1102,6 +1051,7 @@ class BuyDecisionMixin:
                             intra_str=intra_str,
                             alert_key=c["alert_key"],
                             chase_key=chase_key,
+                            source=source,
                         )
                         # 立即标记已触发，防止重复提交
                         alert_state[c["alert_key"]] = (price, True)
@@ -1117,10 +1067,7 @@ class BuyDecisionMixin:
 
                 # 信号类候选（盘前生成）：价格低于买入区 0.5%+ 视为 zone 失效
                 if source == "signal" and below_pct > 0.5:
-                    logger.info(
-                        f"买入决策 [{code} {name}] 放弃 信号买入区失效 "
-                        f"低于{buy_min:.2f} {below_pct:.1f}%"
-                    )
+                    logger.info(f"买入决策 [{code} {name}] 放弃 信号买入区失效 低于{buy_min:.2f} {below_pct:.1f}%")
                     alert_state[c["alert_key"]] = (price, True)
                     self._alert(
                         f"❌ {tag}信号放弃 — {code} {name}\n"
@@ -1139,38 +1086,31 @@ class BuyDecisionMixin:
                         continue
 
                 below_pct = (buy_min - price) / buy_min * 100
-                below_action, below_reason, below_mul = self._evaluate_below_zone(
-                    code, price, buy_min, buy_max
-                )
+                below_action, below_reason, below_mul = self._evaluate_below_zone(code, price, buy_min, buy_max)
 
                 if below_action == "abandon":
-                    logger.info(
-                        f"买入决策 [{code} {name}] 放弃 低于买入区{below_pct:.1f}% → {below_reason}"
-                    )
+                    logger.info(f"买入决策 [{code} {name}] 放弃 低于买入区{below_pct:.1f}% → {below_reason}")
                     alert_state[c["alert_key"]] = (price, True)
-                    self._alert(
-                        f"❌ {tag}信号放弃 — {code} {name}\n"
-                        f"   现价: {price:.2f}  低于区间: {buy_min:.2f}~{buy_max:.2f}\n"
-                        f"   板块:{trend}\n"
-                        f"   → {below_reason}"
-                    )
+                    if not quiet:
+                        self._alert(
+                            f"❌ {tag}信号放弃 — {code} {name}\n"
+                            f"   现价: {price:.2f}  低于区间: {buy_min:.2f}~{buy_max:.2f}\n"
+                            f"   板块:{trend}\n"
+                            f"   → {below_reason}"
+                        )
                     if on_abandon:
                         on_abandon()
                     continue
 
                 elif below_action == "watching":
-                    logger.info(
-                        f"买入决策 [{code} {name}] 观察 低于买入区{below_pct:.1f}% → {below_reason}"
-                    )
+                    logger.info(f"买入决策 [{code} {name}] 观察 低于买入区{below_pct:.1f}% → {below_reason}")
                     continue
 
                 else:
                     # below_zone 也要遵守 entry_rule（next_day/none 禁止买入）
                     if entry_rule in ("next_day", "none"):
                         alert_state[c["alert_key"]] = (price, True)
-                        logger.info(
-                            f"买入决策 [{code} {name}] 低于买入区但 entry_rule={entry_rule}，跳过"
-                        )
+                        logger.info(f"买入决策 [{code} {name}] 低于买入区但 entry_rule={entry_rule}，跳过")
                         continue
 
                     alert_state[c["alert_key"]] = (price, True)
@@ -1224,34 +1164,29 @@ class BuyDecisionMixin:
 
                 alert_state[c["alert_key"]] = (price, True)
                 market_advice = regime_alert_msg or self._get_market_risk_advice()
-                self._alert(
-                    f"⏸️ {tag}大盘风险 — {code} {name}\n"
-                    f"   现价: {price:.2f}  买入区: {buy_min:.2f}~{buy_max:.2f}\n"
-                    f"   板块:{trend}\n"
-                    f"   → {market_advice}"
-                )
+                if not quiet:
+                    self._alert(
+                        f"⏸️ {tag}大盘风险 — {code} {name}\n"
+                        f"   现价: {price:.2f}  买入区: {buy_min:.2f}~{buy_max:.2f}\n"
+                        f"   板块:{trend}\n"
+                        f"   → {market_advice}"
+                    )
                 continue
 
             # ── entry_rule 过滤（大盘环境决定入场策略） ──
-            zone_pos = (
-                (price - buy_min) / (buy_max - buy_min) if buy_max > buy_min else 0.5
-            )
+            zone_pos = (price - buy_min) / (buy_max - buy_min) if buy_max > buy_min else 0.5
             entry_skip_reason = ""
             if entry_rule == "next_day":
                 entry_skip_reason = "尾盘拉升/次日再看，今日不追"
             elif entry_rule == "confirm":
                 if zone_pos > 0.5:
-                    entry_skip_reason = (
-                        f"需确认信号(zone_pos={zone_pos:.0%})，等回调到区间下半部"
-                    )
+                    entry_skip_reason = f"需确认信号(zone_pos={zone_pos:.0%})，等回调到区间下半部"
             elif entry_rule == "pullback":
                 if zone_pos > 0.4:
                     entry_skip_reason = f"等回调买入(zone_pos={zone_pos:.0%})，暂不追高"
             elif entry_rule == "range_boundary":
                 if zone_pos > 0.25:
-                    entry_skip_reason = (
-                        f"宽幅震荡(zone_pos={zone_pos:.0%})，等区间下沿再入场"
-                    )
+                    entry_skip_reason = f"宽幅震荡(zone_pos={zone_pos:.0%})，等区间下沿再入场"
 
             if entry_skip_reason:
                 alert_state[c["alert_key"]] = (price, True)
@@ -1270,27 +1205,27 @@ class BuyDecisionMixin:
                     )
                 except Exception:
                     pass
-                self._alert(
-                    f"⏸️ {tag}暂缓买入 — {code} {name}\n"
-                    f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}\n"
-                    f"   板块:{trend}\n"
-                    f"   → {entry_skip_reason}"
-                )
+                if not quiet:
+                    self._alert(
+                        f"⏸️ {tag}暂缓买入 — {code} {name}\n"
+                        f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}\n"
+                        f"   板块:{trend}\n"
+                        f"   → {entry_skip_reason}"
+                    )
                 continue
 
             if self._is_limit_up(code, price):
                 alert_state[c["alert_key"]] = (price, True)
-                self._alert(
-                    f"🚫 涨停无法买入 — {code} {name}\n"
-                    f"   涨停价: {self._limit_cache.get(code, {}).get('limit_up', 0):.2f}\n"
-                    f"   板块:{trend}\n"
-                    f"   → 封涨停板，不建议排板"
-                )
+                if not quiet:
+                    self._alert(
+                        f"🚫 涨停无法买入 — {code} {name}\n"
+                        f"   涨停价: {self._limit_cache.get(code, {}).get('limit_up', 0):.2f}\n"
+                        f"   板块:{trend}\n"
+                        f"   → 封涨停板，不建议排板"
+                    )
                 continue
 
-            decision_allowed, decision_reason, size_mul = self._evaluate_buy_decision(
-                code, price, buy_min, buy_max
-            )
+            decision_allowed, decision_reason, size_mul = self._evaluate_buy_decision(code, price, buy_min, buy_max)
 
             alert_state[c["alert_key"]] = (price, True)
 
@@ -1312,9 +1247,7 @@ class BuyDecisionMixin:
                     )
                     parts = [f"RSI6={intra['rsi6']:.0f} RSI12={intra['rsi12']:.0f}"]
                     parts.append(f"MACD={macd_dir}({intra['macd_bar']:.2f})")
-                    parts.append(
-                        f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}"
-                    )
+                    parts.append(f"KDJ K={intra['kdj_k']:.1f} D={intra['kdj_d']:.1f} J={intra['kdj_j']:.1f}")
                     intra_str = f"\n   日内: {' | '.join(parts)}"
                 # 异步 AI 二判：提交后台，结果在后续扫描中推送
                 self._ai_chase_opinion(
@@ -1331,21 +1264,21 @@ class BuyDecisionMixin:
                     intra_str=intra_str,
                     alert_key=c["alert_key"],
                     chase_key="",
+                    source=source,
                 )
-                self._alert(
-                    f"⏸️ 暂不买入 — {code} {name}\n"
-                    f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}  止损: {sl:.2f}  止盈: {tp:.2f}\n"
-                    f"   板块:{trend}{intra_str}\n"
-                    f"   ⛔ {decision_reason}"
-                )
+                if not quiet:
+                    self._alert(
+                        f"⏸️ 暂不买入 — {code} {name}\n"
+                        f"   现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}  止损: {sl:.2f}  止盈: {tp:.2f}\n"
+                        f"   板块:{trend}{intra_str}\n"
+                        f"   ⛔ {decision_reason}"
+                    )
                 continue
 
             context = self._analyze_buy_context(code, price, buy_min, buy_max)
 
             # 提前计算仓位，用于消息显示
-            max_amount, _size_reason = self._calculate_position_size(
-                code, price, buy_min, buy_max, pattern, trend
-            )
+            max_amount, _size_reason = self._calculate_position_size(code, price, buy_min, buy_max, pattern, trend)
             try:
                 self._log_position_size(
                     stock_code=code,
@@ -1359,11 +1292,7 @@ class BuyDecisionMixin:
                 pass
             if size_mul < 1.0 and max_amount > 0:
                 max_amount = int(max_amount * size_mul // 100 * 100)
-            actual_pct = (
-                max_amount / self.paper_account.total_value
-                if self.paper_account.total_value > 0
-                else 0
-            )
+            actual_pct = max_amount / self.paper_account.total_value if self.paper_account.total_value > 0 else 0
 
             # 仓位行（全仓/减仓都显示）
             position_line = f"\n   📦 仓位: {actual_pct:.1%} (约¥{max_amount:,})"
@@ -1372,9 +1301,7 @@ class BuyDecisionMixin:
             reason_line = ""
             if size_mul < 1.0:
                 reason_line = f"\n   ⚠️ 理由: {decision_reason}"
-                logger.info(
-                    f"买入决策 [{code} {name}] 减仓 价格{price:.2f} 仓位{actual_pct:.1%} → {decision_reason}"
-                )
+                logger.info(f"买入决策 [{code} {name}] 减仓 价格{price:.2f} 仓位{actual_pct:.1%} → {decision_reason}")
             else:
                 logger.info(
                     f"买入决策 [{code} {name}] 全仓 价格{price:.2f} 仓位{actual_pct:.1%} 区间{buy_min:.2f}~{buy_max:.2f}"
@@ -1441,9 +1368,7 @@ class BuyDecisionMixin:
                     sl = calc_sl
                 if tp <= 0:
                     tp = calc_tp
-                logger.info(
-                    f"  信号 {code} {name} AI未给止损/止盈，自动补算 sl={sl:.2f} tp={tp:.2f}"
-                )
+                logger.info(f"  信号 {code} {name} AI未给止损/止盈，自动补算 sl={sl:.2f} tp={tp:.2f}")
                 if sl <= 0 and tp <= 0:
                     # 两个都补算失败才废弃
                     logger.warning(f"  信号 {code} {name} 无法补算止损止盈，废弃")
@@ -1526,11 +1451,7 @@ class BuyDecisionMixin:
             return
 
         # 大盘 stop_mult 调整止损宽度
-        stop_mult = (
-            getattr(regime, "stop_mult", 1.0)
-            if regime and not isinstance(regime, bool)
-            else 1.0
-        )
+        stop_mult = getattr(regime, "stop_mult", 1.0) if regime and not isinstance(regime, bool) else 1.0
         if stop_mult != 1.0 and sl > 0 and price > sl:
             stop_width = price - sl
             effective_sl = price - stop_width * stop_mult
@@ -1553,16 +1474,8 @@ class BuyDecisionMixin:
         if max_amount < 5000:
             return
 
-        target_pct = (
-            max_amount / self.paper_account.total_value
-            if self.paper_account.total_value > 0
-            else 0.10
-        )
-        sector = (
-            self._industry_cache.get(code, "")
-            if hasattr(self, "_industry_cache")
-            else ""
-        )
+        target_pct = max_amount / self.paper_account.total_value if self.paper_account.total_value > 0 else 0.10
+        sector = self._industry_cache.get(code, "") if hasattr(self, "_industry_cache") else ""
         risk_result = self.risk_engine.can_open(
             code,
             target_pct,
@@ -1573,9 +1486,7 @@ class BuyDecisionMixin:
             return
 
         # 计算股数（盯盘决策，模拟盘只管执行）
-        capital = min(
-            max_amount, self.paper_account.total_value * settings.DEFAULT_POSITION_PCT
-        )
+        capital = min(max_amount, self.paper_account.total_value * settings.DEFAULT_POSITION_PCT)
         # 现金约束：留 10% 缓冲，其余全可用
         max_affordable = int(self.paper_account.cash * 0.9 / price / 100) * 100
         volume = min(int(capital / price / 100) * 100, max_affordable)
@@ -1605,9 +1516,7 @@ class BuyDecisionMixin:
                     buy_min=buy_min,
                     buy_max=buy_max,
                     position_size=max_amount,
-                    entry_rule=getattr(regime, "entry_rule", "standard")
-                    if regime
-                    else "standard",
+                    entry_rule=getattr(regime, "entry_rule", "standard") if regime else "standard",
                     sector_trend=trend,
                     market_regime=pattern,
                 )
@@ -1690,11 +1599,7 @@ class BuyDecisionMixin:
         """
         try:
             rows = self.repo.get_review_signal_zones(self._trade_date)
-            return {
-                r[0]: (r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0)
-                for r in rows
-                if r[1] and r[2]
-            }
+            return {r[0]: (r[1] or 0, r[2] or 0, r[3] or 0, r[4] or 0) for r in rows if r[1] and r[2]}
         except Exception:
             return {}
 
@@ -1750,9 +1655,7 @@ class BuyDecisionMixin:
 
         # 去重：已在信号/持仓/卖出冷却中的不重复生成
         existing = set(self.paper_account.positions.keys())
-        existing.update(
-            self._recently_sold.keys() if hasattr(self, "_recently_sold") else []
-        )
+        existing.update(self._recently_sold.keys() if hasattr(self, "_recently_sold") else [])
         try:
             for s in self.repo.get_pending_signals(account="paper"):
                 existing.add(s.get("stock_code", ""))
@@ -1855,9 +1758,7 @@ class BuyDecisionMixin:
 
         # ━ 2. 去重排除 ━
         excluded = set(self.paper_account.positions.keys())
-        excluded.update(
-            self._recently_sold.keys() if hasattr(self, "_recently_sold") else []
-        )
+        excluded.update(self._recently_sold.keys() if hasattr(self, "_recently_sold") else [])
         try:
             for s in self.repo.get_pending_signals(account="paper"):
                 excluded.add(s.get("stock_code", ""))

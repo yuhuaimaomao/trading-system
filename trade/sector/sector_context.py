@@ -3,10 +3,10 @@
 Mixin 方式混入 Watcher，所有 self.xxx 直接访问 Watcher 属性。
 """
 
-import sqlite3
 from collections import defaultdict
 from datetime import datetime
 
+from data._base import connect
 from system.config import settings
 from system.utils.logger import get_trade_logger
 
@@ -23,16 +23,12 @@ class SectorContextMixin:
         idx_price = idx["price"] if idx else 0
         chg_pct = idx["change_pct"] if idx else 0
         _, _, ma20 = self._get_index_baseline()
-        vs_ma20 = (
-            "MA20: 上方" if ma20 and idx_price >= ma20 else "MA20: 下方" if ma20 else ""
-        )
+        vs_ma20 = "MA20: 上方" if ma20 and idx_price >= ma20 else "MA20: 下方" if ma20 else ""
         market_label = "市场: ⚠️危险" if not market_ok else "市场: 正常"
 
         lines = [f"📋 开盘决策  {self._trade_date}", "   ─────────────────────────"]
         if idx_price:
-            lines.append(
-                f"   上证: {idx_price:.0f}  {chg_pct:+.2%}  {vs_ma20}  {market_label}"
-            )
+            lines.append(f"   上证: {idx_price:.0f}  {chg_pct:+.2%}  {vs_ma20}  {market_label}")
         lines.append("")
 
         # ━━━ 当前持仓 ━━━
@@ -43,9 +39,7 @@ class SectorContextMixin:
                 price = prices.get(code)
                 if price is None:
                     continue
-                pnl_pct = (
-                    (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost else 0
-                )
+                pnl_pct = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost else 0
                 pnl_emoji = "🟢" if pnl_pct > 2 else "🟡" if pnl_pct > -2 else "🔴"
                 is_today = "  🔒T+1" if pos.entry_date == self._trade_date else ""
                 meta = self._pos_meta.get(code, {})
@@ -84,9 +78,7 @@ class SectorContextMixin:
 
             in_zone = buy_min <= price <= buy_max
             raw_name = s.get("stock_name", "")
-            entry_name = (
-                raw_name if raw_name and raw_name != code else self._resolve_name(code)
-            )
+            entry_name = raw_name if raw_name and raw_name != code else self._resolve_name(code)
             entry = (
                 code,
                 entry_name,
@@ -108,12 +100,8 @@ class SectorContextMixin:
             lines.append(f"   🎯 买入区信号 {len(buy_list)} 只")
             for code, name, price, buy_min, buy_max, sl, tp, source, score in buy_list:
                 src_tag = "复盘" if source == "REVIEW" else "AI"
-                lines.append(
-                    f"   🔴 {code} {name}  现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}"
-                )
-                lines.append(
-                    f"       止损: {sl:.2f}  止盈: {tp:.2f}  评分: {score:.0f}  {src_tag}"
-                )
+                lines.append(f"   🔴 {code} {name}  现价: {price:.2f}  区间: {buy_min:.2f}~{buy_max:.2f}")
+                lines.append(f"       止损: {sl:.2f}  止盈: {tp:.2f}  评分: {score:.0f}  {src_tag}")
             lines.append("")
 
         if watch_list:
@@ -130,9 +118,7 @@ class SectorContextMixin:
                 score,
             ) in watch_list:
                 status = "高于区间" if price > buy_max else "低于区间"
-                lines.append(
-                    f"   👀 {code} {name}  现价: {price:.2f}  {status}: {buy_min:.2f}~{buy_max:.2f}"
-                )
+                lines.append(f"   👀 {code} {name}  现价: {price:.2f}  {status}: {buy_min:.2f}~{buy_max:.2f}")
             lines.append("")
 
         if not buy_list and not watch_list:
@@ -200,13 +186,7 @@ class SectorContextMixin:
 
             # 连续性追踪 + 趋势起点
             if len(history) >= 2:
-                cur_dir = (
-                    "up"
-                    if history[-1] > history[-2]
-                    else "down"
-                    if history[-1] < history[-2]
-                    else "flat"
-                )
+                cur_dir = "up" if history[-1] > history[-2] else "down" if history[-1] < history[-2] else "flat"
                 prev_dir = self._sector_trend_last_dir.get(ind, "")
                 if cur_dir == prev_dir and cur_dir != "flat":
                     self._sector_trend_continuity[ind] += 1
@@ -273,13 +253,7 @@ class SectorContextMixin:
             history.append(avg)
 
             if len(history) >= 2:
-                cur_dir = (
-                    "up"
-                    if history[-1] > history[-2]
-                    else "down"
-                    if history[-1] < history[-2]
-                    else "flat"
-                )
+                cur_dir = "up" if history[-1] > history[-2] else "down" if history[-1] < history[-2] else "flat"
                 prev_dir = self._concept_trend_last_dir.get(con, "")
                 if cur_dir == prev_dir and cur_dir != "flat":
                     self._concept_trend_continuity[con] += 1
@@ -317,7 +291,7 @@ class SectorContextMixin:
         if not rows:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             conn.executemany(
                 """INSERT OR REPLACE INTO sector_snapshots
                    (trade_date, ts, sector_name, avg_change, up_count, down_count, market_avg)
@@ -332,7 +306,7 @@ class SectorContextMixin:
     def _load_sector_history(self):
         """从 sector_snapshots 恢复全天板块趋势历史。若无，从 raw market_snapshots 重建。"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT sector_name, ts, avg_change
                    FROM sector_snapshots
@@ -347,9 +321,7 @@ class SectorContextMixin:
                 return
 
             # sector_snapshots 为空 → 从 raw market_snapshots 重建
-            logger.info(
-                "sector_snapshots 为空，尝试从 raw market_snapshots 重建板块趋势"
-            )
+            logger.info("sector_snapshots 为空，尝试从 raw market_snapshots 重建板块趋势")
             self._rebuild_from_market_snapshots()
         except Exception as e:
             logger.warning(f"恢复板块历史异常: {e}")
@@ -363,22 +335,12 @@ class SectorContextMixin:
         for sector, history in temp.items():
             self._sector_trend_history[sector] = history
             if len(history) >= 2:
-                cur_dir = (
-                    "up"
-                    if history[-1] > history[-2]
-                    else "down"
-                    if history[-1] < history[-2]
-                    else "flat"
-                )
+                cur_dir = "up" if history[-1] > history[-2] else "down" if history[-1] < history[-2] else "flat"
                 self._sector_trend_last_dir[sector] = cur_dir
                 cont = 1
                 for i in range(len(history) - 2, 0, -1):
                     prev_dir = (
-                        "up"
-                        if history[i] > history[i - 1]
-                        else "down"
-                        if history[i] < history[i - 1]
-                        else "flat"
+                        "up" if history[i] > history[i - 1] else "down" if history[i] < history[i - 1] else "flat"
                     )
                     if prev_dir == cur_dir and prev_dir != "flat":
                         cont += 1
@@ -392,7 +354,7 @@ class SectorContextMixin:
         """从 raw market_snapshots 重建板块趋势历史。用于重启后恢复全天趋势。"""
         self._ensure_industry_cache()
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             snapshots = conn.execute(
                 """SELECT ts, code, change_pct FROM market_snapshots
                    WHERE trade_date=? ORDER BY ts""",
@@ -405,9 +367,7 @@ class SectorContextMixin:
                 return
 
             # 按时间分组，每轮重建 sector 均值
-            ts_groups: dict[str, dict[str, list[float]]] = defaultdict(
-                lambda: defaultdict(list)
-            )
+            ts_groups: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
             for ts, code, chg in snapshots:
                 ind = self._industry_cache.get(code, "")
                 if ind:
@@ -429,22 +389,12 @@ class SectorContextMixin:
             # 重建连续性
             for ind, history in self._sector_trend_history.items():
                 if len(history) >= 2:
-                    cur_dir = (
-                        "up"
-                        if history[-1] > history[-2]
-                        else "down"
-                        if history[-1] < history[-2]
-                        else "flat"
-                    )
+                    cur_dir = "up" if history[-1] > history[-2] else "down" if history[-1] < history[-2] else "flat"
                     self._sector_trend_last_dir[ind] = cur_dir
                     cont = 1
                     for i in range(len(history) - 2, 0, -1):
                         prev_dir = (
-                            "up"
-                            if history[i] > history[i - 1]
-                            else "down"
-                            if history[i] < history[i - 1]
-                            else "flat"
+                            "up" if history[i] > history[i - 1] else "down" if history[i] < history[i - 1] else "flat"
                         )
                         if prev_dir == cur_dir and prev_dir != "flat":
                             cont += 1
@@ -452,9 +402,7 @@ class SectorContextMixin:
                             break
                     self._sector_trend_continuity[ind] = cont
 
-            logger.info(
-                f"从 raw 快照恢复 {len(self._sector_trend_history)} 个板块趋势（{len(snapshots)} 条原始数据）"
-            )
+            logger.info(f"从 raw 快照恢复 {len(self._sector_trend_history)} 个板块趋势（{len(snapshots)} 条原始数据）")
         except Exception as e:
             logger.warning(f"从 market_snapshots 重建板块趋势异常: {e}")
 
@@ -464,19 +412,13 @@ class SectorContextMixin:
             from datetime import timedelta
 
             cutoff = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
-            conn = sqlite3.connect(self.db_path)
-            deleted_m = conn.execute(
-                "DELETE FROM market_snapshots WHERE trade_date < ?", (cutoff,)
-            ).rowcount
-            deleted_s = conn.execute(
-                "DELETE FROM sector_snapshots WHERE trade_date < ?", (cutoff,)
-            ).rowcount
+            conn = connect(self.db_path)
+            deleted_m = conn.execute("DELETE FROM market_snapshots WHERE trade_date < ?", (cutoff,)).rowcount
+            deleted_s = conn.execute("DELETE FROM sector_snapshots WHERE trade_date < ?", (cutoff,)).rowcount
             conn.commit()
             conn.close()
             if deleted_m or deleted_s:
-                logger.info(
-                    f"清理旧快照: market_snapshots={deleted_m}, sector_snapshots={deleted_s}"
-                )
+                logger.info(f"清理旧快照: market_snapshots={deleted_m}, sector_snapshots={deleted_s}")
         except Exception:
             pass
 
@@ -486,7 +428,7 @@ class SectorContextMixin:
         不再调 QMT，数据由 collector 写入 index_snapshots 表。
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT ts, price, high, low, amount FROM index_snapshots
                    WHERE trade_date=? AND (index_code='000001.SH' OR index_code IS NULL)
@@ -540,9 +482,7 @@ class SectorContextMixin:
         if self._industry_cache:
             return
         try:
-            import sqlite3 as _sql
-
-            conn = _sql.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT stock_code, industry FROM stock_basic
                    WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)"""
@@ -557,9 +497,7 @@ class SectorContextMixin:
         if self._concept_cache:
             return
         try:
-            import sqlite3 as _sql
-
-            conn = _sql.connect(self.db_path)
+            conn = connect(self.db_path)
             rows = conn.execute(
                 """SELECT stock_code, concepts FROM stock_basic
                    WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)"""
@@ -569,9 +507,7 @@ class SectorContextMixin:
                 concepts_str = (r[1] or "").strip()
                 if concepts_str:
                     self._concept_cache[r[0]] = [
-                        c.strip()
-                        for c in concepts_str.replace("|", ",").split(",")
-                        if c.strip()
+                        c.strip() for c in concepts_str.replace("|", ",").split(",") if c.strip()
                     ]
             logger.info(f"概念缓存加载: {len(self._concept_cache)} 只")
         except Exception as e:
@@ -606,9 +542,7 @@ class SectorContextMixin:
                 reverse=True,
             ):
                 s = self._sector_stats[ind_name]
-                lines.append(
-                    f"  {ind_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}"
-                )
+                lines.append(f"  {ind_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}")
             lines.append("")
 
         if concepts_dict:
@@ -620,9 +554,7 @@ class SectorContextMixin:
             lines.append("概念（前10）:")
             for c_name in sorted_c:
                 s = self._concept_stats[c_name]
-                lines.append(
-                    f"  {c_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}"
-                )
+                lines.append(f"  {c_name}: {s['change_pct']:+.2f}% 涨{s['up']}跌{s['down']}")
             lines.append("")
 
         return "\n".join(lines)
@@ -726,11 +658,7 @@ class SectorContextMixin:
         if not top and self._sector_stats:
             # 有板块数据但无过阈值板块 → 输出最高分板块供诊断
             best = max(
-                (
-                    (n, s)
-                    for n, s in self._sector_stats.items()
-                    if len(s.get("trend_history", [])) >= 3
-                ),
+                ((n, s) for n, s in self._sector_stats.items() if len(s.get("trend_history", [])) >= 3),
                 key=lambda x: abs(x[1].get("change_pct", 0)),
                 default=None,
             )
@@ -760,12 +688,7 @@ class SectorContextMixin:
             recent = history[split:]
             recent_avg = sum(recent) / len(recent) if recent else 0
 
-            if (
-                early_avg > 0.3
-                and recent_avg < early_avg * 0.5
-                or len(recent) >= 3
-                and recent[-1] < recent[0] - 0.5
-            ):
+            if early_avg > 0.3 and recent_avg < early_avg * 0.5 or len(recent) >= 3 and recent[-1] < recent[0] - 0.5:
                 cooling.append(name)
 
         return cooling

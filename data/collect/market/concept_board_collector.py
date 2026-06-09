@@ -75,9 +75,7 @@ class ConceptBoardCollector(ProxyBaseCollector):
             conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
 
-            cursor.execute(
-                f"DELETE FROM {self.TABLE_NAME} WHERE trade_date = ?", (trade_date,)
-            )
+            cursor.execute(f"DELETE FROM {self.TABLE_NAME} WHERE trade_date = ?", (trade_date,))
             conn.commit()
             self.logger.info(f"已删除 {trade_date} 的旧数据")
 
@@ -116,9 +114,7 @@ class ConceptBoardCollector(ProxyBaseCollector):
                         row.get("f128", ""),  # top_stock
                         self._safe_float(row.get("f136"), 0),  # top_stock_change
                         row.get("f140", ""),  # top_stock_code
-                        int(row.get("f141", 0))
-                        if row.get("f141")
-                        else 0,  # top_stock_rank
+                        int(row.get("f141", 0)) if row.get("f141") else 0,  # top_stock_rank
                         "eastmoney",  # data_source
                         created_at,  # created_at
                     )
@@ -148,7 +144,6 @@ class ConceptBoardCollector(ProxyBaseCollector):
             if "conn" in locals() and conn:
                 conn.rollback()
             self.logger.error(f"❌ 保存到数据库失败：{e}")
-            raise
 
     def fetch_and_save(self) -> Dict:
         """【新方法】采集并保存（一次执行）"""
@@ -170,9 +165,7 @@ class ConceptBoardCollector(ProxyBaseCollector):
 
             result = {"success": True, "count": len(data), "total": total, "data": data}
 
-            self.logger.info(
-                f"✅ {self.__class__.__name__} 采集完成：{len(data)}条（应采集{total}条）"
-            )
+            self.logger.info(f"✅ {self.__class__.__name__} 采集完成：{len(data)}条（应采集{total}条）")
             self.logger.info("=" * 60)
             return result
 

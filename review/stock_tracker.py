@@ -12,7 +12,6 @@
 """
 
 import re
-import sqlite3
 from datetime import datetime
 
 import openpyxl
@@ -22,14 +21,15 @@ from system.utils.logger import get_task_logger
 
 logger = get_task_logger("track")
 
-from system.config.settings import DATABASE_PATH, PROJECT_ROOT
+from data.review.tracker import TrackerRepo
+from system.config.settings import PROJECT_ROOT
 
 # 项目路径
 BASE_DIR = PROJECT_ROOT
 EXCEL_PATH = BASE_DIR / "docs/股票追踪表.xlsx"
 
 
-class  StockTracker:
+class StockTracker:
     """股票追踪记录器"""
 
     # 推荐理由关键词
@@ -69,9 +69,7 @@ class  StockTracker:
                 self.ws = self.wb["股票追踪"]
             else:
                 # 文件存在但 sheet 名不匹配 → 使用第一个 sheet 或重命名，绝不覆盖
-                logger.warning(
-                    f"未找到「股票追踪」sheet，当前 sheets: {self.wb.sheetnames}"
-                )
+                logger.warning(f"未找到「股票追踪」sheet，当前 sheets: {self.wb.sheetnames}")
                 ws_name = self.wb.sheetnames[0]
                 self.ws = self.wb[ws_name]
                 self.ws.title = "股票追踪"
@@ -124,9 +122,7 @@ class  StockTracker:
 
         # 定义表头样式
         header_font = Font(bold=True)
-        header_alignment = Alignment(
-            horizontal="center", vertical="center", wrap_text=True
-        )
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         for col, header in enumerate(headers, 1):
             cell = self.ws.cell(row=1, column=col, value=header)
@@ -161,18 +157,17 @@ class  StockTracker:
             8,
         ]
         for col, width in enumerate(column_widths, 1):
-            self.ws.column_dimensions[
-                openpyxl.utils.get_column_letter(col)
-            ].width = width
+            self.ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
 
         self.wb.save(EXCEL_PATH)
         logger.info(f"✅ 创建 Excel 工作表：{EXCEL_PATH}")
 
-    def get_db_connection(self):
-        """获取数据库连接"""
-        conn = sqlite3.connect(DATABASE_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @staticmethod
+    def _connect():
+        """获取数据库连接 -- 通过 data 层获取，禁止业务代码直接 sqlite3.connect"""
+        from data._base import connect
+
+        return connect()
 
     def get_stock_code(self, stock_name: str, push_date: str) -> str:
         """
@@ -191,7 +186,7 @@ class  StockTracker:
         Returns:
             股票代码，如果找不到返回空字符串
         """
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         # 从 stock_basic 表查询（推送日期前最近一个交易日）
@@ -224,7 +219,7 @@ class  StockTracker:
         Returns:
             市值（亿），找不到返回 0
         """
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -332,9 +327,7 @@ class  StockTracker:
                 # AI 没提供市值，查询数据库
                 market_cap = self.get_market_cap(stock_code, push_date)
                 logger.info(
-                    f"🔍 AI 未提供市值，查询数据库：{stock_name} - {market_cap:.1f}亿"
-                    if market_cap
-                    else "查询失败"
+                    f"🔍 AI 未提供市值，查询数据库：{stock_name} - {market_cap:.1f}亿" if market_cap else "查询失败"
                 )
 
             # 转换优先级为星级
@@ -354,9 +347,7 @@ class  StockTracker:
                     "股票代码": stock_code,
                     "所属板块": stock.get("所属板块", ""),
                     "sector_code": stock.get("sector_code", ""),
-                    "预期强度": "★" * star_rating
-                    if star_rating > 0
-                    else stock.get("优先级", ""),
+                    "预期强度": "★" * star_rating if star_rating > 0 else stock.get("优先级", ""),
                     "star_rating": star_rating,
                     "真实市值": f"{market_cap:.1f}亿" if market_cap else "",
                     "market_cap": market_cap,
@@ -368,9 +359,7 @@ class  StockTracker:
                 }
             )
 
-            logger.info(
-                f"✅ 完善股票数据：{stock_name} ({stock_code}) - {stock['所属板块']}"
-            )
+            logger.info(f"✅ 完善股票数据：{stock_name} ({stock_code}) - {stock['所属板块']}")
 
         # 去重
         seen = set()
@@ -447,9 +436,7 @@ class  StockTracker:
 
                     # 检查股票代码是否存在（AI 推荐错误则跳过）
                     if not stock_code:
-                        logger.error(
-                            f"❌ AI 推荐错误：股票名称 '{stock_name}' 不存在或无行情数据"
-                        )
+                        logger.error(f"❌ AI 推荐错误：股票名称 '{stock_name}' 不存在或无行情数据")
                         logger.error("   跳过该股票，不记录到追踪表")
                         logger.error("   可能原因：股票名称错误/今日停牌/数据缺失")
                         continue
@@ -478,9 +465,7 @@ class  StockTracker:
                         }
                     )
 
-                    logger.info(
-                        f"解析到股票：{stock_name} ({stock_code}) - {current_plate}"
-                    )
+                    logger.info(f"解析到股票：{stock_name} ({stock_code}) - {current_plate}")
 
         # 去重
         seen = set()
@@ -494,9 +479,7 @@ class  StockTracker:
         logger.info(f"总共解析到 {len(unique_stocks)} 只股票 (去重后)")
         return unique_stocks
 
-    def record_stocks(
-        self, stocks: list, push_date: str, brief_text: str = "", source: str = "早报"
-    ):
+    def record_stocks(self, stocks: list, push_date: str, brief_text: str = "", source: str = "早报"):
         """
         批量添加股票到 Excel 和数据库（自动去重：同 push_date + stock_code 只写一次）
 
@@ -525,7 +508,7 @@ class  StockTracker:
             bottom=Side(style="thin"),
         )
 
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         excel_count = 0
@@ -572,30 +555,7 @@ class  StockTracker:
 
             # DB：唯一索引防重复，INSERT OR IGNORE 静默跳过
             try:
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO stock_tracker (
-                        push_date, stock_code, stock_name, plate, star_rating,
-                        market_cap, reason_keywords, source,
-                        sector_code, abandon_condition, stop_loss, target_price
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        push_date,
-                        code,
-                        stock.get("股票名称", ""),
-                        stock.get("所属板块", ""),
-                        stock.get("star_rating", 0),
-                        stock.get("market_cap", 0),
-                        stock.get("推荐理由", ""),
-                        source,
-                        stock.get("sector_code", ""),
-                        stock.get("放弃条件", ""),
-                        stock.get("止损位", ""),
-                        stock.get("目标位", ""),
-                    ),
-                )
-                if cursor.rowcount > 0:
+                if TrackerRepo.insert(conn, push_date, code, stock, source) > 0:
                     db_count += 1
             except Exception as e:
                 logger.error(f"⚠️ 数据库写入失败：{stock.get('股票名称')} - {e}")
@@ -627,7 +587,7 @@ class  StockTracker:
 
         logger.info(f"开始补充 {trade_date} 的行情数据...")
 
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         # 1️⃣ 收集所有待处理记录（每条记录独立跟踪 push_date / target_date）
@@ -716,10 +676,7 @@ class  StockTracker:
         morning_count = sum(1 for r in records if r["source"] == "早报")
         review_count = sum(1 for r in records if r["source"] == "复盘")
         catch_up_total = len(prev_day_catch_up) + len(two_days_ago_catch_up)
-        logger.info(
-            f"需要更新 {len(records)} 只（早报:{morning_count} 复盘:{review_count}"
-            f" 追赶:{catch_up_total}）"
-        )
+        logger.info(f"需要更新 {len(records)} 只（早报:{morning_count} 复盘:{review_count} 追赶:{catch_up_total}）")
 
         # 2️⃣ 按 target_date 分组抓取 market data（key = "code|target_date"）
         from collections import defaultdict
@@ -761,9 +718,7 @@ class  StockTracker:
                 [target_date] + codes,
             )
             all_limit_up_stocks.update(row[0] for row in cursor.fetchall())
-            found = sum(
-                1 for r in recs if f"{r['stock_code']}|{target_date}" in market_data
-            )
+            found = sum(1 for r in recs if f"{r['stock_code']}|{target_date}" in market_data)
             logger.info(f"  {target_date} → {found}/{len(recs)} 只有数据")
 
         if not market_data:
@@ -783,9 +738,7 @@ class  StockTracker:
 
             data = market_data[lookup_key]
             if data["open"] and data["prev_close"] and data["prev_close"] > 0:
-                t_open_pct = (
-                    (data["open"] - data["prev_close"]) / data["prev_close"] * 100
-                )
+                t_open_pct = (data["open"] - data["prev_close"]) / data["prev_close"] * 100
             else:
                 t_open_pct = 0
 
@@ -823,9 +776,7 @@ class  StockTracker:
         logger.info(f"✅ 已更新 {update_count} 只股票行情数据")
 
         # ✅ 同步更新 Excel
-        self._update_excel_daily_data_v2(
-            trade_date, records, market_data, all_limit_up_stocks
-        )
+        self._update_excel_daily_data_v2(trade_date, records, market_data, all_limit_up_stocks)
 
     def update_next_day_data(self, yesterday: str, today: str):
         """
@@ -846,7 +797,7 @@ class  StockTracker:
 
         logger.info(f"开始补充 {yesterday} 的次日表现（{today} 数据）...")
 
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         # 1️⃣ 查询昨日推荐股票（含 source）
@@ -946,9 +897,7 @@ class  StockTracker:
 
             lookup_key = f"{code}|{exit_date}"
             if lookup_key not in today_data:
-                logger.debug(
-                    f"⏳ {code} ({push_date}) exit={exit_date} 数据尚不可用，跳过"
-                )
+                logger.debug(f"⏳ {code} ({push_date}) exit={exit_date} 数据尚不可用，跳过")
                 continue
 
             t1 = today_data[lookup_key]
@@ -1033,7 +982,7 @@ class  StockTracker:
         Returns:
             统计字典
         """
-        conn = self.get_db_connection()
+        conn = self._connect()
         cursor = conn.cursor()
 
         # 基础统计（从收益率列计算胜率）
@@ -1091,9 +1040,7 @@ class  StockTracker:
                 "plate": row["plate"],
                 "total": row["total"],
                 "wins": row["wins"],
-                "win_rate": (row["wins"] / row["total"] * 100)
-                if row["total"] > 0
-                else 0,
+                "win_rate": (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0,
                 "avg_return": row["avg_return"] or 0,
             }
             for row in cursor.fetchall()
@@ -1117,9 +1064,7 @@ class  StockTracker:
                 "star_rating": row["star_rating"],
                 "total": row["total"],
                 "wins": row["wins"],
-                "win_rate": (row["wins"] / row["total"] * 100)
-                if row["total"] > 0
-                else 0,
+                "win_rate": (row["wins"] / row["total"] * 100) if row["total"] > 0 else 0,
                 "avg_return": row["avg_return"] or 0,
             }
             for row in cursor.fetchall()
@@ -1128,9 +1073,7 @@ class  StockTracker:
         conn.close()
         return stats
 
-    def _update_excel_daily_data_v2(
-        self, trade_date: str, records: list, market_data: dict, limit_up_stocks: set
-    ):
+    def _update_excel_daily_data_v2(self, trade_date: str, records: list, market_data: dict, limit_up_stocks: set):
         """
         同步更新 Excel 的当日行情数据（H/I/J/K 列）
 
@@ -1163,15 +1106,11 @@ class  StockTracker:
                 data = market_data[lookup_key]
 
                 if data["open"] and data["prev_close"] and data["prev_close"] > 0:
-                    t_open_pct = (
-                        (data["open"] - data["prev_close"]) / data["prev_close"] * 100
-                    )
+                    t_open_pct = (data["open"] - data["prev_close"]) / data["prev_close"] * 100
                 else:
                     t_open_pct = 0
 
-                t_intra_diff = (
-                    data["change_pct"] - t_open_pct if data["change_pct"] else 0
-                )
+                t_intra_diff = data["change_pct"] - t_open_pct if data["change_pct"] else 0
                 is_limit_up = "是" if row_code in limit_up_stocks else "否"
 
                 self.ws.cell(row=row, column=8, value=f"{t_open_pct:.2f}%")
@@ -1187,9 +1126,7 @@ class  StockTracker:
         except Exception as e:
             logger.error(f"⚠️ Excel 更新失败：{e}")
 
-    def _update_excel_daily_data(
-        self, trade_date: str, stock_data: dict, limit_up_stocks: set
-    ):
+    def _update_excel_daily_data(self, trade_date: str, stock_data: dict, limit_up_stocks: set):
         """
         同步更新 Excel 的当日行情数据（H/I/J/K 列）
 
@@ -1211,15 +1148,11 @@ class  StockTracker:
                 data = stock_data[row_code]
 
                 if data["open"] and data["prev_close"] and data["prev_close"] > 0:
-                    t_open_pct = (
-                        (data["open"] - data["prev_close"]) / data["prev_close"] * 100
-                    )
+                    t_open_pct = (data["open"] - data["prev_close"]) / data["prev_close"] * 100
                 else:
                     t_open_pct = 0
 
-                t_intra_diff = (
-                    data["change_pct"] - t_open_pct if data["change_pct"] else 0
-                )
+                t_intra_diff = data["change_pct"] - t_open_pct if data["change_pct"] else 0
                 is_limit_up = "是" if row_code in limit_up_stocks else "否"
 
                 self.ws.cell(row=row, column=8, value=f"{t_open_pct:.2f}%")  # H
@@ -1235,9 +1168,7 @@ class  StockTracker:
         except Exception as e:
             logger.error(f"⚠️ Excel 更新失败：{e}")
 
-    def _update_excel_next_day_data(
-        self, yesterday: str, yesterday_stocks: dict, today_data: dict
-    ):
+    def _update_excel_next_day_data(self, yesterday: str, yesterday_stocks: dict, today_data: dict):
         """
         同步更新 Excel 的次日表现数据（L/M/N/O/P/Q/R/S/T/U 列）
 
@@ -1324,5 +1255,5 @@ class  StockTracker:
 
 
 if __name__ == "__main__":
-    tracker =  StockTracker()
+    tracker = StockTracker()
     print("✅  StockTracker 初始化成功")

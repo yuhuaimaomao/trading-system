@@ -37,9 +37,7 @@ class AIAuditor:
         funnel = self.repo.get_funnel_records(push_date)
         lessons = self.repo.get_active_lessons()
 
-        prompt = self._build_prompt(
-            push_date, decisions, funnel, rule_findings, lessons
-        )
+        prompt = self._build_prompt(push_date, decisions, funnel, rule_findings, lessons)
 
         response_text = self._call_ai(prompt)
         if not response_text:
@@ -81,28 +79,20 @@ class AIAuditor:
             if d.get("skip_reason"):
                 decisions_text.append(f"  跳过原因: {d['skip_reason'][:200]}")
             if d.get("would_reconsider_if"):
-                decisions_text.append(
-                    f"  重新考虑条件: {d['would_reconsider_if'][:200]}"
-                )
+                decisions_text.append(f"  重新考虑条件: {d['would_reconsider_if'][:200]}")
 
         outcomes_text = []
         for d in decisions:
             chg = d.get("day_change_pct")
             if chg is not None:
                 emoji = "🟢" if chg > 0 else "🔴"
-                outcomes_text.append(
-                    f"{emoji} {d['stock_code']} {d.get('stock_name', '')}: {chg:+.1f}%"
-                )
+                outcomes_text.append(f"{emoji} {d['stock_code']} {d.get('stock_name', '')}: {chg:+.1f}%")
 
-        rule_text = (
-            json.dumps(rule_findings, ensure_ascii=False, indent=2)
-            if rule_findings
-            else "无"
-        )
+        rule_text = json.dumps(rule_findings, ensure_ascii=False, indent=2) if rule_findings else "无"
 
         lessons_text = ""
-        for l in lessons[-10:]:
-            lessons_text += f"- [{l['lesson_type']}] {l['lesson_content'][:100]}\n"
+        for lesson in lessons[-10:]:
+            lessons_text += f"- [{lesson['lesson_type']}] {lesson['lesson_content'][:100]}\n"
 
         return STRATEGY_AUDIT_PROMPT.format(
             push_date=push_date,
@@ -128,7 +118,7 @@ class AIAuditor:
         try:
             text = ai.chat(
                 prompt=prompt,
-                model="review",
+                model="audit",
                 system_prompt="你是策略审计分析师。严格按 JSON 格式输出（用```json包裹），不要额外解释。",
                 max_tokens=4096,
             )
@@ -172,9 +162,7 @@ class AIAuditor:
                     "lesson_type": lesson.get("type", ""),
                     "lesson_key": lesson.get("key", ""),
                     "lesson_content": lesson.get("content", ""),
-                    "trigger_conditions": json.dumps(
-                        lesson.get("trigger_conditions", {}), ensure_ascii=False
-                    ),
+                    "trigger_conditions": json.dumps(lesson.get("trigger_conditions", {}), ensure_ascii=False),
                     "first_date": today,
                     "last_date": today,
                 }
@@ -196,6 +184,5 @@ class AIAuditor:
             )
 
         logger.info(
-            f"审计结果已入库: {len(result.get('lessons', []))} 条教训, "
-            f"{len(result.get('improvements', []))} 条改进建议"
+            f"审计结果已入库: {len(result.get('lessons', []))} 条教训, {len(result.get('improvements', []))} 条改进建议"
         )

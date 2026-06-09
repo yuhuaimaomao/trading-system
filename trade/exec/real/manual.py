@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Optional
 
+from data._base import connect
 from data.repo import TradeRepository
 from stock.signals import OrderSignal
 from system.config import settings
@@ -56,12 +57,10 @@ class ManualExecutor:
     @lru_cache(maxsize=settings.NAME_RESOLVE_CACHE_SIZE)
     def _resolve_name(name: str) -> Optional[str]:
         """股票名称 → 代码，从 stock_basic 查最新日期。"""
-        import sqlite3
-
         from system.config import settings
 
         try:
-            conn = sqlite3.connect(settings.DATABASE_PATH)
+            conn = connect(settings.DATABASE_PATH)
             row = conn.execute(
                 """SELECT stock_code FROM stock_basic
                    WHERE stock_name=? AND trade_date=(SELECT MAX(trade_date) FROM stock_basic)
@@ -223,9 +222,7 @@ class ManualExecutor:
             }
         )
 
-        logger.info(
-            f"记录 {account} 成交: {code} {volume}股 @{price} order_id={order_id}"
-        )
+        logger.info(f"记录 {account} 成交: {code} {volume}股 @{price} order_id={order_id}")
 
         if signal_id:
             self.repo.update_signal_status(signal_id, "bought")
@@ -276,9 +273,7 @@ class ManualExecutor:
         msg = signal.__repr__()
         self.telegram.send(f"【交易信号】\n{msg}")
 
-    def confirm(
-        self, signal_id: int, price: float, volume: int, code: str = "", name: str = ""
-    ):
+    def confirm(self, signal_id: int, price: float, volume: int, code: str = "", name: str = ""):
         """手动确认买入 → 更新状态、记录订单"""
         info = self._pending_signals.get(signal_id, {})
         code = code or info.get("stock_code", "")

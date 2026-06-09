@@ -8,12 +8,11 @@
   → Telegram 推送
 """
 
-import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from data._base import connect
 from system.ai.prompts.morning import MORNING_BRIEF_PROMPT
-from system.config.settings import DATABASE_PATH
 from system.utils.logger import get_task_logger
 
 
@@ -107,13 +106,14 @@ class MorningBrief:
         except Exception as e:
             self.logger.warning(f"宏观数据更新失败（将使用缓存）: {e}")
 
-        conn = sqlite3.connect(DATABASE_PATH)
-        conn.row_factory = sqlite3.Row
+        conn = connect()
         try:
-            row = conn.execute("SELECT * FROM macro_daily ORDER BY trade_date DESC LIMIT 1").fetchone()
+            from data.strategy.morning import MorningReader
+
+            row = MorningReader.get_macro_latest(conn)
             if not row:
                 return ""
-            d = dict(row)
+            d = row
             lines = []
             if d.get("nasdaq_change") is not None:
                 lines.append(f"纳斯达克: {d['nasdaq_change']:+.2f}%")
@@ -156,8 +156,7 @@ class MorningBrief:
         cutoff_ts = int(cutoff_dt.timestamp())
 
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            conn.row_factory = sqlite3.Row
+            conn = connect()
             rows = conn.execute(
                 """
                 SELECT title, score, plate_tags, subject_tags, ctime
@@ -214,8 +213,7 @@ class MorningBrief:
         # 查昨日推荐标的
         picks = {}
         try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            conn.row_factory = sqlite3.Row
+            conn = connect()
             rows = conn.execute(
                 """
                 SELECT stock_code, stock_name FROM stock_tracker
@@ -345,9 +343,7 @@ class MorningBrief:
 
     def _apply_adjustments(self, adjustments: list, trade_date: str) -> int:
         """应用修正指令到 trade_signals 表。"""
-        import sqlite3
-
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = connect()
         applied = 0
 
         for adj in adjustments:

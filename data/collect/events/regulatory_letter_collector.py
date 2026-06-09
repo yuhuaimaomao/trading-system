@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 
 import requests
 
+from system.config.settings import STORAGE_PATH
 from system.utils.logger import get_collect_logger
 
 logger = get_collect_logger("events")
@@ -28,9 +29,6 @@ SEARCH_KEYWORDS = [
     "警示函",
     "责令改正",
 ]
-
-# PDF 存储路径
-from system.config.settings import STORAGE_PATH
 
 PDF_STORAGE_DIR = os.path.join(STORAGE_PATH, "pdf")
 
@@ -129,9 +127,7 @@ class RegulatoryLetterCollector:
                     announcement.get("risk_level", 1),
                     announcement.get("risk_stars", "⭐"),
                     announcement.get("risk_summary", ""),
-                    json.dumps(
-                        announcement.get("risk_keywords", []), ensure_ascii=False
-                    ),
+                    json.dumps(announcement.get("risk_keywords", []), ensure_ascii=False),
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -142,9 +138,7 @@ class RegulatoryLetterCollector:
             conn.commit()
             conn.close()
 
-            logger.info(
-                f"✅ 公告已保存：{announcement.get('stock_name')} (ID: {announcement_id})"
-            )
+            logger.info(f"✅ 公告已保存：{announcement.get('stock_name')} (ID: {announcement_id})")
             return announcement_id
 
         except Exception as e:
@@ -200,9 +194,7 @@ class RegulatoryLetterCollector:
         except Exception as e:
             logger.error(f"更新分析结果失败：{e}")
 
-    def search(
-        self, keyword: str, trade_date: str = None, pages: int = 3
-    ) -> List[Dict]:
+    def search(self, keyword: str, trade_date: str = None, pages: int = 3) -> List[Dict]:
         """
         搜索监管函/问询函
 
@@ -236,9 +228,7 @@ class RegulatoryLetterCollector:
                         announcements = result.get("announcements", [])
                         total = result.get("totalAnnouncement", 0)
 
-                        logger.info(
-                            f"✅ 第{page}页：{len(announcements)}条 (总记录：{total})"
-                        )
+                        logger.info(f"✅ 第{page}页：{len(announcements)}条 (总记录：{total})")
 
                         if announcements:
                             all_announcements.extend(announcements)
@@ -291,17 +281,13 @@ class RegulatoryLetterCollector:
         announcement_id = announcement.get("announcementId", "")
 
         # 使用已格式化的 announce_date 生成文件名（去掉横杠）
-        announce_date_for_filename = (
-            announce_date.replace("-", "") if announce_date else ""
-        )
+        announce_date_for_filename = announce_date.replace("-", "") if announce_date else ""
 
         # 清理股票名称中的特殊字符
         stock_name_clean = re.sub(r'[\\/:*?"<>|]', "", stock_name)
 
         if announcement_id and announce_date_for_filename:
-            pdf_filename = (
-                f"{announce_date_for_filename}_{stock_name_clean}_{announcement_id}.pdf"
-            )
+            pdf_filename = f"{announce_date_for_filename}_{stock_name_clean}_{announcement_id}.pdf"
         else:
             pdf_filename = ""
 
@@ -461,9 +447,7 @@ class RegulatoryLetterCollector:
                             # 分析 PDF
                             if self.analysis_service:
                                 logger.info(f"分析 PDF: {formatted['pdf_file']}...")
-                                analysis_result = self.analysis_service.analyze_pdf(
-                                    pdf_path
-                                )
+                                analysis_result = self.analysis_service.analyze_pdf(pdf_path)
                             else:
                                 analysis_result = None
 
@@ -471,9 +455,7 @@ class RegulatoryLetterCollector:
                                 analyzed_count += 1
 
                                 # 更新数据库
-                                self._update_analysis_result(
-                                    announcement_id, analysis_result
-                                )
+                                self._update_analysis_result(announcement_id, analysis_result)
 
                     # 延迟，避免请求过快
                     time.sleep(1)
@@ -566,9 +548,7 @@ class RegulatoryLetterCollector:
                         # 分析 PDF
                         if self.analysis_service:
                             logger.info(f"分析 PDF: {formatted['pdf_file']}")
-                            analysis_result = self.analysis_service.analyze_pdf(
-                                pdf_path
-                            )
+                            analysis_result = self.analysis_service.analyze_pdf(pdf_path)
                         else:
                             analysis_result = None
 
@@ -576,9 +556,7 @@ class RegulatoryLetterCollector:
                             analyzed_count += 1
 
                             # 更新数据库
-                            self._update_analysis_result(
-                                announcement_id, analysis_result
-                            )
+                            self._update_analysis_result(announcement_id, analysis_result)
 
                 # 延迟
                 time.sleep(1)

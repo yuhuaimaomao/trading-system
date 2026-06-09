@@ -6,11 +6,10 @@
 
 from pathlib import Path
 
+from system.config.settings import STORAGE_PATH
+
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-
-# 存储目录（从 settings.py 统一导入，避免重复定义）
-from system.config.settings import STORAGE_PATH
 
 # 缓存目录（proxy 专用）
 CACHE_DIR = Path(STORAGE_PATH) / "cache"

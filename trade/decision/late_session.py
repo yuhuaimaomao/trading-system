@@ -29,7 +29,6 @@ class ClosingDecisionMixin:
         # 大盘环境
         regime = getattr(self, "_regime", None)
         risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
-        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
         is_market_extreme = risk_level == "extreme"
         is_market_dangerous = risk_level == "dangerous"
 
@@ -60,9 +59,7 @@ class ClosingDecisionMixin:
                 trend = self._get_sector_trend(code)
 
             if is_today:
-                lines.append(
-                    f"   🔒 {code} {pos.stock_name}  T+1 锁定  盈亏: {pnl_pct:+.1f}%"
-                )
+                lines.append(f"   🔒 {code} {pos.stock_name}  T+1 锁定  盈亏: {pnl_pct:+.1f}%")
                 continue
 
             # 大盘极端/恐慌 → 任何亏损都建议清仓
@@ -106,9 +103,7 @@ class ClosingDecisionMixin:
                     )
                     has_action = True
                 else:
-                    lines.append(
-                        f"   ✅ {code} {pos.stock_name}  盈亏: {pnl_pct:+.1f}%  可持过夜{trend}"
-                    )
+                    lines.append(f"   ✅ {code} {pos.stock_name}  盈亏: {pnl_pct:+.1f}%  可持过夜{trend}")
 
         if has_action:
             self._alert("\n".join(lines))

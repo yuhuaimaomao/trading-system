@@ -44,8 +44,11 @@ except ImportError:
 
 from curl_cffi import requests as curl_requests
 
+__all__ = ["USER_AGENTS", "ProxyBaseCollector"]
+
 from data.collect.proxy.proxy_requester import (
     UA_PROFILES,
+    USER_AGENTS,
     ProxyRequester,
 )
 
@@ -87,7 +90,7 @@ class ProxyBaseCollector(ProxyRequester):
         # 日志系统
         if get_collect_logger:
             self.logger = get_collect_logger(
-                collector_name=self.collector_name or logger_name,
+                name=self.collector_name or logger_name,
                 trade_date=self.trade_date,
             )
         else:
@@ -141,9 +144,7 @@ class ProxyBaseCollector(ProxyRequester):
         # 随机选择 UA profile
         profile = random.choice(UA_PROFILES)
         impersonate = profile["impersonate"]
-        headers = self._build_headers_from_profile(
-            profile, referer=self.REFERER_URL, api_call=True
-        )
+        headers = self._build_headers_from_profile(profile, referer=self.REFERER_URL, api_call=True)
 
         params = self.API_PARAMS.copy()
         params["pn"] = str(page)
@@ -151,43 +152,45 @@ class ProxyBaseCollector(ProxyRequester):
 
         # JSONP 参数
         if self.USE_JSONP:
-            params["cb"] = (
-                f"jQuery{random.randint(1000000000000, 9999999999999)}_{int(time.time() * 1000)}"
-            )
+            params["cb"] = f"jQuery{random.randint(1000000000000, 9999999999999)}_{int(time.time() * 1000)}"
             params["_"] = str(int(time.time() * 1000))
 
-        self.logger.info(
-            f"请求参数：pn={page}, pz={self.PAGE_SIZE}, impersonate={impersonate}"
-        )
+        self.logger.info(f"请求参数：pn={page}, pz={self.PAGE_SIZE}, impersonate={impersonate}")
 
         # 创建 Session + Cookie 预热
-        s = curl_requests.Session()
-        s.trust_env = False
-
+        # akshare_config 模块级 no_proxy=* 会干扰 curl_cffi 走代理，请求期间临时移除
+        _no_proxy = os.environ.pop("no_proxy", None)
         try:
-            warmup_headers = self._build_headers_from_profile(profile, api_call=False)
-            s.get(
-                "https://quote.eastmoney.com/",
-                headers=warmup_headers,
-                proxies=proxy,
-                impersonate=impersonate,
-                timeout=8,
-            )
-        except Exception:
-            pass  # 预热失败不影响主流程
+            s = curl_requests.Session()
+            s.trust_env = False
 
-        try:
-            data = self._request(
-                self.API_URL,
-                params,
-                headers,
-                proxy,
-                impersonate,
-                REQUEST_TIMEOUT,
-                session=s,
-            )
+            try:
+                warmup_headers = self._build_headers_from_profile(profile, api_call=False)
+                s.get(
+                    "https://quote.eastmoney.com/",
+                    headers=warmup_headers,
+                    proxies=proxy,
+                    impersonate=impersonate,
+                    timeout=8,
+                )
+            except Exception:
+                pass  # 预热失败不影响主流程
+
+            try:
+                data = self._request(
+                    self.API_URL,
+                    params,
+                    headers,
+                    proxy,
+                    impersonate,
+                    REQUEST_TIMEOUT,
+                    session=s,
+                )
+            finally:
+                s.close()
         finally:
-            s.close()
+            if _no_proxy is not None:
+                os.environ["no_proxy"] = _no_proxy
 
         if data is None:
             self._record_ip(proxy, page, "failed", "request_failed")
@@ -247,32 +250,22 @@ class ProxyBaseCollector(ProxyRequester):
             # 检查是否已经完成
             if total_pages > 0 and completed >= total_pages:
                 if not failed_pages:
-                    self.logger.info(
-                        f"✅ 缓存已完成（{completed}/{total_pages}页），直接返回"
-                    )
+                    self.logger.info(f"✅ 缓存已完成（{completed}/{total_pages}页），直接返回")
                     return self.cache_data["data"]
                 else:
-                    self.logger.info(
-                        f"⚠️ 缓存已完成，但有{len(failed_pages)}页失败：{failed_pages}"
-                    )
+                    self.logger.info(f"⚠️ 缓存已完成，但有{len(failed_pages)}页失败：{failed_pages}")
 
             # 显示进度
             if total_pages > 0:
                 if failed_pages:
-                    self.logger.info(
-                        f"✅ 缓存有效，已采集{completed}/{total_pages}页，{len(failed_pages)}页失败"
-                    )
+                    self.logger.info(f"✅ 缓存有效，已采集{completed}/{total_pages}页，{len(failed_pages)}页失败")
                 else:
-                    self.logger.info(
-                        f"✅ 缓存有效，已从第 {completed + 1} 页/共 {total_pages} 页继续"
-                    )
+                    self.logger.info(f"✅ 缓存有效，已从第 {completed + 1} 页/共 {total_pages} 页继续")
             else:
                 self.logger.info(f"✅ 缓存有效，已从第 {completed + 1} 页继续")
 
         start_time = datetime.now()
-        self.logger.info(
-            f"开始时间：{start_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
-        )
+        self.logger.info(f"开始时间：{start_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
 
         current_proxy = None
         success = True
@@ -287,9 +280,7 @@ class ProxyBaseCollector(ProxyRequester):
 
         # 恢复场景：先重试失败页（不等到主循环结束后），再继续未采集页
         if failed_pages and completed_pages > 0:
-            self.logger.info(
-                f"🔄 恢复模式：先重试 {len(failed_pages)} 个失败页 {failed_pages}"
-            )
+            self.logger.info(f"🔄 恢复模式：先重试 {len(failed_pages)} 个失败页 {failed_pages}")
             for fp in failed_pages[:]:
                 self._retry_single_page(fp)
 
@@ -318,18 +309,11 @@ class ProxyBaseCollector(ProxyRequester):
             page_data = None
 
             # 单页重试逻辑：第 1 页用 FIRST_PAGE_MAX_RETRIES（默认= max_retries），其他页用 max_retries
-            page_max_retries = (
-                getattr(self, "FIRST_PAGE_MAX_RETRIES", max_retries)
-                if page == 1
-                else max_retries
-            )
+            page_max_retries = getattr(self, "FIRST_PAGE_MAX_RETRIES", max_retries) if page == 1 else max_retries
             for attempt in range(1, page_max_retries + 1):
                 page_data = self._fetch_page(page, current_proxy)
 
-                if page_data and (
-                    page_data.get("data", {}).get("diff")
-                    or page_data.get("result", {}).get("data")
-                ):
+                if page_data and (page_data.get("data", {}).get("diff") or page_data.get("result", {}).get("data")):
                     self.logger.info(f"✅ 第 {page} 页获取成功（第{attempt}次尝试）")
                     break
                 else:
@@ -343,9 +327,7 @@ class ProxyBaseCollector(ProxyRequester):
             if not page_data:
                 # 第 1 页失败 → 拿不到 total 无法分页，跳过整个采集器
                 if page == 1:
-                    self.logger.error(
-                        f"❌ 第 1 页采集失败（已重试{page_max_retries}次），跳过此采集器"
-                    )
+                    self.logger.error(f"❌ 第 1 页采集失败（已重试{page_max_retries}次），跳过此采集器")
                     # 重置缓存，避免下次从损坏的缓存恢复
                     self.cache_data = {
                         "trade_date": self.trade_date,
@@ -361,9 +343,7 @@ class ProxyBaseCollector(ProxyRequester):
                     break
 
                 # 非第 1 页失败 → 记录失败页，继续下一页
-                self.logger.error(
-                    f"❌ 第 {page} 页采集失败（已重试{max_retries}次），跳过并继续第{page + 1}页"
-                )
+                self.logger.error(f"❌ 第 {page} 页采集失败（已重试{max_retries}次），跳过并继续第{page + 1}页")
                 if "failed_pages" not in self.cache_data:
                     self.cache_data["failed_pages"] = []
                 # 避免重复记录
@@ -405,9 +385,7 @@ class ProxyBaseCollector(ProxyRequester):
                 self.cache_data["total_pages"] = total_pages
                 # 更新循环上限
                 max_pages = total_pages
-                self.logger.info(
-                    f"📊 共 {total} 条数据，共 {total_pages} 页（动态调整上限）"
-                )
+                self.logger.info(f"📊 共 {total} 条数据，共 {total_pages} 页（动态调整上限）")
 
                 # 如果只有 1 页，直接停止
                 if total_pages == 1:
@@ -458,9 +436,7 @@ class ProxyBaseCollector(ProxyRequester):
                 break
 
             self.logger.warning(f"\n{'=' * 60}")
-            self.logger.warning(
-                f"第{round_num - 1}轮结束，{len(failed_pages)}页采集失败，开始第{round_num}轮重试..."
-            )
+            self.logger.warning(f"第{round_num - 1}轮结束，{len(failed_pages)}页采集失败，开始第{round_num}轮重试...")
             self.logger.warning(f"{'=' * 60}\n")
 
             # 复制失败页列表，避免遍历中修改
@@ -470,7 +446,7 @@ class ProxyBaseCollector(ProxyRequester):
             for page in pages_to_retry:
                 self.logger.info(f"重试第{page}页...")
 
-                success = False
+                page_ok = False
                 for retry in range(self.MAX_RETRIES):
                     proxy_dict = self._get_proxy()
                     if not proxy_dict:
@@ -479,15 +455,10 @@ class ProxyBaseCollector(ProxyRequester):
 
                     page_data = self._fetch_page(page, proxy_dict)
 
-                    if page_data and (
-                        page_data.get("data", {}).get("diff")
-                        or page_data.get("result", {}).get("data")
-                    ):
+                    if page_data and (page_data.get("data", {}).get("diff") or page_data.get("result", {}).get("data")):
                         # 解析数据
                         data_section = page_data.get("data") or {}
-                        diff_list = data_section.get("diff") or page_data.get(
-                            "result", {}
-                        ).get("data", [])
+                        diff_list = data_section.get("diff") or page_data.get("result", {}).get("data", [])
 
                         page_total = data_section.get("total")
                         if page_total is not None:
@@ -496,12 +467,8 @@ class ProxyBaseCollector(ProxyRequester):
                         if diff_list:
                             # 追加数据到缓存
                             self.cache_data["data"].extend(diff_list)
-                            self.cache_data["completed_pages"] = max(
-                                self.cache_data.get("completed_pages", 0), page
-                            )
-                            self.cache_data["updated_at"] = datetime.now().strftime(
-                                "%Y-%m-%d %H:%M:%S"
-                            )
+                            self.cache_data["completed_pages"] = max(self.cache_data.get("completed_pages", 0), page)
+                            self.cache_data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             self._save_cache()
 
                             self.logger.info(f"第{page}页重试成功：{len(diff_list)}条")
@@ -512,25 +479,29 @@ class ProxyBaseCollector(ProxyRequester):
                                 self._save_cache()
                                 self.logger.info(f"✅ 已从缓存中清除第{page}页失败记录")
 
-                            success = True
+                            page_ok = True
                             round_success_count += 1
                             break
 
                     self.logger.warning(f"第{page}页第{retry + 1}次重试失败")
-                    time.sleep(
-                        self.RETRY_DELAYS[retry]
-                        if retry < len(self.RETRY_DELAYS)
-                        else 10
-                    )
+                    time.sleep(self.RETRY_DELAYS[retry] if retry < len(self.RETRY_DELAYS) else 10)
 
-                if not success:
+                if not page_ok:
                     self.logger.error(f"❌ 第{page}页重试失败，保留在失败列表中")
 
             self.logger.info(
                 f"第{round_num}轮重试完成：成功{round_success_count}页，失败{len(failed_pages) - round_success_count}页"
             )
 
-        # 数据完整性校验（所有重试轮次结束后）
+        # 第二轮结束后检查：还有失败页 → 放弃此采集器
+        remaining_failed = self.cache_data.get("failed_pages", [])
+        if remaining_failed:
+            success = False
+            self.logger.warning(
+                f"第二轮重试后仍有 {len(remaining_failed)} 页失败: {remaining_failed}，放弃此采集器，等手工执行采集"
+            )
+
+        # 数据完整性校验（不重试，只做数据源变动检测）
         if success:
             collected = len(self.cache_data.get("data", []))
             expected = self.cache_data.get("total", 0)
@@ -538,32 +509,15 @@ class ProxyBaseCollector(ProxyRequester):
 
             if expected > 0 and collected != expected:
                 diff = abs(expected - collected)
-                self.logger.warning(
-                    f"数据完整性校验：count={collected} != total={expected}（差{diff}条）"
-                )
+                self.logger.warning(f"数据完整性校验：count={collected} != total={expected}（差{diff}条）")
 
                 # 差 < 一页 → 数据源变动，用末页 total 二次校验
-                if (
-                    diff < self.PAGE_SIZE
-                    and last_page_total is not None
-                    and collected == last_page_total
-                ):
+                if diff < self.PAGE_SIZE and last_page_total is not None and collected == last_page_total:
                     self.logger.info(
                         f"数据源变动：首页total={expected} → 末页total={last_page_total}，"
                         f"实际采集={collected}，以末页为准"
                     )
                     self.cache_data["total"] = last_page_total
-                else:
-                    # 不全量重跑，只针对差异重试失败页
-                    self._handle_integrity_gap(expected, collected, total_pages)
-                    # 重试后重新校验
-                    collected = len(self.cache_data.get("data", []))
-                    if collected != expected:
-                        diff = abs(expected - collected)
-                        self.logger.warning(
-                            f"完整性修复后仍不完整：count={collected} != total={expected}（差{diff}条），"
-                            f"保留已采集数据，等待手工检查"
-                        )
 
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
@@ -581,9 +535,7 @@ class ProxyBaseCollector(ProxyRequester):
 
         if success:
             self.logger.info("✅ 采集完成！")
-            self.logger.info(
-                f"结束时间：{end_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}"
-            )
+            self.logger.info(f"结束时间：{end_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
             self.logger.info(f"总耗时：{duration:.2f}秒")
             self.logger.info(f"总数据量：{len(self.cache_data['data'])} 条")
             self.logger.info("=" * 60)
@@ -603,8 +555,7 @@ class ProxyBaseCollector(ProxyRequester):
         diff = expected - collected
 
         self.logger.warning(
-            f"完整性缺口：期望{expected}条，实际{collected}条，差{diff}条，"
-            f"失败页={failed_pages or '无'}"
+            f"完整性缺口：期望{expected}条，实际{collected}条，差{diff}条，失败页={failed_pages or '无'}"
         )
 
         if failed_pages:
@@ -615,13 +566,8 @@ class ProxyBaseCollector(ProxyRequester):
         else:
             # 没有记录失败页但数据量不对 → 可能是中间页返回空但没被标记为失败
             # 根据 diff 估算缺失页数，逐页检查是否有数据空洞
-            missing_pages_estimate = max(
-                1, (diff + self.PAGE_SIZE - 1) // self.PAGE_SIZE
-            )
-            self.logger.info(
-                f"无失败页记录，估计缺失{missing_pages_estimate}页，"
-                f"扫描已采集页找空洞..."
-            )
+            missing_pages_estimate = max(1, (diff + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+            self.logger.info(f"无失败页记录，估计缺失{missing_pages_estimate}页，扫描已采集页找空洞...")
             self._retry_missing_gaps(total_pages, expected, collected)
 
     def _retry_single_page(self, page: int):
@@ -638,18 +584,14 @@ class ProxyBaseCollector(ProxyRequester):
             return
 
         data_section = page_data.get("data") or {}
-        diff_list = data_section.get("diff") or page_data.get("result", {}).get(
-            "data", []
-        )
+        diff_list = data_section.get("diff") or page_data.get("result", {}).get("data", [])
 
         if diff_list:
             self.cache_data["data"].extend(diff_list)
             if page in self.cache_data.get("failed_pages", []):
                 self.cache_data["failed_pages"].remove(page)
             # 更新 completed_pages，防止主循环重复采集该页
-            self.cache_data["completed_pages"] = max(
-                self.cache_data.get("completed_pages", 0), page
-            )
+            self.cache_data["completed_pages"] = max(self.cache_data.get("completed_pages", 0), page)
             self.cache_data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._save_cache()
             self.logger.info(f"✅ 第{page}页补充重试成功：+{len(diff_list)}条")
@@ -813,9 +755,7 @@ class ProxyBaseCollector(ProxyRequester):
 
             # 检查交易日期（必须是同一个交易日）
             if self.cache_data.get("trade_date") != self.trade_date:
-                self.logger.info(
-                    f"缓存交易日期不匹配：{self.cache_data.get('trade_date')} != {self.trade_date}"
-                )
+                self.logger.info(f"缓存交易日期不匹配：{self.cache_data.get('trade_date')} != {self.trade_date}")
                 return False
 
             # 检查状态
@@ -829,14 +769,10 @@ class ProxyBaseCollector(ProxyRequester):
                 cache_time = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S")
                 hours = (datetime.now() - cache_time).total_seconds() / 3600
                 if hours > CACHE_EXPIRE_HOURS:
-                    self.logger.info(
-                        f"缓存超时：{hours:.1f}小时 > {CACHE_EXPIRE_HOURS}小时"
-                    )
+                    self.logger.info(f"缓存超时：{hours:.1f}小时 > {CACHE_EXPIRE_HOURS}小时")
                     return False
 
-            self.logger.info(
-                f"✅ 缓存有效：{self.cache_data.get('completed_pages', 0)}页"
-            )
+            self.logger.info(f"✅ 缓存有效：{self.cache_data.get('completed_pages', 0)}页")
             return True
 
         except Exception as e:

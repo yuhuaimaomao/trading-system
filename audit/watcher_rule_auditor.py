@@ -6,9 +6,9 @@
 """
 
 import json
-import sqlite3
 from datetime import datetime, timedelta
 
+from data._base import connect
 from system.config.settings import DATABASE_PATH
 
 
@@ -37,7 +37,7 @@ class RuleAuditor:
     # ---- 数据查询 ----
 
     def _get_index_snapshots(self, trade_date: str) -> list[dict]:
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT ts, price FROM index_snapshots WHERE trade_date=? ORDER BY ts",
             (trade_date,),
@@ -45,12 +45,10 @@ class RuleAuditor:
         conn.close()
         return [{"ts": r[0], "price": r[1]} for r in rows]
 
-    def _get_index_after(
-        self, trade_date: str, after_ts: str, minutes: int = 30
-    ) -> list[dict]:
+    def _get_index_after(self, trade_date: str, after_ts: str, minutes: int = 30) -> list[dict]:
         from_ts = datetime.fromisoformat(after_ts)
         to_ts = from_ts + timedelta(minutes=minutes)
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT ts, price FROM index_snapshots WHERE trade_date=? AND ts>=? AND ts<=? AND index_code='000001' ORDER BY ts",
             (trade_date, from_ts.timestamp(), to_ts.timestamp()),
@@ -60,7 +58,7 @@ class RuleAuditor:
 
     def _get_close(self, trade_date: str, code: str) -> float | None:
         """获取当日收盘价，优先级: trade_portfolio_positions > stock_basic > market_snapshots"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         # 1. 从持仓表取 current_price（收盘时更新过的）
         row = conn.execute(
             "SELECT current_price FROM trade_portfolio_positions WHERE trade_date=? AND stock_code=? AND account='paper' LIMIT 1",
@@ -87,7 +85,7 @@ class RuleAuditor:
 
     def _get_buy_pnl(self, trade_date: str, code: str) -> dict | None:
         """从持仓表获取当日买入盈亏。"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         row = conn.execute(
             "SELECT avg_cost, current_price, pnl_pct, volume FROM trade_portfolio_positions WHERE trade_date=? AND stock_code=? AND account='paper' LIMIT 1",
             (trade_date, code),
@@ -104,7 +102,7 @@ class RuleAuditor:
 
     def _get_stop_fill(self, trade_date: str, code: str, after_ts: str) -> dict | None:
         """查止损触发后是否实际成交。"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         row = conn.execute(
             "SELECT filled_price, filled_volume, order_time FROM trade_orders WHERE trade_date=? AND stock_code=? AND order_type='sell' AND account='paper' AND order_time>=? ORDER BY order_time LIMIT 1",
             (trade_date, code, after_ts),
@@ -122,7 +120,7 @@ class RuleAuditor:
 
     def _audit_regime(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT * FROM watcher_decision_log WHERE trade_date=? AND decision_type='regime_change' ORDER BY ts",
             (trade_date,),
@@ -152,11 +150,7 @@ class RuleAuditor:
             change = (end_p - start_p) / start_p * 100 if start_p else 0
             mid = len(snaps) // 2
             first_avg = sum(s["price"] for s in snaps[:mid]) / mid
-            second_avg = (
-                sum(s["price"] for s in snaps[mid:]) / len(snaps[mid:])
-                if snaps[mid:]
-                else end_p
-            )
+            second_avg = sum(s["price"] for s in snaps[mid:]) / len(snaps[mid:]) if snaps[mid:] else end_p
             cg_shift = "down" if second_avg < first_avg else "up"
 
             result = self._eval_regime(pattern, change, cg_shift)
@@ -236,7 +230,7 @@ class RuleAuditor:
 
     def _audit_buy_signals(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         cols = [
             "id",
             "trade_date",
@@ -335,7 +329,7 @@ class RuleAuditor:
 
     def _audit_stop_loss(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT * FROM watcher_decision_log WHERE trade_date=? AND decision_type='stop_trigger'",
             (trade_date,),
@@ -366,14 +360,12 @@ class RuleAuditor:
                     "filled": True,
                     "fill_price": fill["filled_price"],
                     "fill_time": fill["order_time"],
-                    "slippage": round(
-                        (fill["filled_price"] - trigger_price) / trigger_price * 100, 2
-                    ),
+                    "slippage": round((fill["filled_price"] - trigger_price) / trigger_price * 100, 2),
                 }
 
             # 2. 查后续走势（使用全天剩余数据而非固定30分钟窗口）
-            from_ts_val = from_ts.timestamp()
-            conn2 = sqlite3.connect(self.db_path)
+            from_ts_val = datetime.fromisoformat(ts).timestamp()
+            conn2 = connect(self.db_path)
             snaps = conn2.execute(
                 "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? ORDER BY ts",
                 (trade_date, code, from_ts_val),
@@ -393,15 +385,9 @@ class RuleAuditor:
             post_low, post_high = min(prices), max(prices)
             post_close = prices[-1]  # 收盘价（或当日最后价格）
 
-            rebound_pct = (
-                (post_high - trigger_price) / trigger_price * 100
-                if trigger_price
-                else 0
-            )
+            rebound_pct = (post_high - trigger_price) / trigger_price * 100 if trigger_price else 0
             rebound_vs_cost = (
-                (post_high - data.get("avg_cost", 0)) / data["avg_cost"] * 100
-                if data.get("avg_cost", 0)
-                else 0
+                (post_high - data.get("avg_cost", 0)) / data["avg_cost"] * 100 if data.get("avg_cost", 0) else 0
             )
 
             # —— 卖飞检测：止损后反弹超过成本价 ——
@@ -483,7 +469,7 @@ class RuleAuditor:
 
     def _audit_take_profit(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT * FROM watcher_decision_log WHERE trade_date=? AND decision_type='tp_trigger'",
             (trade_date,),
@@ -508,7 +494,7 @@ class RuleAuditor:
 
             from_ts = datetime.fromisoformat(ts)
             to_ts = from_ts + timedelta(minutes=30)
-            conn2 = sqlite3.connect(self.db_path)
+            conn2 = connect(self.db_path)
             snaps = conn2.execute(
                 "SELECT price FROM market_snapshots WHERE trade_date=? AND code=? AND CAST(ts AS REAL)>=? AND CAST(ts AS REAL)<=? ORDER BY ts",
                 (trade_date, code, from_ts.timestamp(), to_ts.timestamp()),
@@ -518,11 +504,7 @@ class RuleAuditor:
             if len(snaps) < 3:
                 continue
             post_high = max(s[0] for s in snaps)
-            further_up = (
-                (post_high - trigger_price) / trigger_price * 100
-                if trigger_price
-                else 0
-            )
+            further_up = (post_high - trigger_price) / trigger_price * 100 if trigger_price else 0
 
             if further_up > 2:
                 findings.append(
@@ -549,7 +531,7 @@ class RuleAuditor:
 
     def _audit_position_size(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         rows = conn.execute(
             "SELECT * FROM watcher_decision_log WHERE trade_date=? AND decision_type='buy_trigger'",
             (trade_date,),
@@ -576,9 +558,7 @@ class RuleAuditor:
             price = data.get("price", 0)
             size = data.get("position_size", 0)
             pnl_pct = (close - price) / price * 100 if price else 0
-            entries.append(
-                {"code": code, "size": size, "pnl_pct": pnl_pct, "id": log["id"]}
-            )
+            entries.append({"code": code, "size": size, "pnl_pct": pnl_pct, "id": log["id"]})
 
         if len(entries) < 3:
             return findings
@@ -614,7 +594,7 @@ class RuleAuditor:
 
     def _audit_sector(self, trade_date: str) -> list[dict]:
         findings = []
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         cols = [
             "id",
             "trade_date",
@@ -638,7 +618,7 @@ class RuleAuditor:
             # 取30分钟后 sector_snapshots 作为"实况"对比
             from_dt = datetime.fromisoformat(ts)
             to_dt = from_dt + timedelta(minutes=30)
-            conn2 = sqlite3.connect(self.db_path)
+            conn2 = connect(self.db_path)
             end_rows = conn2.execute(
                 "SELECT sector_name, avg_change FROM sector_snapshots WHERE trade_date=? AND ts>=? AND ts<=? ORDER BY ts DESC",
                 (

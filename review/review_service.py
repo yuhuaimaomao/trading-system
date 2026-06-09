@@ -6,10 +6,10 @@
 """
 
 import json
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from data._base import connect
 from data.collect.events.cls_digest_collector import CLSDigestCollector
 from data.collect.events.lhb_collector import LHBCollector
 from data.collect.events.limit_pool_collector import LimitPoolCollector
@@ -357,7 +357,7 @@ class ReviewService:
                 "sector_concept",
             ),
         }
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = connect(DATABASE_PATH)
         try:
             for label, (sql, _) in checks.items():
                 cursor = conn.execute(sql, (trade_date,))

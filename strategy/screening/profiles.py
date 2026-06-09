@@ -1,9 +1,9 @@
 """ProfileBuilder — 将 StockScore 富化为 StockProfile 画像"""
 
 import json
-import sqlite3
 from typing import Optional
 
+from data._base import connect
 from stock.signals import StockProfile, StockScore
 from system.config import settings
 from system.utils.logger import get_strategy_logger
@@ -27,10 +27,8 @@ class ProfileBuilder:
         if not stocks:
             return []
 
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         try:
-            conn.row_factory = sqlite3.Row
-
             codes = [s.stock_code for s in stocks]
             stock_sectors = self._load_stock_sectors(conn, codes)
             sector_changes = self._load_sector_changes(conn, trade_date)
@@ -40,6 +38,8 @@ class ProfileBuilder:
             profiles = []
             # 批量加载风险数据
             risk_map = self._load_risks(conn, codes, trade_date)
+            # 批量加载电报（一次查全表，内存匹配，避免 per-stock 循环查库）
+            all_telegraphs = self._load_all_telegraphs(conn, trade_date)
 
             for s in stocks:
                 history = self._load_history(conn, s.stock_code, trade_date, 60)
@@ -49,7 +49,7 @@ class ProfileBuilder:
                 sectors = self._build_sector_ref(s, stock_sectors, sector_changes, sector_hot_map)
                 resonance = self._build_resonance(sectors, sector_hot_map)
                 valuation = self._build_valuation(s, conn, trade_date)
-                telegraphs = self._load_telegraphs(conn, s, trade_date)
+                telegraphs = self._match_telegraphs(all_telegraphs, s.stock_code)
                 indicators = self._calc_indicators(conn, s.stock_code, trade_date, history, snapshot)
                 risks = risk_map.get(s.stock_code, [])
 
@@ -83,20 +83,14 @@ class ProfileBuilder:
     def _build_snapshot(
         self,
         s: StockScore,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
     ) -> dict:
-        row = conn.execute(
-            """SELECT price, open, high, low, change_pct, volume_ratio, amplitude,
-                      main_force_net, main_force_ratio, small_net,
-                      industry, turnover_rate
-               FROM stock_basic
-               WHERE stock_code=? AND trade_date=?""",
-            (s.stock_code, trade_date),
-        ).fetchone()
-        if not row:
+        from data.strategy.screening import ScreeningReader
+
+        d = ScreeningReader.get_stock_today_profile(conn, s.stock_code, trade_date)
+        if not d:
             return {}
-        d = dict(row)
         return {
             "price": d.get("price", 0),
             "open": d.get("open", 0),
@@ -116,7 +110,7 @@ class ProfileBuilder:
 
     def _load_history(
         self,
-        conn: sqlite3.Connection,
+        conn,
         stock_code: str,
         trade_date: str,
         days: int,
@@ -206,7 +200,7 @@ class ProfileBuilder:
 
     def _compute_rps(
         self,
-        conn: sqlite3.Connection,
+        conn,
         stock_code: str,
         trade_date: str,
     ) -> dict:
@@ -255,24 +249,16 @@ class ProfileBuilder:
 
     def _load_stock_sectors(
         self,
-        conn: sqlite3.Connection,
+        conn,
         codes: list[str],
     ) -> dict:
-        if not codes:
-            return {}
-        placeholders = ",".join("?" * len(codes))
-        rows = conn.execute(
-            f"SELECT stock_code, sector_code FROM sector_stocks WHERE stock_code IN ({placeholders})",
-            codes,
-        ).fetchall()
-        result: dict = {}
-        for r in rows:
-            result.setdefault(r[0], []).append(r[1])
-        return result
+        from data.strategy.screening import ScreeningReader
+
+        return ScreeningReader.get_sector_stocks_batch(conn, codes)
 
     def _load_sector_changes(
         self,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
     ) -> dict:
         rows = conn.execute(
@@ -287,7 +273,7 @@ class ProfileBuilder:
 
     def _load_sector_hot(
         self,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
     ) -> dict:
         """板块近 5 日上榜 top5 次数"""
@@ -303,7 +289,7 @@ class ProfileBuilder:
 
     def _load_sector_funds(
         self,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
     ) -> dict:
         rows = conn.execute(
@@ -369,7 +355,7 @@ class ProfileBuilder:
     def _build_valuation(
         self,
         s: StockScore,
-        conn: sqlite3.Connection,
+        conn,
         trade_date: str,
     ) -> dict:
         row = conn.execute(
@@ -392,12 +378,8 @@ class ProfileBuilder:
 
     # ---- 电报 -----------------------------------------------------------------
 
-    def _load_telegraphs(
-        self,
-        conn: sqlite3.Connection,
-        s: StockScore,
-        trade_date: str,
-    ) -> list[dict]:
+    def _load_all_telegraphs(self, conn, trade_date: str) -> list[dict]:
+        """一次查全表，返回所有电报行"""
         rows = conn.execute(
             """SELECT ctime, title, stock_tags
             FROM cls_telegraph
@@ -405,13 +387,17 @@ class ProfileBuilder:
             ORDER BY ctime""",
             (trade_date,),
         ).fetchall()
+        return [{"ctime": r["ctime"], "title": r["title"], "stock_tags": r["stock_tags"]} for r in rows]
+
+    def _match_telegraphs(self, all_telegraphs: list[dict], stock_code: str) -> list[dict]:
+        """从预加载的全部电报中匹配指定股票"""
         result = []
-        for r in rows:
+        for r in all_telegraphs:
             try:
                 stocks_list = json.loads(r["stock_tags"] or "[]")
             except (json.JSONDecodeError, TypeError):
                 continue
-            matched = any(item.get("code", "") == s.stock_code for item in stocks_list if isinstance(item, dict))
+            matched = any(item.get("code", "") == stock_code for item in stocks_list if isinstance(item, dict))
             if matched:
                 result.append(
                     {
@@ -426,7 +412,7 @@ class ProfileBuilder:
 
     def _calc_indicators(
         self,
-        conn: sqlite3.Connection,
+        conn,
         stock_code: str,
         trade_date: str,
         history: list[dict],
@@ -523,7 +509,7 @@ class ProfileBuilder:
 
     def _load_risks(
         self,
-        conn: sqlite3.Connection,
+        conn,
         codes: list[str],
         trade_date: str,
     ) -> dict[str, list[dict]]:

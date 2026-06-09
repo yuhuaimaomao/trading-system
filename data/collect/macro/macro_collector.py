@@ -154,9 +154,7 @@ class MacroCollector:
                 current = quote.get("regularMarketPrice", 0)
                 result["nasdaq"] = {
                     "price": current,
-                    "change": round((current - prev_close) / prev_close * 100, 2)
-                    if prev_close
-                    else 0,
+                    "change": round((current - prev_close) / prev_close * 100, 2) if prev_close else 0,
                 }
 
             # 中概股 KWEB
@@ -199,7 +197,7 @@ class MacroCollector:
                 if not usd_cny_df.empty:
                     rate = float(usd_cny_df.iloc[-1]["中行汇买价"]) / 100.0
                     return {"usd_cny": {"rate": round(rate, 4), "change": 0}}
-            except:
+            except Exception:
                 pass
 
             # 方案 2：yfinance 备用
@@ -211,13 +209,11 @@ class MacroCollector:
                 if not hist.empty:
                     rate = float(hist["Close"].iloc[-1])
                     return {"usd_cny": {"rate": round(rate, 4), "change": 0}}
-            except:
+            except Exception:
                 pass
 
             # 降级方案
-            self.logger.warning(
-                "⚠️ 汇率数据获取失败，使用硬编码回退值 USD/CNY=7.25（数据可能过时）"
-            )
+            self.logger.warning("⚠️ 汇率数据获取失败，使用硬编码回退值 USD/CNY=7.25（数据可能过时）")
             return {"usd_cny": {"rate": 7.25, "change": 0, "_fallback": True}}
 
         except Exception as e:
@@ -253,9 +249,7 @@ class MacroCollector:
                     change = d.get("f170", 0) / 100.0
 
                     if price > 0:
-                        self.logger.info(
-                            f"A50 期货获取成功 (东方财富): {price} ({change}%)"
-                        )
+                        self.logger.info(f"A50 期货获取成功 (东方财富): {price} ({change}%)")
                         return {"price": price, "change": change}
 
             raise ValueError("A50 返回空数据")
@@ -272,12 +266,10 @@ class MacroCollector:
                     change = float(data[32])
                     self.logger.info("A50(上证 50 替代) 获取成功")
                     return {"price": price, "change": change}
-            except:
+            except Exception:
                 pass
 
-            self.logger.warning(
-                "⚠️ A50 数据获取失败，使用硬编码回退值 A50=13500（数据可能过时）"
-            )
+            self.logger.warning("⚠️ A50 数据获取失败，使用硬编码回退值 A50=13500（数据可能过时）")
             return {"price": 13500.0, "change": 0, "_fallback": True}
 
     def get_crude_oil(self) -> Dict:
@@ -303,9 +295,7 @@ class MacroCollector:
 
         except Exception as e:
             self.logger.warning(f"原油获取失败：{e}")
-            self.logger.warning(
-                "⚠️ 原油数据获取失败，使用硬编码回退值 WTI=$75（数据可能过时）"
-            )
+            self.logger.warning("⚠️ 原油数据获取失败，使用硬编码回退值 WTI=$75（数据可能过时）")
             return {"price": 75.0, "change": 0, "_fallback": True}
 
     def get_gold(self) -> Dict:
@@ -328,17 +318,11 @@ class MacroCollector:
                 # 计算涨跌幅
                 if len(hist) >= 2:
                     prev_close = float(hist["Close"].iloc[-2])
-                    change = (
-                        ((current - prev_close) / prev_close * 100)
-                        if prev_close > 0
-                        else 0
-                    )
+                    change = ((current - prev_close) / prev_close * 100) if prev_close > 0 else 0
                 else:
                     change = 0
 
-                self.logger.info(
-                    f"黄金 (COMEX) 获取成功：{current:.2f} ({change:.2f}%)"
-                )
+                self.logger.info(f"黄金 (COMEX) 获取成功：{current:.2f} ({change:.2f}%)")
                 return {"price": round(current, 2), "change": round(change, 2)}
             else:
                 raise ValueError("COMEX 黄金数据为空")
@@ -355,12 +339,10 @@ class MacroCollector:
                     change = float(data[32])
                     self.logger.info(f"黄金 (GLD 备用) 获取成功：{current} ({change}%)")
                     return {"price": current, "change": change}
-            except:
+            except Exception:
                 pass
 
-            self.logger.warning(
-                "⚠️ 黄金数据获取失败，使用硬编码回退值 Gold=$2700（数据可能过时）"
-            )
+            self.logger.warning("⚠️ 黄金数据获取失败，使用硬编码回退值 Gold=$2700（数据可能过时）")
             return {"price": 2700.0, "change": 0, "_fallback": True}
 
 
@@ -368,9 +350,7 @@ class MacroCollector:
 if __name__ == "__main__":
     import logging
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     collector = MacroCollector()
     macro = collector.collect_all()
 

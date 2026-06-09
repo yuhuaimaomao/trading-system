@@ -96,9 +96,7 @@ class StockBasicCollector(ProxyBaseCollector):
             listing_date = ""
             if listing_date_raw:
                 listing_date_str = (
-                    str(int(listing_date_raw))
-                    if isinstance(listing_date_raw, (int, float))
-                    else str(listing_date_raw)
+                    str(int(listing_date_raw)) if isinstance(listing_date_raw, (int, float)) else str(listing_date_raw)
                 )
                 if len(listing_date_str) == 8 and listing_date_str.isdigit():
                     listing_date = f"{listing_date_str[:4]}-{listing_date_str[4:6]}-{listing_date_str[6:]}"
@@ -140,8 +138,7 @@ class StockBasicCollector(ProxyBaseCollector):
                 # 平均股价(计算字段)
                 # avg_price = 成交额 / (成交量 × 100)  注意:1 手=100 股
                 "avg_price": round(
-                    safe_float(item.get("f6"), 0)
-                    / (safe_float(item.get("f5"), 0) * 100),
+                    safe_float(item.get("f6"), 0) / (safe_float(item.get("f5"), 0) * 100),
                     2,
                 )
                 if safe_float(item.get("f5"), 0) > 0
@@ -276,15 +273,12 @@ class StockBasicCollector(ProxyBaseCollector):
                     f"⚠️ 覆盖率不足: 已保存 {actual} 只, API total {api_total} 只 ({actual / api_total * 100:.1f}%)"
                 )
             else:
-                self.logger.info(
-                    f"✅ 保存到数据库成功: {actual} 只 (API total: {api_total})"
-                )
+                self.logger.info(f"✅ 保存到数据库成功: {actual} 只 (API total: {api_total})")
 
         except Exception as e:
             if "conn" in locals() and conn:
                 conn.rollback()
             self.logger.error(f"❌ 保存到数据库失败：{e}")
-            raise
 
         finally:
             if "conn" in locals() and conn:
@@ -335,11 +329,7 @@ class StockBasicCollector(ProxyBaseCollector):
 
                 # MA5 斜率: 今日 MA5 / 昨日 MA5 - 1
                 prev_prices = prices[1:6]
-                prev_ma5 = (
-                    round(sum(prev_prices) / min(5, len(prev_prices)), 2)
-                    if prev_prices
-                    else 0
-                )
+                prev_ma5 = round(sum(prev_prices) / min(5, len(prev_prices)), 2) if prev_prices else 0
                 ma5_angle = round((ma5 / prev_ma5 - 1) * 100, 2) if prev_ma5 > 0 else 0
 
                 updates.append(
@@ -582,9 +572,7 @@ class StockBasicCollector(ProxyBaseCollector):
 
             result = {"success": True, "count": len(data), "total": total, "data": data}
 
-            self.logger.info(
-                f"✅ {self.__class__.__name__} 采集完成:{len(data)}条(应采集{total}条)"
-            )
+            self.logger.info(f"✅ {self.__class__.__name__} 采集完成:{len(data)}条(应采集{total}条)")
             self.logger.info("=" * 60)
             return result
 

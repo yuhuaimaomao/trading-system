@@ -1,8 +1,8 @@
 """市场宽度计算 + 大盘状态判定"""
 
-import sqlite3
 from typing import Optional
 
+from data._base import connect
 from system.config import settings
 
 _BULL_UP = getattr(settings, "MARKET_BREADTH_BULL", 3000)
@@ -31,11 +31,7 @@ def classify_market_state(
         return "连跌修复"
 
     # 超跌末端: 连跌 3+ 天且跌停家数从峰值回落 30%+
-    if (
-        consecutive_down_days >= 3
-        and limit_down_peak > 0
-        and limit_down < limit_down_peak * 0.7
-    ):
+    if consecutive_down_days >= 3 and limit_down_peak > 0 and limit_down < limit_down_peak * 0.7:
         return "超跌末端"
 
     if up > _BULL_UP:
@@ -56,7 +52,7 @@ class MarketBreadth:
 
     def compute(self, trade_date: str) -> dict:
         """计算当日市场宽度"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         try:
             # 涨跌家数
             row = conn.execute(
@@ -80,13 +76,9 @@ class MarketBreadth:
             limit_up, limit_down = row2[0] or 0, row2[1] or 0
 
             # 上证指数涨跌幅
-            idx_row = conn.execute(
-                """SELECT change_percent FROM index_realtime_data
-                WHERE index_code='sh000001' AND trade_date=?
-                ORDER BY trade_time DESC LIMIT 1""",
-                (trade_date,),
-            ).fetchone()
-            index_chg = idx_row[0] if idx_row else 0
+            from data.strategy.screening import ScreeningReader
+
+            index_chg = ScreeningReader.get_index_change(conn, trade_date)
 
         finally:
             conn.close()
@@ -118,24 +110,12 @@ class MarketBreadth:
     def save(self, trade_date: str) -> dict:
         """计算并写入 market_breadth 表"""
         result = self.compute(trade_date)
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         try:
-            conn.execute(
-                """INSERT OR REPLACE INTO market_breadth
-                (trade_date, up_count, down_count, flat_count, limit_up_count,
-                 limit_down_count, index_change_pct, market_state)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    trade_date,
-                    result["up_count"],
-                    result["down_count"],
-                    result["flat_count"],
-                    result["limit_up_count"],
-                    result["limit_down_count"],
-                    result["index_change_pct"],
-                    result["market_state"],
-                ),
-            )
+            from data.strategy.screening import ScreeningReader
+
+            data = {"trade_date": trade_date, **result}
+            ScreeningReader.insert_breadth(conn, data)
             conn.commit()
         finally:
             conn.close()
@@ -143,17 +123,16 @@ class MarketBreadth:
 
     def get(self, trade_date: str) -> Optional[dict]:
         """读取已保存的市场宽度"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM market_breadth WHERE trade_date = ?", (trade_date,)
-        ).fetchone()
+        conn = connect(self.db_path)
+        from data.strategy.screening import ScreeningReader
+
+        row = ScreeningReader.get_breadth_record(conn, trade_date)
         conn.close()
-        return dict(row) if row else None
+        return row
 
     def _get_prev_context(self, trade_date: str, index_chg: float) -> tuple[str, int]:
         """获取前一日 state 和连跌天数"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
 
         # 前一日状态
         row = conn.execute(
@@ -183,7 +162,7 @@ class MarketBreadth:
 
     def _get_limit_down_peak(self, trade_date: str) -> int:
         """近 5 日跌停家数峰值（从已保存的 market_breadth 或 limit_pool 直接算）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = connect(self.db_path)
         # 优先从 market_breadth 取
         row = conn.execute(
             """SELECT MAX(limit_down_count) FROM market_breadth

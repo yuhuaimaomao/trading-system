@@ -1,12 +1,12 @@
-"""数据访问层 — 按表拆分 Repository，TradeRepository 保持向后兼容。"""
+"""数据访问层 — 按业务线拆分，TradeRepository 保持向后兼容。"""
 
 import os
 
-from data.repo.audit_repo import AuditRepo
-from data.repo.order_repo import OrderRepo
-from data.repo.portfolio_repo import PortfolioRepo
-from data.repo.signal_repo import SignalRepo
-from data.repo.strategy_repo import StrategyRepo
+from data.audit.decision_log import AuditRepo
+from data.strategy.funnel import StrategyRepo
+from data.trade.orders import OrderRepo
+from data.trade.portfolio import PortfolioRepo
+from data.trade.signals import SignalRepo
 
 __all__ = [
     "SignalRepo",
@@ -470,6 +470,65 @@ class TradeRepository:
 
         with self._signal._conn() as conn:
             return StockReader.get_support_resistance(conn, code, price)
+
+    def get_stock_basic(self, code: str) -> dict | None:
+        """查询单只股票最新基础数据（给 check_hard_gates 用）。"""
+        from data.readers.stock_reader import StockReader
+
+        with self._signal._conn() as conn:
+            conn.row_factory = __import__("sqlite3").Row
+            return StockReader.get_stock_basic(conn, code)
+
+    def get_stock_basic_batch(self, trade_date: str, codes: list[str]) -> dict[str, dict]:
+        """批量查询当日 stock_basic，返回 {code: row_dict}。"""
+        from data.readers.stock_reader import StockReader
+
+        with self._signal._conn() as conn:
+            return StockReader.get_stock_basic_batch(conn, trade_date, codes)
+
+    def get_latest_stock_basic_batch(self, codes: list[str]) -> dict[str, dict]:
+        """批量查询最新 stock_basic（MAX trade_date），返回 {code: row_dict}。"""
+        from data.readers.stock_reader import StockReader
+
+        with self._signal._conn() as conn:
+            return StockReader.get_latest_stock_basic_batch(conn, codes)
+
+    def get_bought_sl_tp_batch(self, codes: list[str]) -> dict[str, dict]:
+        return self._signal.get_bought_sl_tp_batch(codes)
+
+    def get_account_summary(self, account: str) -> dict | None:
+        """查最新快照的账户概况。"""
+        return self.get_latest_snapshot(account)
+
+    def get_signals_by_date_source(self, trade_date: str, source: str) -> list[dict]:
+        """按日期+来源查信号（backfill 用）。"""
+        import sqlite3
+
+        with self._signal._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, stock_code FROM trade_signals WHERE trade_date=? AND signal_source=?",
+                (trade_date, source),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_decision_signal_id(self, push_date: str, stock_code: str, signal_id: int):
+        """回填 strategy_ai_decisions.signal_id。"""
+        with self._signal._conn() as conn:
+            conn.execute(
+                "UPDATE strategy_ai_decisions SET signal_id=? WHERE push_date=? AND stock_code=?",
+                (signal_id, push_date, stock_code),
+            )
+            conn.commit()
+
+    def get_stock_price(self, code: str, trade_date: str) -> float | None:
+        """查询某日收盘价。"""
+        with self._signal._conn() as conn:
+            row = conn.execute(
+                "SELECT price FROM stock_basic WHERE stock_code=? AND trade_date=? ORDER BY trade_date DESC LIMIT 1",
+                (code, trade_date),
+            ).fetchone()
+        return float(row[0]) if row and row[0] else None
 
     def get_bought_signals_with_entry(self) -> list[dict]:
         """查询已买入信号 + 成交均价 + 买入时间（_check_bought_signals 用）。"""

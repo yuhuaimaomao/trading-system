@@ -9,10 +9,9 @@
     print(analyzer.format_cli(report))
 """
 
-import sqlite3
-
-from stock.stock_formatter import to_cli, to_dict, to_telegram
-from stock.stock_registry import _registry, get_many, list_all
+from data._base import connect
+from stock.stock_formatter import to_cli, to_telegram
+from stock.stock_registry import _registry, get_many
 from stock.stock_schemas import StockAnalysisReport
 from system.config import settings
 
@@ -70,9 +69,7 @@ class StockAnalyzer:
             "risk_summary": all_risks[:5] if all_risks else [],
         }
 
-        return StockAnalysisReport(
-            symbol=symbol, name=name, results=results, aggregated=aggregated
-        )
+        return StockAnalysisReport(symbol=symbol, name=name, results=results, aggregated=aggregated)
 
     def quick(self, symbol: str) -> StockAnalysisReport:
         """快速模式：技术+资金+板块，给 Watcher/盘前用。"""
@@ -91,10 +88,9 @@ class StockAnalyzer:
     @staticmethod
     def _resolve_name(code: str) -> str:
         try:
-            conn = sqlite3.connect(settings.DATABASE_PATH)
+            conn = connect(settings.DATABASE_PATH)
             row = conn.execute(
-                "SELECT stock_name FROM stock_basic WHERE stock_code=? "
-                "ORDER BY trade_date DESC LIMIT 1",
+                "SELECT stock_name FROM stock_basic WHERE stock_code=? ORDER BY trade_date DESC LIMIT 1",
                 (code,),
             ).fetchone()
             conn.close()

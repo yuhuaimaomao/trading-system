@@ -6,11 +6,11 @@
 Mixin 方式混入 Watcher。与引擎1（复盘趋势跟踪）互补。
 """
 
-import sqlite3
 import time
 from datetime import datetime
 from datetime import time as dt_time
 
+from data._base import connect
 from system.config import settings
 from system.utils.logger import get_trade_logger
 
@@ -527,8 +527,7 @@ class IntradayScoutMixin:
         if not db_path:
             return
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
+            conn = connect(db_path)
             # 找最近3个交易日（不含今天）
             recent_dates = conn.execute(
                 """SELECT DISTINCT trade_date FROM stock_basic
