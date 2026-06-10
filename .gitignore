@@ -11,3 +11,4 @@ storage/reports/
 *.db-wal
 storage/pdf/
 docs/*.xlsx
+*.pid

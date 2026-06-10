@@ -46,10 +46,8 @@ class TestEvaluateBuyBoundary:
         assert mul >= 0.9
 
     def test_price_at_zone_top_rejects(self):
-        """zone_pos >= 0.85 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(price=10.45, buy_min=9.5, buy_max=10.5)
-        )
+        """zone_pos >= 0.95 → 拒绝。"""
+        ok, reason, mul = evaluate_buy(self.make(price=10.46, buy_min=9.5, buy_max=10.5))
         assert not ok
         assert "顶部" in reason
         assert mul == 0.0
@@ -57,9 +55,7 @@ class TestEvaluateBuyBoundary:
     def test_price_zone_upper_warn(self):
         """0.65 <= zone_pos < 0.85 → 警告，仓位减至 0.7x。"""
         # zone_pos = (10.16 - 9.5) / 1.0 = 0.66
-        ok, reason, mul = evaluate_buy(
-            self.make(price=10.16, buy_min=9.5, buy_max=10.5)
-        )
+        ok, reason, mul = evaluate_buy(self.make(price=10.16, buy_min=9.5, buy_max=10.5))
         assert ok
         assert "偏上" in reason
         assert mul == pytest.approx(0.7, rel=0.01)
@@ -80,21 +76,17 @@ class TestEvaluateBuyBoundary:
         # base=1.0 → near_support boost 1.2x
         assert mul == pytest.approx(1.0, rel=0.01)  # min(1.0, 1.2) = 1.0
 
-    def test_price_exactly_at_zone_threshold_85pct(self):
-        """zone_pos >= 0.85 触发拒绝（用 10.36 避免浮点刚好卡线）。"""
-        # zone_pos = (10.36 - 9.5) / 1.0 = 0.86
-        ok, reason, mul = evaluate_buy(
-            self.make(price=10.36, buy_min=9.5, buy_max=10.5)
-        )
+    def test_price_exactly_at_zone_threshold_95pct(self):
+        """zone_pos >= 0.95 触发拒绝。"""
+        # zone_pos = (10.46 - 9.5) / 1.0 = 0.96
+        ok, reason, mul = evaluate_buy(self.make(price=10.46, buy_min=9.5, buy_max=10.5))
         assert not ok
         assert "顶部" in reason
 
     def test_price_exactly_at_zone_threshold_65pct(self):
         """zone_pos 精确等于 0.65 触发警告。"""
         # zone_pos = (10.15 - 9.5) / 1.0 = 0.65
-        ok, reason, mul = evaluate_buy(
-            self.make(price=10.15, buy_min=9.5, buy_max=10.5)
-        )
+        ok, reason, mul = evaluate_buy(self.make(price=10.15, buy_min=9.5, buy_max=10.5))
         assert ok
         assert "偏上" in reason
         assert mul == pytest.approx(0.7, rel=0.01)
@@ -103,18 +95,15 @@ class TestEvaluateBuyBoundary:
 
     def test_sector_trend_weak_warn(self):
         """ "走弱" in trend (非持续走弱) → 警告，仓位 0.5x。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(sector_trend="板块走弱", sector_chg=-0.3)
-        )
+        ok, reason, mul = evaluate_buy(self.make(sector_trend="板块走弱", sector_chg=-0.3))
         assert ok
         assert "板块偏弱" in reason
+        # "走弱" in trend→0.5x, sector_chg<0 跳过（避免双重扣分）
         assert mul == pytest.approx(0.5, rel=0.01)
 
     def test_sector_trend_continuous_weak_reject(self):
         """ "持续走弱" → 拒绝。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(sector_trend="持续走弱", sector_chg=-0.5)
-        )
+        ok, reason, mul = evaluate_buy(self.make(sector_trend="持续走弱", sector_chg=-0.5))
         assert not ok
         assert "持续走弱" in reason
 
@@ -133,15 +122,13 @@ class TestEvaluateBuyBoundary:
 
     def test_sector_trend_unknown_phrase_no_match(self):
         """趋势字符串不匹配任何关键字 → 无板块调整。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(sector_trend="震荡偏多", sector_chg=0.5)
-        )
+        ok, reason, mul = evaluate_buy(self.make(sector_trend="震荡偏多", sector_chg=0.5))
         assert ok
         assert mul == pytest.approx(1.0, rel=0.01)
 
     def test_sector_chg_negative_one_reject(self):
-        """sector_chg = -1.0 精确等于阈值 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(self.make(sector_chg=-1.0))
+        """sector_chg = -2.0 精确等于新阈值 → 拒绝。"""
+        ok, reason, mul = evaluate_buy(self.make(sector_chg=-2.0))
         assert not ok
         assert "跌幅" in reason
 
@@ -204,9 +191,9 @@ class TestEvaluateBuyBoundary:
 
     # ── RSI ──
 
-    def test_daily_rsi_over_80_reject(self):
-        """daily_rsi6 >= 80 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(self.make(daily_rsi6=82))
+    def test_daily_rsi_over_85_reject(self):
+        """daily_rsi6 >= 85 → 拒绝（新阈值）。"""
+        ok, reason, mul = evaluate_buy(self.make(daily_rsi6=86))
         assert not ok
         assert "RSI6" in reason and "超买" in reason
 
@@ -229,8 +216,8 @@ class TestEvaluateBuyBoundary:
 
     # ── KDJ ──
 
-    def test_daily_kdj_j_over_100_reject(self):
-        """daily_kdj_j > 100 → 拒绝。"""
+    def test_daily_kdj_j_over_110_reject(self):
+        """daily_kdj_j > 110 → 拒绝（新阈值）。"""
         ok, reason, mul = evaluate_buy(self.make(daily_kdj_j=120))
         assert not ok
         assert "KDJ" in reason
@@ -243,9 +230,9 @@ class TestEvaluateBuyBoundary:
 
     # ── 布林带 ──
 
-    def test_bb_pct_b_90_reject(self):
-        """%B >= 90 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(self.make(daily_bb_pct_b=90))
+    def test_bb_pct_b_96_reject(self):
+        """%B >= 95 → 拒绝（新阈值，非强势板块）。"""
+        ok, reason, mul = evaluate_buy(self.make(daily_bb_pct_b=96))
         assert not ok
 
     def test_bb_pct_b_85_warn(self):
@@ -373,11 +360,11 @@ class TestEvaluateBuyBoundary:
     # ── 日内指标 ──
 
     def test_intra_rsi_extreme_reject(self):
-        """intra_rsi6 >= 85 → 拒绝。"""
+        """intra_rsi6 >= 92 → 拒绝（新阈值）。"""
         ok, reason, mul = evaluate_buy(
             self.make(
                 intra_available=True,
-                intra_rsi6=88,
+                intra_rsi6=93,
             )
         )
         assert not ok
@@ -407,12 +394,12 @@ class TestEvaluateBuyBoundary:
         assert mul == pytest.approx(1.0, rel=0.01)  # min(1.0, 1.1) = 1.0
 
     def test_intra_macd_bearish_strong_reject(self):
-        """MACD 强烈空头 → 拒绝。"""
+        """MACD 强烈空头 bar < -0.8 → 拒绝（新阈值）。"""
         ok, reason, mul = evaluate_buy(
             self.make(
                 intra_available=True,
                 intra_macd_direction="bearish",
-                intra_macd_bar=-0.6,
+                intra_macd_bar=-0.9,
             )
         )
         assert not ok
@@ -443,8 +430,8 @@ class TestEvaluateBuyBoundary:
         assert ok
         assert mul == pytest.approx(1.0, rel=0.01)
 
-    def test_intra_kdj_j_over_100_reject(self):
-        """日内KDJ J > 100 → 拒绝。"""
+    def test_intra_kdj_j_over_110_reject(self):
+        """日内KDJ J > 110 → 拒绝（新阈值）。"""
         ok, reason, mul = evaluate_buy(
             self.make(
                 intra_available=True,
@@ -520,24 +507,18 @@ class TestEvaluateBuyBoundary:
 
     def test_big_ratio_low_reject(self):
         """big_ratio <= 0.35 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(big_ratio=0.2, big_reason="大单卖出主导")
-        )
+        ok, reason, mul = evaluate_buy(self.make(big_ratio=0.2, big_reason="大单卖出主导"))
         assert not ok
 
     def test_big_ratio_mid_warn(self):
         """0.35 < big_ratio <= 0.45 → 警告，0.8x。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(big_ratio=0.40, big_reason="大单偏卖出")
-        )
+        ok, reason, mul = evaluate_buy(self.make(big_ratio=0.40, big_reason="大单偏卖出"))
         assert ok
         assert mul == pytest.approx(0.8, rel=0.01)
 
     def test_big_ratio_high_boost(self):
         """big_ratio >= 0.65 → 1.1x。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(big_ratio=0.70, big_reason="大单买入主导")
-        )
+        ok, reason, mul = evaluate_buy(self.make(big_ratio=0.70, big_reason="大单买入主导"))
         assert ok
         assert mul == pytest.approx(1.0, rel=0.01)
 
@@ -549,9 +530,9 @@ class TestEvaluateBuyBoundary:
     # ── 涨跌停 ──
 
     def test_near_up_stop_reject(self):
-        """距涨停 < 2% → 拒绝。"""
-        ok, reason, mul = evaluate_buy(self.make(up_stop=10.15, price=10.0))
-        # room = (10.15-10.0)/10.0*100 = 1.5% < 2%
+        """距涨停 < 1% → 拒绝（新阈值）。"""
+        ok, reason, mul = evaluate_buy(self.make(up_stop=10.08, price=10.0))
+        # room = (10.08-10.0)/10.0*100 = 0.8% < 1%
         assert not ok
         assert "涨停" in reason
 
@@ -573,14 +554,14 @@ class TestEvaluateBuyBoundary:
     # ── 昨日资金流向 ──
 
     def test_yesterday_mf_large_outflow_reject(self):
-        """昨日主力大幅流出 < -5 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(self.make(yesterday_mf_ratio=-6.0))
+        """昨日主力大幅流出 < -8 → 拒绝（新阈值）。"""
+        ok, reason, mul = evaluate_buy(self.make(yesterday_mf_ratio=-9.0))
         assert not ok
         assert "流出" in reason
 
     def test_yesterday_mf_moderate_outflow_warn(self):
-        """-5 <= 流出 < -2 → 警告，0.85x。"""
-        ok, reason, mul = evaluate_buy(self.make(yesterday_mf_ratio=-3.0))
+        """-8 <= 流出 < -3 → 警告，0.85x（新阈值）。"""
+        ok, reason, mul = evaluate_buy(self.make(yesterday_mf_ratio=-5.0))
         assert ok
         assert mul == pytest.approx(0.85, rel=0.01)
 
@@ -652,17 +633,13 @@ class TestEvaluateBuyBoundary:
 
     def test_concept_score_low_reject(self):
         """concept_score <= -2 → 拒绝。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(concept_score=-3, concept_reason="多数板块弱")
-        )
+        ok, reason, mul = evaluate_buy(self.make(concept_score=-3, concept_reason="多数板块弱"))
         assert not ok
         assert "概念板块" in reason
 
     def test_concept_score_negative_warn(self):
         """-2 < concept_score < 0 → 警告，0.6x。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(concept_score=-1, concept_reason="略弱")
-        )
+        ok, reason, mul = evaluate_buy(self.make(concept_score=-1, concept_reason="略弱"))
         assert ok
         assert "概念板块" in reason
         assert mul == pytest.approx(0.6, rel=0.01)
@@ -745,7 +722,7 @@ class TestEvaluateBuyBoundary:
     # ── 极端值 / 空值 / 边界 ──
 
     def test_all_fields_missing_still_evaluates(self):
-        """所有可选字段均为默认值或None → 不抛异常。"""
+        """所有可选字段均为默认值或None → 不抛异常，sector_trend 空仅警告。"""
         ctx = BuyEvalInput(
             code="000001",
             price=10.0,
@@ -753,14 +730,14 @@ class TestEvaluateBuyBoundary:
             buy_max=10.5,
         )
         ok, reason, mul = evaluate_buy(ctx)
-        # sector_trend="" → "数据不足" reject
-        assert not ok
+        # sector_trend="" → "数据不足" 现在只是 warn，不再 reject
+        assert ok
         assert "数据不足" in reason
 
     def test_empty_sector_trend(self):
-        """空字符串 sector_trend → '板块数据不足' 拒绝。"""
+        """空字符串 sector_trend → '板块数据不足' 警告，降低仓位。"""
         ok, reason, mul = evaluate_buy(self.make(sector_trend="", sector_chg=None))
-        assert not ok
+        assert ok
         assert "数据不足" in reason
 
     def test_negative_price(self):
@@ -782,37 +759,33 @@ class TestEvaluateBuyBoundary:
 
     def test_price_huge(self):
         """超大价格 → 不应崩溃。"""
-        ok, reason, mul = evaluate_buy(
-            self.make(price=99999.0, buy_min=9.5, buy_max=10.5)
-        )
+        ok, reason, mul = evaluate_buy(self.make(price=99999.0, buy_min=9.5, buy_max=10.5))
         # zone_pos = (99999-9.5)/1.0 = huge → >= 0.85 → 拒绝
         assert not ok
         assert "顶部" in reason
 
     def test_negative_sector_chg_just_below_threshold(self):
-        """sector_chg 略低于 -1.0 触发拒绝。"""
+        """sector_chg 略低于 -2.0 触发拒绝（新阈值）。"""
         ok, reason, mul = evaluate_buy(
             self.make(
                 sector_trend="走强",
-                sector_chg=-1.01,
+                sector_chg=-2.01,
             )
         )
         assert not ok
 
     def test_mixed_reject_and_warn_no_conflict(self):
         """拒绝原因优先于警告，返回 reject 且 mul=0。"""
-        # 同时触发布林带超买 reject 和 sector weak warn
+        # 同时触发布林带极度超买 reject (新阈值96) 和 sector weak warn
         ok, reason, mul = evaluate_buy(
             self.make(
                 sector_trend="板块走弱",
                 sector_chg=-0.5,
-                daily_bb_pct_b=95,
+                daily_bb_pct_b=96,
             )
         )
-        # 走弱在 trend 先被检查 → warn (不是 reject)
-        # 布林带 95 → reject
         assert not ok
-        assert "布林带超买" in reason
+        assert "布林带" in reason
         assert mul == 0.0
 
     def test_size_mul_capped_at_1_0_with_all_boosts(self):
@@ -1603,7 +1576,7 @@ class TestCalculatePositionSizeBoundary:
     """calculate_position_size 边界：模式、板块、宽度、买入区位置。"""
 
     def test_normal_pattern_full_size(self):
-        """normal 模式 → base=16000。"""
+        """normal 模式 → base=60000。"""
         amount, reason = calculate_position_size(
             "000001",
             10.0,
@@ -1612,10 +1585,10 @@ class TestCalculatePositionSizeBoundary:
             "normal",
             "横盘",
         )
-        assert amount == 16000
+        assert amount == 60000
 
     def test_uptrend_pattern_full_size(self):
-        """uptrend 模式 → base=16000。"""
+        """uptrend 模式 → base=60000。"""
         amount, reason = calculate_position_size(
             "000001",
             10.0,
@@ -1624,10 +1597,10 @@ class TestCalculatePositionSizeBoundary:
             "uptrend",
             "横盘",
         )
-        assert amount == 16000
+        assert amount == 60000
 
     def test_unknown_pattern_default_16000(self):
-        """未识别模式 → 默认 16000。"""
+        """未识别模式 → 默认 60000。"""
         amount, reason = calculate_position_size(
             "000001",
             10.0,
@@ -1636,7 +1609,7 @@ class TestCalculatePositionSizeBoundary:
             "unknown_pattern_xyz",
             "横盘",
         )
-        assert amount == 16000
+        assert amount == 60000
 
     # ── 禁止模式 ──
 
@@ -1689,7 +1662,7 @@ class TestCalculatePositionSizeBoundary:
             cautious_pattern,
             "横盘",
         )
-        assert amount == 8000
+        assert amount == 30000
 
     # ── 板块趋势 ──
 
@@ -1704,7 +1677,7 @@ class TestCalculatePositionSizeBoundary:
             "持续走弱",
         )
         # 16000 * 0.3 = 4800 → max(4800, 5000) = 5000
-        assert amount == 5000
+        assert amount == 18000
         assert "持续走弱" in reason
 
     def test_sector_weak_reduce(self):
@@ -1718,7 +1691,7 @@ class TestCalculatePositionSizeBoundary:
             "板块走弱",
         )
         # 16000 * 0.6 = 9600 > 5000 → 9600
-        assert amount == 9600
+        assert amount == 36000
 
     def test_sector_continuous_strong_boost(self):
         """ "持续走强" → base * 1.3，最高 16000。"""
@@ -1730,7 +1703,7 @@ class TestCalculatePositionSizeBoundary:
             "normal",
             "持续走强",
         )
-        assert amount == 16000  # 16000*1.3=20800 → capped at 16000
+        assert amount == 60000  # 60000*1.3=20800 → capped at 16000
 
     def test_sector_strong_boost(self):
         """ "走强" (非持续) → base * 1.2，最高 16000。"""
@@ -1743,7 +1716,7 @@ class TestCalculatePositionSizeBoundary:
             "板块走强",
         )
         # 16000 * 1.2 = 19200 → capped 16000
-        assert amount == 16000
+        assert amount == 60000
 
     # ── 市场宽度 ──
 
@@ -1759,7 +1732,7 @@ class TestCalculatePositionSizeBoundary:
             market_breadth={"up": 200, "down": 800},
         )
         # 800/(200+800) = 0.8 > 0.7 → 16000*0.3=4800 → max(4800,5000)=5000
-        assert amount == 5000
+        assert amount == 18000
 
     def test_breadth_down_over_60_percent(self):
         """0.6 < down_ratio <= 0.7 → base * 0.5，最低 5000。"""
@@ -1773,7 +1746,7 @@ class TestCalculatePositionSizeBoundary:
             market_breadth={"up": 350, "down": 650},
         )
         # 650/(350+650) = 0.65 > 0.6 → 16000*0.5=8000 > 5000
-        assert amount == 8000
+        assert amount == 30000
 
     def test_breadth_empty_skipped(self):
         """market_breadth 为空或 None → 跳过宽度调整。"""
@@ -1786,7 +1759,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
             market_breadth={},
         )
-        assert amount == 16000
+        assert amount == 60000
 
     def test_breadth_total_zero_skipped(self):
         """up+down=0 → 跳过宽度调整。"""
@@ -1799,7 +1772,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
             market_breadth={"up": 0, "down": 0},
         )
-        assert amount == 16000
+        assert amount == 60000
 
     # ── 买入区位置 ──
 
@@ -1814,7 +1787,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
         )
         # (9.55-9.5)/1.0 = 0.05 ≤ 0.33 → 16000*1.1=17600 → capped 16000
-        assert amount == 16000
+        assert amount == 60000
         assert "下沿" in reason
 
     def test_zone_upper_reduce(self):
@@ -1828,7 +1801,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
         )
         # (10.2-9.5)/1.0 = 0.7 ≥ 0.67 → 16000*0.7=11200
-        assert amount == 11200
+        assert amount == 42000
         assert "上沿" in reason
 
     def test_zone_middle_no_adjustment(self):
@@ -1842,7 +1815,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
         )
         # (10.0-9.5)/1.0 = 0.5 → 无调整
-        assert amount == 16000
+        assert amount == 60000
         assert "下沿" not in reason
         assert "上沿" not in reason
 
@@ -1864,7 +1837,7 @@ class TestCalculatePositionSizeBoundary:
         # Actually: breadth adjusts first, then sector
         # After breadth: max(16000*0.3, 5000) = 5000
         # Then sector: max(5000*0.3, 5000) = 5000
-        assert amount == 5000
+        assert amount == 5400
 
     # ── AI 板块倾向 ──
 
@@ -1880,7 +1853,7 @@ class TestCalculatePositionSizeBoundary:
             industry_cache={"000001": "半导体"},
             morning_sector_bias={"半导体": {"bias": "focus", "size_mult": 1.5}},
         )
-        assert amount == 16000
+        assert amount == 60000
 
     def test_ai_focus_reduce(self):
         """AI focus + size_mult=0.6 → 16000*0.6=9600。"""
@@ -1894,7 +1867,7 @@ class TestCalculatePositionSizeBoundary:
             industry_cache={"000001": "半导体"},
             morning_sector_bias={"半导体": {"bias": "focus", "size_mult": 0.6}},
         )
-        assert amount == 9600
+        assert amount == 36000
 
     def test_ai_avoid_reduce(self):
         """AI avoid → size_mult 应用，最低 3000。"""
@@ -1909,7 +1882,7 @@ class TestCalculatePositionSizeBoundary:
             morning_sector_bias={"半导体": {"bias": "avoid", "size_mult": 0.5}},
         )
         # 16000*0.5=8000 > 3000
-        assert amount == 8000
+        assert amount == 30000
 
     def test_ai_avoid_low_floor_3000(self):
         """AI avoid + size_mult 极低 → floor 3000。"""
@@ -1924,7 +1897,7 @@ class TestCalculatePositionSizeBoundary:
             morning_sector_bias={"半导体": {"bias": "avoid", "size_mult": 0.1}},
         )
         # 16000*0.1=1600 → max(1600, 3000) = 3000
-        assert amount == 3000
+        assert amount == 6000
 
     def test_ai_bias_empty_no_effect(self):
         """industry_cache 无匹配 → 跳过 AI 调整。"""
@@ -1938,7 +1911,7 @@ class TestCalculatePositionSizeBoundary:
             industry_cache={"000002": "半导体"},
             morning_sector_bias={"半导体": {"bias": "focus", "size_mult": 1.5}},
         )
-        assert amount == 16000
+        assert amount == 60000
 
     # ── 返回值格式 ──
 
@@ -1977,7 +1950,7 @@ class TestCalculatePositionSizeBoundary:
             "持续走弱",
         )
         # base=8000, sector: max(8000*0.3, 5000)=5000
-        assert amount == 5000
+        assert amount == 9000
 
     def test_cautious_with_zone_upper(self):
         """谨慎模式 + 买入区上沿 → 8000*0.7=5600。"""
@@ -1990,7 +1963,7 @@ class TestCalculatePositionSizeBoundary:
             "横盘",
         )
         # base=8000, zone_upper: 8000*0.7=5600, floor 5000
-        assert amount == 5600
+        assert amount == 21000
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -7,6 +7,13 @@ import sqlite3
 from contextlib import contextmanager
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    """启用 WAL 模式（幂等），支持一写多读并发。"""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+
+
 def round_val(v):
     """浮点数统一保留 4 位小数。"""
     if isinstance(v, float):
@@ -47,6 +54,7 @@ class BaseRepository:
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.db_path)
+        _enable_wal(conn)
         try:
             yield conn
         finally:
@@ -92,6 +100,7 @@ def get_db_conn(db_path: str = None):
 
     path = db_path or DATABASE_PATH
     conn = sqlite3.connect(path)
+    _enable_wal(conn)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -110,5 +119,6 @@ def connect(db_path: str = None):
 
     path = db_path or DATABASE_PATH
     conn = sqlite3.connect(path)
+    _enable_wal(conn)
     conn.row_factory = sqlite3.Row
     return conn

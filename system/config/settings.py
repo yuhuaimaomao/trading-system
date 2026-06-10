@@ -111,15 +111,15 @@ MIN_LISTED_DAYS = 60
 PAPER_INITIAL_CAPITAL = float(os.environ.get("PAPER_INITIAL_CAPITAL", 200_000))
 REAL_INITIAL_CAPITAL = float(os.environ.get("REAL_INITIAL_CAPITAL", 200_000))
 REAL_TRADE_ENABLED = os.environ.get("REAL_TRADE_ENABLED", "false").lower() == "true"
-DEFAULT_POSITION_PCT = float(os.environ.get("DEFAULT_POSITION_PCT", 0.16))
-MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", 5))
+DEFAULT_POSITION_PCT = float(os.environ.get("DEFAULT_POSITION_PCT", 0.30))
+MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", 3))
 SWAP_SCORE_GAP = float(os.environ.get("SWAP_SCORE_GAP", 15))
 MAX_ACCOUNT_DRAWDOWN = float(os.environ.get("MAX_ACCOUNT_DRAWDOWN", 0.15))
 REVIEW_PICK_POSITION_PCT = float(os.environ.get("REVIEW_PICK_POSITION_PCT", 0.08))
 
 # ===== 异动检测阈值 =====
 ABNORMAL_RAPID_RISE_PCT = 1.0  # 急速拉升: 当前涨幅 - 上轮涨幅 > 1%
-ABNORMAL_VOLUME_SURGE_RATIO = 3.0  # 量比暴增: 当前成交量 > 上轮成交量 × 3
+ABNORMAL_VOLUME_SURGE_RATIO = 2.0  # 量比暴增: 当前成交量 > 上轮成交量 × 3
 ABNORMAL_NEAR_LIMIT_PCT = 8.5  # 逼近涨停: 涨幅 > 8.5%
 
 # ===== 板块共振/逆势分析 =====

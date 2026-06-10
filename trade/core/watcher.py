@@ -129,12 +129,12 @@ class Watcher(
         self._market_snapshot: dict[str, dict] = {}
 
         # 板块趋势跟踪（用于买卖信号时附带板块走势）
-        self._sector_trend_history: dict[str, list[float]] = defaultdict(list)
+        self._sector_trend_history: dict[str, list[float]] = defaultdict(lambda: deque(maxlen=100))
         self._sector_trend_continuity: dict[str, int] = defaultdict(int)  # 连续同向轮数
         self._sector_trend_last_dir: dict[str, str] = {}  # 上一轮方向
         self._sector_trend_start: dict[str, str] = {}  # 趋势起点时间 HH:MM
         # 概念趋势跟踪
-        self._concept_trend_history: dict[str, list[float]] = defaultdict(list)
+        self._concept_trend_history: dict[str, list[float]] = defaultdict(lambda: deque(maxlen=100))
         self._concept_trend_continuity: dict[str, int] = defaultdict(int)
         self._concept_trend_last_dir: dict[str, str] = {}
         self._concept_trend_start: dict[str, str] = {}
@@ -769,8 +769,13 @@ class Watcher(
         try:
             if state.scan_count % 3 == 0:
                 self._check_abnormal(prices)
+            # 急拉追涨：每3轮跑一次（和异动检测同频，避免重复给管线喂相同候选）
+            if state.data_ready and state.scan_count % 3 == 0:
+                chase = self._generate_chase_candidates(getattr(self, "_last_rapid_hits", []) or [], prices)
+                if chase:
+                    self._check_buy_candidates(state, chase, self._regime)
         except Exception as e:
-            logger.warning(f"异动检测异常: {e}", exc_info=True)
+            logger.warning(f"异动/追涨异常: {e}", exc_info=True)
 
         try:
             if state.scan_count % 15 == 0:
@@ -940,31 +945,51 @@ class Watcher(
                 self._alert_private(msg)
 
     def _restore_pos_meta(self):
-        """从 trade_signals 恢复 _pos_meta（止损止盈板块等决策数据）。"""
+        """从持仓表恢复 _pos_meta（止损止盈板块等决策数据）。
+
+        优先使用 trade_portfolio_positions 表中持久化的 stop_loss/take_profit；
+        fallback 到 trade_signals 表（兼容旧数据）。
+        """
         try:
             for code in self.paper_account.positions:
-                sig = self.repo.get_signal_for_pos_meta(code)
                 pos = self.paper_account.positions[code]
-                if sig:
+                # 优先从持仓对象读取持久化的 sl/tp
+                pos_sl = getattr(pos, "stop_loss", 0) or 0
+                pos_tp = getattr(pos, "take_profit", 0) or 0
+
+                if pos_sl > 0 or pos_tp > 0:
                     self._pos_meta[code] = {
-                        "sl": sig.get("stop_loss", 0) or 0,
-                        "tp": sig.get("take_profit", 0) or 0,
-                        "trailing_stop": sig.get("trailing_stop", 0.05) or 0.05,
-                        "highest_price": pos.current_price,
-                        "sector": "",
-                        "score": sig.get("signal_score", 0) or 0,
-                        "signal_id": sig.get("id"),
-                    }
-                else:
-                    self._pos_meta[code] = {
-                        "sl": 0,
-                        "tp": 0,
-                        "trailing_stop": 0.05,
+                        "sl": pos_sl,
+                        "tp": pos_tp,
+                        "trailing_stop": getattr(pos, "trailing_stop", 0.05) or 0.05,
                         "highest_price": pos.current_price,
                         "sector": "",
                         "score": 0,
                         "signal_id": None,
                     }
+                else:
+                    # fallback: 从 trade_signals 恢复（兼容旧持仓数据）
+                    sig = self.repo.get_signal_for_pos_meta(code)
+                    if sig:
+                        self._pos_meta[code] = {
+                            "sl": sig.get("stop_loss", 0) or 0,
+                            "tp": sig.get("take_profit", 0) or 0,
+                            "trailing_stop": sig.get("trailing_stop", 0.05) or 0.05,
+                            "highest_price": pos.current_price,
+                            "sector": "",
+                            "score": sig.get("signal_score", 0) or 0,
+                            "signal_id": sig.get("id"),
+                        }
+                    else:
+                        self._pos_meta[code] = {
+                            "sl": 0,
+                            "tp": 0,
+                            "trailing_stop": 0.05,
+                            "highest_price": pos.current_price,
+                            "sector": "",
+                            "score": 0,
+                            "signal_id": None,
+                        }
             logger.info(f"_pos_meta 恢复: {len(self._pos_meta)} 只")
         except Exception as e:
             logger.warning(f"_pos_meta 恢复失败: {e}")
@@ -1032,56 +1057,64 @@ class Watcher(
     # ======================== 行情获取 ========================
 
     def _get_realtime_prices(self, stock_codes: list[str]) -> dict[str, float]:
-        """获取实时价格。QuoteClient 自动处理代码后缀（.SH/.SZ）。"""
-        if not self.qmt:
-            return {}
+        """获取实时价格 — 优先从 Collector 推送的 _market_snapshot 取（TCP推送，永不阻塞）。
 
-        try:
-            quotes = self.qmt.get_realtime(stock_codes)
-        except Exception as e:
-            logger.warning(f"QMT 行情获取失败: {e}")
-            return {}
-
+        QMT HTTP 仅用于获取 preClose 填 _limit_cache，5s 超时不影响价格获取。
+        """
+        snapshot = getattr(self, "_market_snapshot", None) or {}
         now_ts = time.time()
         prices: dict[str, float] = {}
-        for code in stock_codes:
-            item = quotes.get(code)
-            if item:
-                price = item.get("lastPrice")
-                if price is None:
-                    price = item.get("last_price")
-                if price is None:
-                    price = item.get("price")
-                if price is not None:
-                    price_f = float(price)
-                    prices[code] = price_f
-                    # 追踪最近10分钟价格（用于止跌确认）
-                    if price_f > 0:
-                        if code not in self._recent_prices:
-                            self._recent_prices[code] = []
-                        hist = self._recent_prices[code]
-                        # 去重：价格未变化不重复记录
-                        if not hist or hist[-1][1] != price_f:
-                            hist.append((now_ts, price_f))
-                        # 只保留最近10分钟
-                        cutoff = now_ts - 600
-                        self._recent_prices[code] = [(t, p) for t, p in hist if t > cutoff]
+        need_limits: list[str] = []
 
-                # 涨跌停价
-                pre_close = item.get("preClose") or item.get("pre_close") or 0
-                if pre_close > 0:
-                    limit_pct = 0.20 if code.startswith(("688", "300")) else 0.10
-                    self._limit_cache[code] = {
-                        "limit_up": round(pre_close * (1 + limit_pct), 2),
-                        "limit_down": round(pre_close * (1 - limit_pct), 2),
-                        "pre_close": pre_close,
-                    }
+        for code in stock_codes:
+            item = snapshot.get(code)
+            if item:
+                try:
+                    price_f = float(item.get("price", 0))
+                except (ValueError, TypeError):
+                    price_f = 0.0
+                if price_f > 0:
+                    prices[code] = price_f
+                    # 追踪最近10分钟价格
+                    if code not in self._recent_prices:
+                        self._recent_prices[code] = []
+                    hist = self._recent_prices[code]
+                    if not hist or hist[-1][1] != price_f:
+                        hist.append((now_ts, price_f))
+                    cutoff = now_ts - 600
+                    self._recent_prices[code] = [(t, p) for t, p in hist if t > cutoff]
+                    # 涨跌停缓存缺失时标记（只取 pre_close，不取行情）
+                    if code not in self._limit_cache:
+                        need_limits.append(code)
+
+        # preClose 补充查询（5s 超时，不影响主流程）
+        if need_limits and self.qmt:
+            try:
+                quotes = self.qmt.get_realtime(need_limits)
+            except Exception:
+                quotes = {}
+            for code in need_limits:
+                item = quotes.get(code) if isinstance(quotes, dict) else None
+                if item:
+                    pre_close = item.get("preClose") or item.get("pre_close") or 0
+                    if pre_close > 0:
+                        limit_pct = self._get_limit_pct(code)
+                        self._limit_cache[code] = {
+                            "limit_up": round(pre_close * (1 + limit_pct), 2),
+                            "limit_down": round(pre_close * (1 - limit_pct), 2),
+                            "pre_close": pre_close,
+                        }
+
         return prices
 
     @staticmethod
     def _get_limit_pct(code: str) -> float:
-        """涨跌停幅度：科创/创业板20%，其余10%。"""
-        return 0.20 if code.startswith(("688", "300")) else 0.10
+        """涨跌停幅度：北交所30%，科创/创业板20%，其余10%。"""
+        if code.startswith(("8", "4")):
+            return 0.30  # 北交所
+        if code.startswith(("688", "300")):
+            return 0.20  # 科创板/创业板
+        return 0.10
 
     def _is_limit_up(self, code: str, price: float) -> bool:
         """判断是否涨停。"""
@@ -1569,6 +1602,8 @@ class Watcher(
                 "source": source,
                 "submitted_at": time.time(),
             }
+        else:
+            self._alert_private(f"⚠️ AI 队列已满，追高评估跳过 {code} {name}\n   规则决策不受影响")
         return ""
 
     def _process_pending_ai(self):
@@ -1606,10 +1641,6 @@ class Watcher(
 
             # 冷却检查：同票 15 轮内且价格变化 < 2% → 跳过
             if self._should_throttle(code, ctx["price"]):
-                continue
-
-            # 复盘/板块发现不到下单不推送 AI 异步结果
-            if ctx.get("source", "") != "signal":
                 continue
 
             # 提取板块行业名
@@ -1773,6 +1804,11 @@ class Watcher(
                 "score": buy_cand.get("score", 0),
                 "signal_id": None,
             }
+            # 同步到持仓对象（持久化止损止盈）
+            pos = self.paper_account.positions.get(buy_code)
+            if pos:
+                pos.stop_loss = buy_cand.get("sl", 0)
+                pos.take_profit = buy_cand.get("tp", 0)
             logger.info(f"AI 异步换仓完成: {sell_code}→{buy_code}")
 
     # ======================== 指数背离 / 板块急跌 ========================
@@ -1854,17 +1890,31 @@ class Watcher(
             if s:
                 held_sectors.add(s)
 
-        # 查领涨/领跌股（复用 market_snapshot 的实时数据）
-        leaders = self._get_sector_leaders() if hasattr(self, "_get_sector_leaders") else {}
+        # 查领涨/领跌股（按板块方向过滤，板块跌时只取下跌股）
+        down_leaders = self._get_sector_leaders(direction="down") if hasattr(self, "_get_sector_leaders") else {}
+        up_leaders = self._get_sector_leaders(direction="up") if hasattr(self, "_get_sector_leaders") else {}
 
         alerts = []
         for name, s in stats.items():
             chg = s.get("change_pct", 0)
-            leaders_in_sector = leaders.get(name, [])
+            if chg < -1.5:
+                leaders_in_sector = down_leaders.get(name, [])
+                label = "领跌"
+                marker = "🔴" if name in held_sectors else "⬇"
+            elif chg > 2.5:
+                leaders_in_sector = up_leaders.get(name, [])
+                label = "领涨"
+                marker = "🟢"
+            else:
+                continue
+
             leader_str = ""
             if leaders_in_sector:
-                stocks = [f"{c[0]} {c[1]:+.1f}%" for c in leaders_in_sector[:3]]
-                leader_str = "\n     领" + ("涨" if chg > 0 else "跌") + ": " + ", ".join(stocks)
+                stocks = [f"{c[0]} {c[1]} {c[2]:+.1f}%" for c in leaders_in_sector[:3]]
+                leader_str = f"\n     {label}: " + ", ".join(stocks)
+
+            if chg < -1.5 or chg > 2.5:
+                alerts.append(f"{marker} {name}: {chg:+.1f}%  涨跌{s.get('up', 0)}/{s.get('down', 0)}{leader_str}")
 
             if chg < -1.5:
                 marker = "🔴" if name in held_sectors else "⬇"
@@ -1897,12 +1947,15 @@ class Watcher(
             title = "📊 板块急涨" if up and not down else ("⚠️ 板块急跌" if down else "")
             self._alert(title + "\n" + "\n".join(fresh[:5]))
 
-    def _get_sector_leaders(self) -> dict[str, list[tuple]]:
-        """从 market_snapshot 中提取每个板块的领涨/领跌股。"""
+    def _get_sector_leaders(self, *, direction: str = "") -> dict[str, list[tuple]]:
+        """从 market_snapshot 中提取每个板块的领涨/领跌股。
+
+        direction: "up" 只取涨的, "down" 只取跌的, "" 都取。
+        返回 {sector_name: [(code, name, chg), ...]}。
+        """
         snapshot = getattr(self, "_market_snapshot", {})
         if not snapshot:
             return {}
-        # 确保行业缓存已加载
         self._ensure_industry_cache()
 
         by_sector: dict[str, list[tuple]] = {}
@@ -1911,15 +1964,21 @@ class Watcher(
             if not industry:
                 continue
             chg = item.get("changePct", 0)
-            if abs(chg) > 3:  # 只取涨跌 >3% 的
-                if industry not in by_sector:
-                    by_sector[industry] = []
-                by_sector[industry].append((code, chg))
+            if abs(chg) < 3:
+                continue
+            if direction == "up" and chg <= 0:
+                continue
+            if direction == "down" and chg >= 0:
+                continue
+            name = self._resolve_name(code)
+            if industry not in by_sector:
+                by_sector[industry] = []
+            by_sector[industry].append((code, name, chg))
 
-        # 每板块取 top 5 涨/跌
+        # 每板块取 top 5
         result = {}
         for ind, stocks in by_sector.items():
-            stocks.sort(key=lambda x: abs(x[1]), reverse=True)
+            stocks.sort(key=lambda x: abs(x[2]), reverse=True)
             result[ind] = stocks[:5]
         return result
 

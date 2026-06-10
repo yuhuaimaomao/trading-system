@@ -3,12 +3,14 @@
 交易线 — 信号 CRUD。
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from data._base import BaseRepository, cols_from_str
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("data")
+
+_SIGNAL_STALE_HOURS = 24  # pending 信号超过此时效自动过滤
 
 _SIGNAL_COLS = frozenset(
     {
@@ -58,6 +60,10 @@ class SignalRepo(BaseRepository):
         if account:
             where.append("account=?")
             params.append(account)
+        # 自动过滤超过 24 小时的陈旧信号（防异常退出后误加载）
+        stale_cutoff = (datetime.now() - timedelta(hours=_SIGNAL_STALE_HOURS)).isoformat()
+        where.append("created_at > ?")
+        params.append(stale_cutoff)
         sql = f"SELECT {_SIGNAL_ALL_COLS} FROM trade_signals WHERE {' AND '.join(where)}"
         cols = cols_from_str(_SIGNAL_ALL_COLS.replace(" ", ""))
         with self._conn() as conn:

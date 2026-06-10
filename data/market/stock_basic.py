@@ -226,6 +226,116 @@ class StockReader:
         }
 
     @staticmethod
+    def get_money_flow_trend(conn, code: str, days: int = 5) -> dict:
+        """查询个股最近 N 个交易日的主力资金流趋势。
+        返回 {consecutive_buy: 连续净买天数, amounts: [每日净买额],
+              trend_score: 趋势评分(-10~10), trend_strength: 强弱描述}。
+        """
+        rows = conn.execute(
+            """SELECT main_force_net, main_force_ratio, trade_date
+               FROM stock_basic WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT ?""",
+            (code, days),
+        ).fetchall()
+        if not rows:
+            return {"consecutive_buy": 0, "amounts": [], "trend_score": 0, "trend_strength": "无数据"}
+
+        amounts = [r[0] or 0 for r in rows]  # 最近的在前面
+        ratios = [r[1] or 0 for r in rows]
+
+        # 连续净买天数（从最近往前数）
+        consecutive = 0
+        for amt in amounts:
+            if amt > 0:
+                consecutive += 1
+            else:
+                break
+
+        # 趋势评分：连续净买 + 金额递增 + 占比为正
+        score = 0
+        if consecutive >= 3:
+            score += 5
+        elif consecutive >= 2:
+            score += 2
+        elif consecutive == 1:
+            score += 1
+
+        # 金额递增检查
+        if len(amounts) >= 3 and amounts[0] > amounts[1] > amounts[2] > 0:
+            score += 4  # 连续3天递增且均为净买
+        elif len(amounts) >= 2 and amounts[0] > amounts[1] > 0:
+            score += 2  # 连续2天递增
+
+        # 最近一天净买占比大
+        if ratios and ratios[0] > 0.05:  # 主力净买 > 5%
+            score += 1
+
+        # 累计净买
+        total_net = sum(amounts)
+        if total_net > 0:
+            score += min(2, int(total_net / 100_000_000))  # 每1亿加1分，最多2分
+
+        # 描述
+        if score >= 8:
+            strength = "强势吸筹"
+        elif score >= 5:
+            strength = "温和流入"
+        elif score >= 2:
+            strength = "小幅流入"
+        elif score >= 0:
+            strength = "资金平衡"
+        elif score >= -3:
+            strength = "小幅流出"
+        else:
+            strength = "持续流出"
+
+        return {
+            "consecutive_buy": consecutive,
+            "amounts": amounts,
+            "total_net": total_net,
+            "trend_score": score,
+            "trend_strength": strength,
+        }
+
+    @staticmethod
+    def get_volatility_breakout(conn, code: str, lookback: int = 20) -> dict:
+        """波动率异动检测：当前振幅 vs 历史均值。
+        返回 {is_breakout, vol_ratio, current_amp, avg_amp, signal}。
+        vol_ratio > 2.0 → 强烈异动，1.5-2.0 → 温和异动。
+        """
+        rows = conn.execute(
+            """SELECT amplitude FROM stock_basic WHERE stock_code=?
+               ORDER BY trade_date DESC LIMIT ?""",
+            (code, lookback),
+        ).fetchall()
+        if len(rows) < 5:
+            return {"is_breakout": False, "vol_ratio": 1.0, "current_amp": 0, "avg_amp": 0, "signal": "数据不足"}
+
+        amps = [r[0] or 0 for r in rows]
+        current = amps[0]
+        avg = sum(amps[1:]) / len(amps[1:]) if len(amps) > 1 else current
+        ratio = current / avg if avg > 0 else 1.0
+
+        if ratio > 3.0:
+            signal = "极端异动"
+        elif ratio > 2.0:
+            signal = "强烈异动"
+        elif ratio > 1.5:
+            signal = "温和异动"
+        elif ratio > 1.2:
+            signal = "小幅放大"
+        else:
+            signal = "正常"
+
+        return {
+            "is_breakout": ratio >= 1.5,
+            "vol_ratio": round(ratio, 2),
+            "current_amp": round(current, 2),
+            "avg_amp": round(avg, 2),
+            "signal": signal,
+        }
+
+    @staticmethod
     def get_stock_basic(conn, code: str) -> dict | None:
         """查询个股基础信息。"""
         row = conn.execute(

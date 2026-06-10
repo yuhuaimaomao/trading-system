@@ -36,6 +36,7 @@ class BuyDecisionMixin:
             market_breadth=getattr(self, "_market_breadth", {}),
             industry_cache=getattr(self, "_industry_cache", {}),
             morning_sector_bias=self._morning_sector_bias,
+            total_value=self.paper_account.total_value,
         )
 
     def _analyze_buy_context(self, code: str, price: float, buy_min: float, buy_max: float) -> str:
@@ -130,9 +131,11 @@ class BuyDecisionMixin:
             parts.append(f"日内: {' | '.join(intra_parts)}")
 
         # 7. 盘口 + 大单
-        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
+        ob_ratio, ob_reason, ob_delta, ob_delta_desc = self._get_order_book_imbalance(code, price)
         if ob_reason:
             parts.append(f"📊 盘口: {ob_reason}(买盘{ob_ratio:.0%})")
+            if ob_delta_desc:
+                parts.append(f"   Δ: {ob_delta_desc}({ob_delta:+.0%})")
         big_ratio, big_reason = self._get_big_order_direction(code)
         if big_reason:
             parts.append(f"💰 大单: {big_reason}")
@@ -227,7 +230,7 @@ class BuyDecisionMixin:
 
         factors = {"available": False}
         try:
-            # 主力资金
+            # 主力资金（单日 + 连续趋势）
             mf = self.repo.get_money_flow(code)
             if mf:
                 factors["yesterday_mf_net"] = mf["main_force_net"]
@@ -238,6 +241,25 @@ class BuyDecisionMixin:
                 factors["pe_dynamic"] = mf["pe_dynamic"]
                 factors["circ_market_cap"] = mf["circ_market_cap"]
                 factors["available"] = True
+            # 资金流连续趋势（最近5天）
+            try:
+                mft = self.repo.get_money_flow_trend(code, days=5)
+                if mft:
+                    factors["mf_trend_score"] = mft["trend_score"]
+                    factors["mf_trend_strength"] = mft["trend_strength"]
+                    factors["mf_consecutive_buy"] = mft["consecutive_buy"]
+                    factors["mf_total_net"] = mft.get("total_net", 0)
+            except Exception:
+                factors["mf_trend_score"] = 0
+            # 波动率异动
+            try:
+                vb = self.repo.get_volatility_breakout(code, lookback=20)
+                if vb:
+                    factors["vol_breakout"] = vb["is_breakout"]
+                    factors["vol_ratio"] = vb["vol_ratio"]
+                    factors["vol_signal"] = vb["signal"]
+            except Exception:
+                factors["vol_breakout"] = False
             # 日线技术指标
             ind = self.repo.get_daily_indicators(code)
             if ind:
@@ -300,42 +322,60 @@ class BuyDecisionMixin:
         self._daily_factor_cache[code] = factors
         return factors
 
-    def _get_order_book_imbalance(self, code: str, price: float) -> tuple[float, str]:
-        """五档盘口买卖力量对比。返回 (bid_ratio, reason)。
-
-        bid_ratio = 买盘总量 / (买盘总量 + 卖盘总量)，>0.5 买方占优。
+    def _get_order_book_imbalance(self, code: str, price: float) -> tuple[float, str, float, str]:
+        """五档盘口买卖力量对比 + 变化率。
+        返回 (bid_ratio, reason, ratio_delta, delta_desc)。
+        ratio_delta > 0 表示买盘在增强。
         """
         if not self.qmt:
-            return 0.5, ""
+            return 0.5, "", 0, ""
         try:
             detail = self.qmt.get_quote_detail(code)
             if not detail:
-                return 0.5, ""
+                return 0.5, "", 0, ""
 
             ask_vols = detail.get("askVol", [])
             bid_vols = detail.get("bidVol", [])
             if not ask_vols or not bid_vols:
-                return 0.5, ""
+                return 0.5, "", 0, ""
 
             total_bid = sum(float(v) for v in bid_vols[:5] if v)
             total_ask = sum(float(v) for v in ask_vols[:5] if v)
             total = total_bid + total_ask
             if total <= 0:
-                return 0.5, ""
+                return 0.5, "", 0, ""
 
             ratio = total_bid / total
 
+            # 变化率：对比上一次记录的盘口
+            if not hasattr(self, "_ob_history"):
+                self._ob_history: dict[str, tuple[float, float]] = {}
+            prev = self._ob_history.get(code, (ratio, 0))
+            delta = ratio - prev[0]
+            self._ob_history[code] = (ratio, self._scan_count)
+
+            if delta > 0.10:
+                delta_desc = "买盘快速增强"
+            elif delta > 0.05:
+                delta_desc = "买盘小幅增强"
+            elif delta < -0.10:
+                delta_desc = "卖盘快速增强"
+            elif delta < -0.05:
+                delta_desc = "卖盘小幅增强"
+            else:
+                delta_desc = ""
+
             if ratio >= 0.7:
-                return ratio, "买盘强劲"
+                return ratio, "买盘强劲", delta, delta_desc
             elif ratio >= 0.55:
-                return ratio, "买盘略强"
+                return ratio, "买盘略强", delta, delta_desc
             elif ratio <= 0.3:
-                return ratio, "卖盘沉重"
+                return ratio, "卖盘沉重", delta, delta_desc
             elif ratio <= 0.45:
-                return ratio, "卖盘略强"
-            return ratio, "买卖均衡"
+                return ratio, "卖盘略强", delta, delta_desc
+            return ratio, "买卖均衡", delta, delta_desc
         except Exception:
-            return 0.5, ""
+            return 0.5, "", 0, ""
 
     def _get_instrument_info(self, code: str) -> dict:
         """获取合约基本信息，缓存整日（盘中不变）。"""
@@ -468,7 +508,7 @@ class BuyDecisionMixin:
 
         concept_score, concept_reason = self._get_concept_trend_score(code)
         intra = self._get_intraday_indicators(code)
-        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
+        ob_ratio, ob_reason, ob_delta, ob_delta_desc = self._get_order_book_imbalance(code, price)
         big_ratio, big_reason = self._get_big_order_direction(code)
         inst = self._get_instrument_info(code)
         df = self._get_context_factors(code, price)
@@ -532,11 +572,14 @@ class BuyDecisionMixin:
             intra_price_vs_ma5=intra.get("price_vs_ma5", 0),
             ob_ratio=ob_ratio,
             ob_reason=ob_reason,
+            ob_delta=ob_delta,
             big_ratio=big_ratio,
             big_reason=big_reason,
             up_stop=inst.get("up_stop", 0),
             down_stop=inst.get("down_stop", 0),
             yesterday_mf_ratio=df.get("yesterday_mf_ratio", 0),
+            mf_trend_score=df.get("mf_trend_score", 0),
+            mf_trend_strength=df.get("mf_trend_strength", ""),
             ma5_angle=df.get("ma5_angle", 0),
             day_position=df.get("day_position"),
             daily_macd_dif=df.get("daily_macd_dif", 0),
@@ -554,6 +597,11 @@ class BuyDecisionMixin:
             sector_very_strong=sector_very_strong,
             ai_bias=ai_bias,
             ai_size_mult=ai_size_mult,
+            vol_breakout=df.get("vol_breakout", False),
+            vol_ratio=df.get("vol_ratio", 1.0),
+            vol_signal=df.get("vol_signal", ""),
+            opening_bias=self._get_opening_strength().get("bias", "neutral"),
+            opening_score=self._get_opening_strength().get("score", 0),
         )
         return evaluate_buy(ctx)
 
@@ -624,21 +672,21 @@ class BuyDecisionMixin:
         first_avg = sum(first_prices) / len(first_prices)
         second_avg = sum(second_prices) / len(second_prices)
 
-        # 后5分钟最低价 < 前5分钟最低价 → 还在创新低
-        if second_low < first_low * 0.995:
+        # 后5分钟最低价 < 前5分钟最低价 * 0.99 → 还在明显创新低（放宽：之前 0.995）
+        if second_low < first_low * 0.99:
             drop_pct = (second_low - first_high) / first_high * 100
             return "declining", f"持续创新低({drop_pct:.1f}%)"
 
-        # 后5分钟振幅 < 1% → 横盘止跌
+        # 后5分钟振幅 < 1.5% → 横盘止跌（放宽：之前 1.0%）
         second_range = (second_high - second_low) / second_low * 100 if second_low > 0 else 0
-        if second_range < 1.0:
+        if second_range < 1.5:
             return "stabilizing", f"横盘止跌(振幅{second_range:.1f}%)"
 
-        # 后5分钟均价 > 前5分钟均价 → 反弹
-        if second_avg > first_avg * 1.005:
+        # 后5分钟均价 > 前5分钟均价 * 0.998 → 算反弹（放宽：之前 1.005）
+        if second_avg > first_avg * 0.998:
             return (
                 "reversing",
-                f"低点抬高+{((second_avg - first_avg) / first_avg * 100):.1f}%",
+                f"低点企稳+{((second_avg - first_avg) / first_avg * 100):.1f}%",
             )
 
         return "stabilizing", f"波动收敛(振幅{second_range:.1f}%)"
@@ -704,7 +752,7 @@ class BuyDecisionMixin:
         # 构建输入（复用 evaluate_buy 的 BuyEvalInput）
         trend = self._get_sector_trend(code)
         intra = self._get_intraday_indicators(code)
-        ob_ratio, ob_reason = self._get_order_book_imbalance(code, price)
+        ob_ratio, ob_reason, ob_delta, _ob_delta_desc = self._get_order_book_imbalance(code, price)
         big_ratio, big_reason = self._get_big_order_direction(code)
         df = self._get_context_factors(code, price)
         price_action, price_action_desc = self._get_recent_price_action(code)
@@ -731,9 +779,12 @@ class BuyDecisionMixin:
             intra_price_vs_ma5=intra.get("price_vs_ma5", 0),
             ob_ratio=ob_ratio,
             ob_reason=ob_reason,
+            ob_delta=ob_delta,
             big_ratio=big_ratio,
             big_reason=big_reason,
             yesterday_mf_ratio=df.get("yesterday_mf_ratio", 0),
+            mf_trend_score=df.get("mf_trend_score", 0),
+            mf_trend_strength=df.get("mf_trend_strength", ""),
             ma5_angle=df.get("ma5_angle", 0),
             day_position=df.get("day_position"),
             daily_macd_dif=df.get("daily_macd_dif", 0),
@@ -858,38 +909,42 @@ class BuyDecisionMixin:
 
         paper_full = len(self.paper_account.positions) >= settings.MAX_POSITIONS
 
-        # 市场宽度过滤：下跌/上涨 > BREADTH_DOWN_UP_RATIO 且指数跌时暂停新开仓
-        # 优先用滚动窗口：若近期宽度在改善，跳过全量过滤
+        # 市场宽度过滤：仅对盘前信号/复盘推荐生效
+        # 盘中动态发现（板块热点、回踩扫描）自带实时择时能力，不拦
+        first_source = candidates[0]["source"] if candidates else ""
+        is_premarket = first_source in ("signal", "review")
         breadth_blocked = False
-        try:
-            if hasattr(self, "_compute_rolling_breadth"):
-                breadth_roll = self._compute_rolling_breadth(window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT)
-                if breadth_roll and breadth_roll.get("improving"):
-                    up_delta = breadth_roll.get("up_delta", 0)
-                    if up_delta < settings.BREADTH_IMPROVEMENT_THRESHOLD:
+        if is_premarket:
+            try:
+                if hasattr(self, "_compute_rolling_breadth"):
+                    breadth_roll = self._compute_rolling_breadth(window_minutes=settings.BREADTH_ROLLING_WINDOW_SHORT)
+                    if breadth_roll and breadth_roll.get("improving"):
+                        up_delta = breadth_roll.get("up_delta", 0)
+                        if up_delta < settings.BREADTH_IMPROVEMENT_THRESHOLD:
+                            breadth_blocked = self._check_instant_breadth()
+                    else:
                         breadth_blocked = self._check_instant_breadth()
                 else:
                     breadth_blocked = self._check_instant_breadth()
-            else:
-                breadth_blocked = self._check_instant_breadth()
-        except Exception:
-            breadth_blocked = self._check_instant_breadth()
-
-        # 恐慌衰减 → 即使瞬时宽度仍差，也放开
-        if breadth_blocked:
-            try:
-                if hasattr(self, "_check_panic_fading"):
-                    _fade = self._check_panic_fading()
-                    if _fade.get("faded"):
-                        breadth_blocked = False
-                        if getattr(self, "_breadth_block_alerted", False):
-                            self._breadth_block_alerted = False
             except Exception:
-                pass
+                breadth_blocked = self._check_instant_breadth()
+
+            # 恐慌衰减 → 即使瞬时宽度仍差，也放开
+            if breadth_blocked:
+                try:
+                    if hasattr(self, "_check_panic_fading"):
+                        _fade = self._check_panic_fading()
+                        if _fade.get("faded"):
+                            breadth_blocked = False
+                            if getattr(self, "_breadth_block_alerted", False):
+                                self._breadth_block_alerted = False
+                except Exception:
+                    pass
 
         if breadth_blocked:
-            if not getattr(self, "_breadth_block_alerted", False):
-                self._breadth_block_alerted = True
+            last_alert_time = getattr(self, "_breadth_block_alerted_at", 0)
+            if time.time() - last_alert_time > 1200:  # 20分钟内不重复推
+                self._breadth_block_alerted_at = time.time()
                 breadth = self._market_breadth
                 down_up = breadth.get("down", 0) / max(breadth.get("up", 0), 1)
                 idx_quote = getattr(self, "_last_index_quote", None) or {}
@@ -900,8 +955,6 @@ class BuyDecisionMixin:
                     f"   下跌/上涨: {down_up:.1f}  指数变化: {idx_change:+.2%}\n"
                     f"   → 多数个股下跌，暂停新开仓位"
                 )
-        else:
-            self._breadth_block_alerted = False
 
         # 早盘 AI 板块倾向：focus 板块候选优先处理
         if self._morning_sector_bias:
@@ -1152,8 +1205,9 @@ class BuyDecisionMixin:
                 if prev_price > 0 and abs(price - prev_price) / prev_price < 0.005:
                     continue
 
-            if not market_ok:
+            if not market_ok and source != "chase_surge":
                 # 大盘不好时不要反复推送"暂停买入"——每 60 轮最多报一次
+                # 追涨(chase_surge)豁免：逆势拉涨本身就有信号价值
                 reject_key = f"mkt_reject:{c['alert_key']}"
                 last_reject = getattr(self, "_review_market_reject", {}).get(reject_key, -999)
                 if self._scan_count - last_reject < 60:
@@ -1174,19 +1228,21 @@ class BuyDecisionMixin:
                 continue
 
             # ── entry_rule 过滤（大盘环境决定入场策略） ──
-            zone_pos = (price - buy_min) / (buy_max - buy_min) if buy_max > buy_min else 0.5
+            # 盘前 AI 信号跳过 entry_rule，信任 AI 选股；盘中动态候选遵守 entry_rule
             entry_skip_reason = ""
-            if entry_rule == "next_day":
-                entry_skip_reason = "尾盘拉升/次日再看，今日不追"
-            elif entry_rule == "confirm":
-                if zone_pos > 0.5:
-                    entry_skip_reason = f"需确认信号(zone_pos={zone_pos:.0%})，等回调到区间下半部"
-            elif entry_rule == "pullback":
-                if zone_pos > 0.4:
-                    entry_skip_reason = f"等回调买入(zone_pos={zone_pos:.0%})，暂不追高"
-            elif entry_rule == "range_boundary":
-                if zone_pos > 0.25:
-                    entry_skip_reason = f"宽幅震荡(zone_pos={zone_pos:.0%})，等区间下沿再入场"
+            if source != "signal":
+                zone_pos = (price - buy_min) / (buy_max - buy_min) if buy_max > buy_min else 0.5
+                if entry_rule == "next_day":
+                    entry_skip_reason = "尾盘拉升/次日再看，今日不追"
+                elif entry_rule == "confirm":
+                    if zone_pos > 0.5:
+                        entry_skip_reason = f"需确认信号(zone_pos={zone_pos:.0%})，等回调到区间下半部"
+                elif entry_rule == "pullback":
+                    if zone_pos > 0.4:
+                        entry_skip_reason = f"等回调买入(zone_pos={zone_pos:.0%})，暂不追高"
+                elif entry_rule == "range_boundary":
+                    if zone_pos > 0.25:
+                        entry_skip_reason = f"宽幅震荡(zone_pos={zone_pos:.0%})，等区间下沿再入场"
 
             if entry_skip_reason:
                 alert_state[c["alert_key"]] = (price, True)
@@ -1421,12 +1477,16 @@ class BuyDecisionMixin:
         大盘 stop_mult 用于动态调整止损宽度。
         """
         # 名额质量门控：名额越少要求越高，防止低质量信号占坑
+        # 追涨豁免：逆势拉涨的票，用更小的仓位试错也是合理的
         filled = len(self.paper_account.positions)
         remaining = settings.MAX_POSITIONS - filled
-        min_mul = {0: 0.99, 1: 0.80, 2: 0.65, 3: 0.55, 4: 0.50}.get(remaining, 0.50)
+        if source == "chase_surge":
+            min_mul = 0.15  # 追涨门槛低，用仓位控制风险
+        else:
+            min_mul = {0: 0.99, 1: 0.80, 2: 0.65, 3: 0.55, 4: 0.50}.get(remaining, 0.50)
         if size_mul < min_mul:
             logger.info(
-                f"买入决策 [{code} {name}] 放弃 名额{filled}/{settings.MAX_POSITIONS} "
+                f"买入决策 [{code} {name}] 放弃 source={source} 名额{filled}/{settings.MAX_POSITIONS} "
                 f"质量不足 size_mul={size_mul:.0%} < {min_mul:.0%}"
             )
             return
@@ -1471,7 +1531,10 @@ class BuyDecisionMixin:
 
         if size_mul < 1.0:
             max_amount = int(max_amount * size_mul // 100 * 100)
-        if max_amount < 5000:
+        # 追涨允许更小仓位试错
+        min_amount = 3000 if source == "chase_surge" else 5000
+        if max_amount < min_amount:
+            logger.info(f"买入拒绝 [{code} {name}] source={source} 仓位不足 max_amount={max_amount} < {min_amount}")
             return
 
         target_pct = max_amount / self.paper_account.total_value if self.paper_account.total_value > 0 else 0.10
@@ -1534,6 +1597,11 @@ class BuyDecisionMixin:
                 "buy_sector_trend": trend,  # 买入时的板块趋势（用于后续对比）
                 "buy_scan": self._scan_count,
             }
+            # 同步到持仓对象（持久化止损止盈）
+            pos = self.paper_account.positions.get(code)
+            if pos:
+                pos.stop_loss = sl
+                pos.take_profit = tp
             existing = self._bought_watch.get(code, {})
             self._bought_watch[code] = {
                 "entry_price": price,
@@ -1667,6 +1735,8 @@ class BuyDecisionMixin:
         candidates = []
         for sector in hot_sectors[:5]:  # 取热度前 5 的板块
             sname = sector["name"]
+            if any(kw in sname for kw in self._CHASE_EXCLUDED_SECTORS):
+                continue
 
             # 从实时 _market_snapshot 中找该板块股票（替代 stock_basic DB 查询）
             sector_stocks = []
@@ -1719,6 +1789,218 @@ class BuyDecisionMixin:
         if candidates:
             names = ", ".join(f"{c['code']} {c['name']}" for c in candidates[:6])
             logger.info(f"动态板块发现(实时): {len(candidates)}只候选 ({names})")
+        return candidates
+
+    # 过滤板块：与 strategy/screening/trend.py _SECTOR_BLACKLIST 保持一致
+    _CHASE_EXCLUDED_SECTORS = [
+        "银行",
+        "证券",
+        "保险",
+        "白酒",
+        "酒",
+        "食品",
+        "消费",
+        "饮料",
+        "零售",
+        "百货",
+        "家电",
+        "服装",
+        "纺织",
+        "石油",
+        "地产",
+        "房地产",
+        "农业",
+        "养殖",
+        "种植",
+        "环保",
+        "公路",
+        "铁路",
+        "高速",
+        "港口",
+        "电力",
+        "煤炭",
+        "钢铁",
+    ]
+
+    def _generate_chase_candidates(self, rapid_hits: list[dict], prices: dict[str, float]) -> list[dict]:
+        """急拉放量追涨候选生成：硬规则过滤后喂入 _check_buy_candidates。
+
+        两步：① 异动检测的 rapid_hits（两轮对比，精准但稀少）
+             ② 当前快照扫描（单轮涨幅>3%，覆盖持续拉涨的票）
+        没有 AI，纯规则判断，毫秒级完成。急拉票时效性第一。
+        """
+        if not rapid_hits:
+            rapid_hits = []
+
+        # 补充扫描：当前快照中涨幅 > 3% 的票（不依赖两轮对比）
+        snapshot = getattr(self, "_market_snapshot", {}) or {}
+        scanned_codes = {h["code"] for h in rapid_hits}
+        for code, item in snapshot.items():
+            if code in scanned_codes:
+                continue
+            try:
+                chg = float(item.get("changePct", 0))
+                price = float(item.get("price", 0))
+                amount = float(item.get("amount", 0) or 0)
+            except (ValueError, TypeError):
+                continue
+            if chg < 3 or price <= 0:
+                continue
+            industry = (getattr(self, "_industry_cache", {}) or {}).get(code, "")
+            rapid_hits.append(
+                {
+                    "code": code,
+                    "delta_pct": 0,  # 非两轮对比，无 delta
+                    "vol_ratio": 1.0,
+                    "name": "",
+                    "industry": industry,
+                    "price": price,
+                    "change_pct": chg,
+                    "amount": amount,
+                }
+            )
+
+        if not rapid_hits:
+            return []
+
+        logger.info(f"急拉追涨: 收到 {len(rapid_hits)} 只候选，开始规则过滤")
+
+        regime = getattr(self, "_regime", None)
+        # 追涨只在极端行情暂停（恐慌/熔断），普通偏弱允许参与
+        risk_level = getattr(regime, "risk_level", "safe") if regime else "safe"
+        pattern = getattr(regime, "pattern", "normal") if regime else "normal"
+        chase_blocked = risk_level in ("extreme",) or pattern in ("panic", "halt")
+        sector_stats = getattr(self, "_sector_stats", {}) or {}
+        industry_cache = getattr(self, "_industry_cache", {}) or {}
+
+        # 板块排名（TOP 10）
+        ranked_sectors = sorted(
+            sector_stats.items(),
+            key=lambda x: x[1].get("change_pct", 0),
+            reverse=True,
+        )
+        top10_sectors = {name for name, _ in ranked_sectors[:10]}
+
+        # 同板块已持仓计数
+        held_sectors: dict[str, int] = {}
+        for code in self.paper_account.positions:
+            ind = industry_cache.get(code, "")
+            if ind:
+                held_sectors[ind] = held_sectors.get(ind, 0) + 1
+
+        # 已持仓 code 集合
+        held_codes = set(self.paper_account.positions.keys())
+        recently_sold = getattr(self, "_recently_sold", {}) or {}
+
+        candidates = []
+        skipped = {
+            "low_chg": 0,
+            "high_chg": 0,
+            "weak_sector": 0,
+            "low_vol": 0,
+            "sector_full": 0,
+            "held": 0,
+            "excluded_sector": 0,
+            "near_limit": 0,
+            "market_halt": 0,
+        }
+
+        for item in rapid_hits:
+            code = item["code"]
+            name = item.get("name", "")
+            price = item.get("price", 0)
+            chg = item.get("change_pct", 0)
+            vol_ratio = item.get("vol_ratio", 0)
+            industry = item.get("industry", "")
+
+            if price <= 0:
+                continue
+
+            # ── 大盘极端行情暂停追涨（恐慌/熔断），普通偏弱允许 ──
+            if chase_blocked:
+                skipped["market_halt"] += 1
+                continue
+
+            # ── 已持仓 ──
+            if code in held_codes:
+                skipped["held"] += 1
+                continue
+
+            # ── 近期卖出冷却 ──
+            if code in recently_sold and self._scan_count - recently_sold[code] < 60:
+                continue
+
+            # ── 板块黑名单 ──
+            if any(kw in industry for kw in self._CHASE_EXCLUDED_SECTORS):
+                skipped["excluded_sector"] += 1
+                continue
+
+            # ── 涨跌幅边界 ──
+            limit_pct = 0.20 if code.startswith(("300", "688")) else 0.10
+            chg_min = 3.0
+            chg_max = limit_pct * 100 - 3  # 离涨停留 3% 空间
+            if chg < chg_min:
+                skipped["low_chg"] += 1
+                continue
+            if chg > chg_max:
+                skipped["high_chg"] += 1
+                continue
+
+            # ── 板块相对强度：个股跑赢板块 > 2%（比板块绝对涨幅更可靠）──
+            sec = sector_stats.get(industry, {})
+            sec_chg = sec.get("change_pct", 0) if sec else 0
+            if sec_chg is None:
+                sec_chg = 0
+            outperformance = chg - sec_chg  # 个股相对板块的超额收益
+            if outperformance < 2.0:
+                skipped["weak_sector"] += 1
+                continue
+
+            # ── 量能 ──
+            # 异动检测来的用 vol_ratio，补充扫描来的检查绝对成交额
+            if vol_ratio >= 2.0:
+                pass  # 两轮对比放量，可靠
+            elif item.get("amount", 0) > 50_000_000:  # 成交额 > 5000万
+                pass
+            else:
+                skipped["low_vol"] += 1
+                continue
+
+            # ── 同板块持仓 ≤ 1 ──
+            if held_sectors.get(industry, 0) > 1:
+                skipped["sector_full"] += 1
+                continue
+
+            # ── 通过 → 生成候选 ──
+            if not name:
+                name = self._resolve_name(code)
+            buy_min = round(price * 0.99, 2)
+            buy_max = round(price * 1.01, 2)
+            sl = round(price * 0.97, 2)
+            tp = round(price * 1.05, 2)
+
+            candidates.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "price": price,
+                    "buy_min": buy_min,
+                    "buy_max": buy_max,
+                    "sl": sl,
+                    "tp": tp,
+                    "score": 65,
+                    "trend": self._get_sector_trend(code),
+                    "source": "chase_surge",
+                    "alert_key": f"chase:{code}",
+                    "signal_id": None,
+                }
+            )
+
+        if candidates:
+            logger.info(f"急拉追涨: {len(candidates)}只通过 (过滤: {skipped})")
+        elif rapid_hits:
+            logger.info(f"急拉追涨: 0/{len(rapid_hits)}只通过 (过滤: {skipped})")
+
         return candidates
 
     def _scan_pullback_opportunities(self, prices: dict[str, float]) -> list[dict]:
@@ -1912,5 +2194,73 @@ class BuyDecisionMixin:
             return True, f"窄幅横盘{recent_range:.1f}%"
 
         return False, f"整体跌{(last_p - first_p) / first_p * 100:+.1f}%"
+
+    # ======================== 开盘强度分析 ========================
+
+    def _get_opening_strength(self) -> dict:
+        """分析开盘强度：用前30分钟指数数据判断当日基调。
+        返回 {pattern, bias, score} — bias: bullish/bearish/neutral。
+        高开高走 → bullish+5, 高开低走 → bearish-3, 低开高走 → bullish+3。
+        """
+        index_prices = getattr(self, "_index_prices", []) or []
+        if len(index_prices) < 10:
+            return {"pattern": "数据不足", "bias": "neutral", "score": 0}
+
+        # 前30分钟大约30个数据点（每分钟一个）
+        n = min(30, len(index_prices))
+        early = index_prices[:n]
+        if len(early) < 5:
+            return {"pattern": "数据不足", "bias": "neutral", "score": 0}
+
+        first = early[0]
+        last = early[-1]
+        high = max(early)
+        low = min(early)
+        open_chg = (last - first) / first * 100 if first > 0 else 0
+        swing = (high - low) / low * 100 if low > 0 else 0
+
+        # 高开判断：首点相对前收盘（用 index_pre_close）
+        idx_quote = getattr(self, "_last_index_quote", None) or {}
+        pre_close = idx_quote.get("pre_close", first)
+        gap = (first - pre_close) / pre_close * 100 if pre_close > 0 else 0
+
+        score = 0
+        pattern = ""
+        if gap > 0.5 and open_chg > 0.3:
+            pattern = "高开高走"
+            bias = "bullish"
+            score = 5
+        elif gap > 0.5 and open_chg < -0.3:
+            pattern = "高开低走"
+            bias = "bearish"
+            score = -3
+        elif gap < -0.3 and open_chg > 0.3:
+            pattern = "低开高走"
+            bias = "bullish"
+            score = 3
+        elif gap < -0.3 and open_chg < -0.3:
+            pattern = "低开低走"
+            bias = "bearish"
+            score = -5
+        elif abs(gap) < 0.3 and abs(open_chg) < 0.3:
+            pattern = "平开窄幅"
+            bias = "neutral"
+            score = 0
+        else:
+            pattern = f"高开{open_chg:+.1f}%"
+            bias = "neutral"
+            score = 0
+
+        # 缓存结果（盘中不变）
+        if not hasattr(self, "_cached_opening"):
+            self._cached_opening = {
+                "pattern": pattern,
+                "bias": bias,
+                "score": score,
+                "gap": round(gap, 2),
+                "open_chg": round(open_chg, 2),
+                "swing": round(swing, 2),
+            }
+        return self._cached_opening
 
     # ======================== 第二层：板块热度 ========================

@@ -24,9 +24,7 @@ class CheckContext:
 
     # ── 行情 ──
     prices: dict = field(default_factory=dict)
-    limit_cache: dict = field(
-        default_factory=dict
-    )  # {code: {limit_up, limit_down, pre_close}}
+    limit_cache: dict = field(default_factory=dict)  # {code: {limit_up, limit_down, pre_close}}
     index_prices: list = field(default_factory=list)
     index_high: float = 0.0
     index_low: float = 0.0
@@ -129,9 +127,7 @@ def _account_equation(ctx: CheckContext) -> list[str]:
     mv = sum(p.market_value for p in ctx.positions.values())
     drift = abs(ctx.total_value - ctx.cash - mv)
     if drift > 10:
-        return [
-            f"⚠️ 账户不一致: total={ctx.total_value:.0f} cash+mv={ctx.cash + mv:.0f} (差{drift:.0f})"
-        ]
+        return [f"⚠️ 账户不一致: total={ctx.total_value:.0f} cash+mv={ctx.cash + mv:.0f} (差{drift:.0f})"]
     return []
 
 
@@ -152,9 +148,7 @@ def _entry_date_future(ctx: CheckContext) -> list[str]:
     alerts = []
     for code, pos in ctx.positions.items():
         if pos.entry_date and ctx.trade_date and pos.entry_date > ctx.trade_date:
-            alerts.append(
-                f"🔴 未来持仓: {code} entry={pos.entry_date} > today={ctx.trade_date}"
-            )
+            alerts.append(f"🔴 未来持仓: {code} entry={pos.entry_date} > today={ctx.trade_date}")
     return alerts
 
 
@@ -165,9 +159,7 @@ def _t1_lock_consistency(ctx: CheckContext) -> list[str]:
         locked = getattr(pos, "locked_volume", 0)
         is_today = (pos.entry_date == ctx.trade_date) if ctx.trade_date else False
         if is_today and locked < pos.volume:
-            alerts.append(
-                f"⚠️ 锁仓不足: {code} 今日买入但 locked={locked} < vol={pos.volume}"
-            )
+            alerts.append(f"⚠️ 锁仓不足: {code} 今日买入但 locked={locked} < vol={pos.volume}")
         if not is_today and locked > 0:
             alerts.append(f"⚠️ 锁仓残留: {code} 昨日买入但 locked={locked} > 0")
     return alerts
@@ -220,9 +212,7 @@ def _max_profit_non_decreasing(ctx: CheckContext) -> list[str]:
         watch = ctx.bought_watch.get(code, {})
         mp = watch.get("max_profit_pct", 0)
         if pos.avg_cost > 0:
-            cur_pct = (
-                ctx.prices.get(code, pos.current_price) - pos.avg_cost
-            ) / pos.avg_cost
+            cur_pct = (ctx.prices.get(code, pos.current_price) - pos.avg_cost) / pos.avg_cost
             if mp > 0 and cur_pct > mp + 0.02:
                 alerts.append(f"⚠️ 浮盈遗漏: {code} 当前{cur_pct:.1%} > 记录{mp:.1%}")
     return alerts
@@ -309,18 +299,12 @@ def _pending_signals_leak(ctx: CheckContext) -> list[str]:
 
 
 def _cross_validate_change_pct(ctx: CheckContext) -> list[str]:
-    if (
-        ctx.baseline_pre_close <= 0
-        or not ctx.index_prices
-        or ctx.qmt_change_pct is None
-    ):
+    if ctx.baseline_pre_close <= 0 or not ctx.index_prices or ctx.qmt_change_pct is None:
         return []
     our_pct = (ctx.index_prices[-1] - ctx.baseline_pre_close) / ctx.baseline_pre_close
     diff = abs(our_pct - ctx.qmt_change_pct)
     if diff > 0.0005:
-        return [
-            f"🔴 涨跌幅分歧: 自算={our_pct:.4f} QMT={ctx.qmt_change_pct:.4f} (差{diff:.4f})"
-        ]
+        return [f"🔴 涨跌幅分歧: 自算={our_pct:.4f} QMT={ctx.qmt_change_pct:.4f} (差{diff:.4f})"]
     return []
 
 
@@ -328,9 +312,7 @@ def _cross_validate_preclose_stability(ctx: CheckContext) -> list[str]:
     if ctx.baseline_pre_close <= 0 or ctx.index_pre_close <= 0:
         return []
     if abs(ctx.index_pre_close - ctx.baseline_pre_close) > 0.01:
-        return [
-            f"🔴 昨收价漂移: {ctx.baseline_pre_close:.2f}→{ctx.index_pre_close:.2f}"
-        ]
+        return [f"🔴 昨收价漂移: {ctx.baseline_pre_close:.2f}→{ctx.index_pre_close:.2f}"]
     return []
 
 
@@ -338,9 +320,7 @@ def _cross_validate_market_value(ctx: CheckContext) -> list[str]:
     if not ctx.positions:
         return []
     mv_pos = sum(p.market_value for p in ctx.positions.values())
-    mv_calc = sum(
-        ctx.prices.get(c, p.current_price) * p.volume for c, p in ctx.positions.items()
-    )
+    mv_calc = sum(ctx.prices.get(c, p.current_price) * p.volume for c, p in ctx.positions.items())
     if mv_calc <= 0:
         return []
     drift = abs(mv_pos - mv_calc) / mv_calc
@@ -353,30 +333,25 @@ def _cross_validate_pnl(ctx: CheckContext) -> list[str]:
     if not ctx.positions:
         return []
     pnl_pos = sum(p.pnl for p in ctx.positions.values())
-    pnl_calc = sum(
-        (ctx.prices.get(c, p.current_price) - p.avg_cost) * p.volume
-        for c, p in ctx.positions.items()
-    )
+    pnl_calc = sum((ctx.prices.get(c, p.current_price) - p.avg_cost) * p.volume for c, p in ctx.positions.items())
     drift = abs(pnl_pos - pnl_calc)
     if pnl_calc != 0 and drift > abs(pnl_calc) * 0.02 + 10:
-        return [
-            f"⚠️ 盈亏分歧: position.pnl={pnl_pos:.0f} 实算={pnl_calc:.0f} (差{drift:.0f})"
-        ]
+        return [f"⚠️ 盈亏分歧: position.pnl={pnl_pos:.0f} 实算={pnl_calc:.0f} (差{drift:.0f})"]
     return []
 
 
 def _cross_validate_index_high_low(ctx: CheckContext) -> list[str]:
     if not ctx.index_prices or ctx.index_high <= 0:
         return []
-    # 用收盘价序列做交叉验证，而非 K 线最高/最低价
+    # 用收盘价序列做交叉验证
     ch, cl = max(ctx.index_prices), min(ctx.index_prices)
     alerts = []
-    ref_high = ctx.index_close_high or ctx.index_high
-    ref_low = ctx.index_close_low or ctx.index_low
-    if abs(ref_high - ch) > 0.5:
-        alerts.append(f"⚠️ 最高价不一致: 记录={ref_high:.2f} 序列={ch:.2f}")
-    if abs(ref_low - cl) > 0.5:
-        alerts.append(f"⚠️ 最低价不一致: 记录={ref_low:.2f} 序列={cl:.2f}")
+    # index_close_high/low 未初始化时跳过（启动后首轮 collector 数据未到）
+    if ctx.index_close_high and ctx.index_close_low:
+        if abs(ctx.index_close_high - ch) > 0.5:
+            alerts.append(f"⚠️ 最高价不一致: 记录={ctx.index_close_high:.2f} 序列={ch:.2f}")
+        if abs(ctx.index_close_low - cl) > 0.5:
+            alerts.append(f"⚠️ 最低价不一致: 记录={ctx.index_close_low:.2f} 序列={cl:.2f}")
     return alerts
 
 
@@ -477,13 +452,9 @@ def _recompute_adjustment(ctx: CheckContext) -> list[str]:
                 f" (risk={ctx.risk_level} trend={trend[:8]})"
             )
         if actual_tp is not None and abs(actual_tp - expected_tp) > 0.001:
-            alerts.append(
-                f"🔴 止盈因子偏离: {code} 预期={expected_tp:.4f} 实际={actual_tp:.4f}"
-            )
+            alerts.append(f"🔴 止盈因子偏离: {code} 预期={expected_tp:.4f} 实际={actual_tp:.4f}")
         if actual_trail is not None and abs(actual_trail - expected_trail) > 0.001:
-            alerts.append(
-                f"🔴 移动止盈因子偏离: {code} 预期={expected_trail:.4f} 实际={actual_trail:.4f}"
-            )
+            alerts.append(f"🔴 移动止盈因子偏离: {code} 预期={expected_trail:.4f} 实际={actual_trail:.4f}")
     return alerts
 
 
@@ -505,9 +476,7 @@ def _recompute_ema(ctx: CheckContext) -> list[str]:
     if len(ema12) >= 10:
         recent = ema12[-10:]
         swings = sum(
-            1
-            for i in range(1, len(recent))
-            if (recent[i] - recent[i - 1]) * (recent[i - 1] - recent[i - 2]) < 0
+            1 for i in range(1, len(recent)) if (recent[i] - recent[i - 1]) * (recent[i - 1] - recent[i - 2]) < 0
         )
         if swings >= 7:
             return [f"⚠️ EMA12 异常振荡: 近10点 {swings} 次方向切换"]
@@ -557,10 +526,7 @@ def _scenario_probs_sum_to_one(ctx: CheckContext) -> list[str]:
     total = sum(ctx.scenario_probs.values())
     drift = abs(total - 1.0)
     if drift > 1e-10:
-        return [
-            f"🔴 情景概率总和高精度漂移: sum={total:.12f} 偏差={drift:.2e} "
-            f"(已{ctx.scenario_scan_count}轮累积)"
-        ]
+        return [f"🔴 情景概率总和高精度漂移: sum={total:.12f} 偏差={drift:.2e} (已{ctx.scenario_scan_count}轮累积)"]
     return []
 
 
@@ -582,10 +548,7 @@ def _scenario_not_collapsed(ctx: CheckContext) -> list[str]:
     max_prob = max(ctx.scenario_probs.values())
     if max_prob > 0.99:
         name = max(ctx.scenario_probs, key=ctx.scenario_probs.get)
-        return [
-            f"⚠️ 情景概率坍缩: {name}={max_prob:.4f} "
-            f"（其余 7 个情景合计 {1 - max_prob:.4f}）"
-        ]
+        return [f"⚠️ 情景概率坍缩: {name}={max_prob:.4f} （其余 7 个情景合计 {1 - max_prob:.4f}）"]
     return []
 
 

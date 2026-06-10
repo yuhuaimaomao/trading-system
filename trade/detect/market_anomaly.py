@@ -159,20 +159,22 @@ class AbnormalMonitorMixin:
             if self._prev_snapshot and gap_sec <= 120:
                 # 快照未变化时跳过（collector 推送周期 > 检测周期）
                 if id(current_snapshot) != id(self._prev_snapshot):
-                    # 冷却：距上次异动推送 < 10 分钟 → 跳过
-                    last_alert = getattr(self, "_last_abnormal_alert", 0)
-                    if now_ts - last_alert < 600:
-                        self._prev_snapshot = current_snapshot
-                        self._prev_snapshot_ts = now_ts
-                        return
                     self._ensure_industry_cache()
-                    messages = detector.detect_sector(
+                    messages, rapid_hits = detector.detect_sector(
                         current_snapshot,
                         self._prev_snapshot,
                         industry_cache=self._industry_cache,
                         resolve_name=self._resolve_name,
                     )
-                    if messages:
+                    # 急拉放量结构化数据：每轮都更新（买入管线时效性优先）
+                    self._last_rapid_hits = rapid_hits if rapid_hits else []
+                    if rapid_hits:
+                        logger.info(
+                            f"异动检测: {len(rapid_hits)}只急拉放量 (首只: {rapid_hits[0].get('name', '')} +{rapid_hits[0].get('change_pct', 0):.1f}%)"
+                        )
+                    # 告警冷却：10分钟内不重复推 Telegram
+                    last_alert = getattr(self, "_last_abnormal_alert", 0)
+                    if messages and now_ts - last_alert >= 600:
                         self._alert("\n".join(messages))
                         self._last_abnormal_alert = now_ts
 
@@ -303,18 +305,18 @@ class AbnormalDetector:
         previous: dict,
         industry_cache: dict = None,
         resolve_name=None,
-    ) -> list[str]:
-        """对比两轮快照，返回异动告警消息列表。"""
+    ) -> tuple[list[str], list[dict]]:
+        """对比两轮快照，返回 (文本告警, 急拉放量结构化数据)。"""
         alerts = []
         if not current or not previous:
             return alerts
 
         rapid_rise = getattr(settings, "ABNORMAL_RAPID_RISE_PCT", 1.0)
         vol_surge = getattr(settings, "ABNORMAL_VOLUME_SURGE_RATIO", 3.0)
-        near_limit = getattr(settings, "ABNORMAL_NEAR_LIMIT_PCT", 7.0)
+        near_limit_ratio = getattr(settings, "ABNORMAL_NEAR_LIMIT_RATIO", 0.85)
         TOP_N = 10
 
-        rapid_hits = []  # (code, delta_pct, vol_ratio, name, industry)
+        rapid_hits = []  # (code, delta_pct, vol_ratio, name, industry, price, change_pct, amount)
         limit_hits = []
 
         for code, info in current.items():
@@ -328,11 +330,15 @@ class AbnormalDetector:
             cur_vol = float(info.get("amount", 0))
             prev_vol = float(prev.get("amount", 0))
             vol_ratio = cur_vol / prev_vol if prev_vol > 0 else 0
+            price = float(info.get("price", 0))
 
             # 急速拉升且放量：必须同时满足
             if price_delta > rapid_rise and vol_ratio > vol_surge:
-                rapid_hits.append((code, price_delta, vol_ratio, name, industry))
+                rapid_hits.append((code, price_delta, vol_ratio, name, industry, price, cur_chg, cur_vol))
 
+            # 逼近涨停：按涨跌幅限制比例计算（主板10%→8.5%，双创20%→17%）
+            limit_pct = 0.20 if code.startswith(("300", "688")) else 0.10
+            near_limit = limit_pct * near_limit_ratio
             if cur_chg >= near_limit and prev_chg < near_limit:
                 limit_hits.append((code, cur_chg, name))
 
@@ -355,7 +361,7 @@ class AbnormalDetector:
 
         if rapid_hits:
             top = rapid_hits[:TOP_N]
-            lines = " ".join(f"{n} {d:+.1f}% {v:.0f}×" for c, d, v, n, _ in top)
+            lines = " ".join(f"{n} {d:+.1f}% {v:.0f}×" for c, d, v, n, *_ in top)
             suffix = f" 等{len(rapid_hits)}只" if len(rapid_hits) > TOP_N else ""
             alerts.append(f"🏭 急拉放量 {now}\n   {lines}{suffix}")
         if limit_hits:
@@ -363,7 +369,22 @@ class AbnormalDetector:
             lines = " ".join(f"{n} {d:+.1f}%" for c, d, n in top)
             alerts.append(f"🚀 逼近涨停 {now}\n   {lines}")
 
-        return alerts
+        # 结构化输出：供买入管线使用
+        structured = [
+            {
+                "code": c,
+                "delta_pct": d,
+                "vol_ratio": v,
+                "name": n,
+                "industry": i,
+                "price": p,
+                "change_pct": chg,
+                "amount": amt,
+            }
+            for c, d, v, n, i, p, chg, amt in rapid_hits
+        ]
+
+        return alerts, structured
 
 
 # ======================== 换仓评估（从 PaperTrader 迁入）========================
@@ -435,6 +456,11 @@ def _do_evaluate_swaps(
             "score": buy_cand.get("score", 0),
             "signal_id": None,
         }
+        # 同步到持仓对象（持久化止损止盈）
+        pos = self.paper_account.positions.get(buy_code)
+        if pos:
+            pos.stop_loss = buy_cand.get("sl", 0)
+            pos.take_profit = buy_cand.get("tp", 0)
     return buy_result.success
 
 
@@ -508,6 +534,8 @@ def _submit_swap_ai(
         max_tokens=150,
         dedupe=True,
     )
+    if not ok:
+        self._alert_private("⚠️ AI 队列已满，换仓评估被跳过\n   规则决策不受影响，但缺少 AI 辅助判断")
     if ok:
         self._swap_ctx = {
             "candidates": candidates,

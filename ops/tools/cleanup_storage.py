@@ -23,11 +23,7 @@ def run():
         from system.config.trading_calendar import get_previous_trading_day as _gptd
 
         cutoff_str = _gptd(offset=7)
-        cutoff = (
-            datetime.strptime(cutoff_str, "%Y-%m-%d")
-            if cutoff_str
-            else datetime.now() - timedelta(days=10)
-        )
+        cutoff = datetime.strptime(cutoff_str, "%Y-%m-%d") if cutoff_str else datetime.now() - timedelta(days=10)
     except Exception:
         cutoff = datetime.now() - timedelta(days=10)
 
@@ -102,26 +98,32 @@ def run():
         if deleted:
             logger.info(f"  🗑️  报告：删除 {deleted} 个文件")
 
-    # 5. 清理 cls_telegraph 30 天前的数据
-    db_cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    # 5. 清理容灾表历史数据 + cls_telegraph 旧数据
     db_path = Path(DATABASE_PATH)
     if db_path.exists():
         conn = sqlite3.connect(str(db_path))
         try:
+            idx_cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            deleted_idx = conn.execute("DELETE FROM index_snapshots WHERE trade_date < ?", (idx_cutoff,)).rowcount
+            if deleted_idx:
+                conn.commit()
+                logger.info(f"  🗑️  指数快照：删除 {deleted_idx} 条（截止 {idx_cutoff}）")
+
+            breadth_cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            deleted_br = conn.execute("DELETE FROM market_breadth WHERE trade_date < ?", (breadth_cutoff,)).rowcount
+            if deleted_br:
+                conn.commit()
+                logger.info(f"  🗑️  市场宽度：删除 {deleted_br} 条（截止 {breadth_cutoff}）")
+
+            db_cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             cursor = conn.execute(
-                """
-                SELECT COUNT(*), COUNT(DISTINCT trade_date)
-                FROM cls_telegraph
-                WHERE trade_date < ?
-            """,
+                "SELECT COUNT(*), COUNT(DISTINCT trade_date) FROM cls_telegraph WHERE trade_date < ?",
                 (db_cutoff,),
             )
             row = cursor.fetchone()
             del_count, del_dates = row[0], row[1]
             if del_count > 0:
-                conn.execute(
-                    "DELETE FROM cls_telegraph WHERE trade_date < ?", (db_cutoff,)
-                )
+                conn.execute("DELETE FROM cls_telegraph WHERE trade_date < ?", (db_cutoff,))
                 conn.commit()
                 logger.info(f"  🗑️  电报：删除 {del_count} 条（{del_dates}天）")
             else:

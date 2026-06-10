@@ -142,6 +142,12 @@ def ensure_tables():
     with suppress(sqlite3.OperationalError):
         cursor.execute("ALTER TABLE trade_portfolio_positions ADD COLUMN locked_volume INTEGER DEFAULT 0")
 
+    # stop_loss / take_profit 列 — 止损止盈持久化（幂等迁移）
+    with suppress(sqlite3.OperationalError):
+        cursor.execute("ALTER TABLE trade_portfolio_positions ADD COLUMN stop_loss REAL DEFAULT 0")
+    with suppress(sqlite3.OperationalError):
+        cursor.execute("ALTER TABLE trade_portfolio_positions ADD COLUMN take_profit REAL DEFAULT 0")
+
     # 添加 account 字段（幂等迁移）
     for table in [
         "trade_signals",

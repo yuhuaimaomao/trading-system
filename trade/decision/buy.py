@@ -55,6 +55,7 @@ class BuyEvalInput:
     # 盘口
     ob_ratio: float = 0.5
     ob_reason: str = ""
+    ob_delta: float = 0.0  # 盘口变化率，正=买盘增强
 
     # 大单
     big_ratio: float = 0.5
@@ -64,8 +65,10 @@ class BuyEvalInput:
     up_stop: float = 0
     down_stop: float = 0
 
-    # 昨日趋势背景
+    # 昨日趋势背景 + 资金流趋势
     yesterday_mf_ratio: float = 0
+    mf_trend_score: float = 0
+    mf_trend_strength: str = ""
     ma5_angle: float = 0
     day_position: float | None = None
     daily_macd_dif: float = 0
@@ -88,6 +91,15 @@ class BuyEvalInput:
     ai_bias: str = ""  # "" / "focus" / "avoid"
     ai_size_mult: float = 1.0
 
+    # 波动率异动
+    vol_breakout: bool = False
+    vol_ratio: float = 1.0
+    vol_signal: str = ""
+
+    # 开盘强度
+    opening_bias: str = "neutral"
+    opening_score: float = 0.0
+
 
 def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     """多维买入决策评估。返回 (allowed, reason, size_multiplier)。"""
@@ -103,9 +115,12 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     sector_very_strong = ctx.sector_very_strong
 
     # 1. 板块趋势
-    sector_reject_pct = -1.0
+    sector_reject_pct = -2.0  # 放宽：只在大幅下跌时拒绝
     if not trend or "数据不足" in trend or "数据积累中" in trend:
-        reject_reasons.append(f"板块数据不足，开盘初期暂不买入{trend}")
+        warn_reasons.append(f"板块数据不足，降低仓位{trend}")
+        size_mul *= 0.5
+    elif "持续走弱" in trend:
+        reject_reasons.append(f"板块持续走弱，不买入{trend}")
         size_mul = 0.0
     elif sector_chg is not None and sector_chg <= sector_reject_pct:
         reject_reasons.append(f"板块跌幅 {sector_chg:+.1f}%，拒绝买入")
@@ -116,14 +131,16 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     elif recovery_risk is not None:
         reject_reasons.append(f"板块从日内低点反弹 {recovery_risk:+.1f}%，疑似死猫跳不追")
         size_mul = 0.0
-    elif "持续走弱" in trend:
-        reject_reasons.append(f"板块持续走弱，不买入{trend}")
-        size_mul = 0.0
     elif "走弱" in trend:
         warn_reasons.append(f"板块偏弱{trend}")
         size_mul *= 0.5
     elif "持续走强" in trend:
         size_mul = min(1.0, size_mul * 1.2)
+
+    # 板块偏弱（数值检查，避免与文本趋势检查双重扣分）
+    if sector_chg is not None and sector_chg < 0 and "走弱" not in trend:
+        warn_reasons.append(f"板块偏弱 {sector_chg:+.1f}%")
+        size_mul *= 0.6
 
     # 1b. 概念板块趋势
     if ctx.concept_score <= -2:
@@ -145,21 +162,21 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
             size_mul *= ctx.ai_size_mult
             warn_reasons.append("AI建议回避")
 
-    # 2. 买入区位置
+    # 2. 买入区位置 — 放宽：只在极端位置拒绝
     zone_range = ctx.buy_max - ctx.buy_min if ctx.buy_max > ctx.buy_min else 1
     zone_pos = (ctx.price - ctx.buy_min) / zone_range
-    if zone_pos >= 0.85:
+    if zone_pos >= 0.95:  # 放宽：之前0.85
         reject_reasons.append(f"买入区顶部({zone_pos:.0%})，不追高")
     elif zone_pos >= 0.65:
         warn_reasons.append(f"买入区偏上({zone_pos:.0%})")
         size_mul *= 0.7
 
-    # 3. 布林带 + 均线
+    # 3. 布林带 + 均线 — 放宽阈值
     pct_b = ctx.daily_bb_pct_b
-    b_reject = 95 if sector_very_strong else 90
-    b_warn = 85 if sector_very_strong else 75
+    b_reject = 98 if sector_very_strong else 95  # 放宽：之前 95/90
+    b_warn = 85 if sector_very_strong else 75  # 保持
     if pct_b is not None and pct_b >= b_reject:
-        reject_reasons.append(f"布林带超买(%B={pct_b:.0f})，回调风险高")
+        reject_reasons.append(f"布林带极度超买(%B={pct_b:.0f})，回调风险高")
     elif pct_b is not None and pct_b >= b_warn:
         warn_reasons.append(f"布林带偏上(%B={pct_b:.0f})")
         size_mul *= 0.8
@@ -184,24 +201,24 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     if near_support and not reject_reasons:
         size_mul = min(1.0, size_mul * 1.2)
 
-    # 3b. 日线 KDJ/RSI
+    # 3b. 日线 KDJ/RSI — 放宽阈值
     d_j = ctx.daily_kdj_j
     d_rsi6 = ctx.daily_rsi6
-    if d_j is not None and d_j > 100:
+    if d_j is not None and d_j > 110:  # 放宽：之前 100
         reject_reasons.append(f"日线KDJ极度超买(J={d_j:.0f})")
     elif d_j is not None and d_j > 85:
         warn_reasons.append(f"日线KDJ超买(J={d_j:.0f})")
         size_mul *= 0.6
-    if d_rsi6 is not None and d_rsi6 >= 80:
+    if d_rsi6 is not None and d_rsi6 >= 85:  # 放宽：之前 80
         reject_reasons.append(f"日线RSI6超买({d_rsi6:.0f})，不宜追高")
     elif d_rsi6 is not None and d_rsi6 >= 70:
         warn_reasons.append(f"日线RSI6偏高({d_rsi6:.0f})")
         size_mul *= 0.7
 
-    # 4. 日内分钟级指标
+    # 4. 日内分钟级指标 — 放宽阈值
     if ctx.intra_available:
         r6 = ctx.intra_rsi6
-        if r6 >= 85:
+        if r6 >= 92:  # 放宽：之前 85
             reject_reasons.append(f"日内RSI6极度超买({r6:.0f})，追高风险极大")
         elif r6 >= 75:
             warn_reasons.append(f"日内RSI6超买({r6:.0f})")
@@ -209,7 +226,7 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         elif r6 <= 20:
             size_mul = min(1.0, size_mul * 1.1)
 
-        macd_reject_bar = -0.8 if sector_very_strong else -0.5
+        macd_reject_bar = -0.8  # 统一放宽到 -0.8
         macd_warn_bar = -0.3 if sector_very_strong else -0.1
         if ctx.intra_macd_direction == "bearish" and ctx.intra_macd_bar < macd_reject_bar:
             reject_reasons.append("日内MACD强烈空头，下跌动能未衰竭")
@@ -221,7 +238,7 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
 
         j = ctx.intra_kdj_j
         k, d = ctx.intra_kdj_k, ctx.intra_kdj_d
-        if j > 100:
+        if j > 110:  # 放宽：之前 100
             reject_reasons.append(f"日内KDJ极度超买(J={j:.0f})")
         elif j > 85:
             warn_reasons.append(f"日内KDJ超买(J={j:.0f})")
@@ -238,7 +255,7 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         elif vs_ma5 < -1.5:
             warn_reasons.append(f"价格低于日内MA5({vs_ma5:+.1f}%)")
 
-    # 5. 盘口
+    # 5. 盘口 + 变化率
     if ctx.ob_ratio <= 0.3 and ctx.ob_reason:
         reject_reasons.append(f"盘口卖盘沉重(买盘{ctx.ob_ratio:.0%})")
     elif ctx.ob_ratio <= 0.42 and ctx.ob_reason:
@@ -246,6 +263,14 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         size_mul *= 0.85
     elif ctx.ob_ratio >= 0.7:
         size_mul = min(1.0, size_mul * 1.1)
+    # 盘口变化：买盘在增强比绝对比例更重要
+    if ctx.ob_delta > 0.05:
+        size_mul = min(1.0, size_mul * 1.15)  # 买盘快速增强，强加分
+    elif ctx.ob_delta > 0.02:
+        size_mul = min(1.0, size_mul * 1.05)
+    elif ctx.ob_delta < -0.05:
+        warn_reasons.append("盘口买盘减弱")
+        size_mul *= 0.85
 
     # 6. 大单
     if ctx.big_ratio <= 0.35 and ctx.big_reason:
@@ -256,10 +281,10 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     elif ctx.big_ratio >= 0.65 and ctx.big_reason:
         size_mul = min(1.0, size_mul * 1.1)
 
-    # 7. 涨跌停空间
+    # 7. 涨跌停空间 — 放宽：仅 < 1% 才拒绝
     if ctx.up_stop > 0 and price > 0:
         room_pct = (ctx.up_stop - price) / price * 100
-        if room_pct < 2:
+        if room_pct < 1:  # 放宽：之前 2
             reject_reasons.append(f"距涨停仅{room_pct:.1f}%，追板风险极高")
         elif room_pct < 4:
             warn_reasons.append(f"距涨停{room_pct:.1f}%，上行空间有限")
@@ -269,15 +294,43 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         if risk_pct > 15:
             reject_reasons.append(f"距跌停{risk_pct:.0f}%，下方风险空间过大")
 
-    # 8. 昨日趋势背景
-    mf_ratio = ctx.yesterday_mf_ratio
-    if mf_ratio > 5:
+    # 7b. 开盘强度 — 当日市场氛围
+    if ctx.opening_bias == "bullish":
         size_mul = min(1.0, size_mul * 1.1)
-    elif mf_ratio < -5:
-        reject_reasons.append(f"昨日主力大幅流出({mf_ratio:.1f}%)，今日承压")
-    elif mf_ratio < -2:
-        warn_reasons.append(f"昨日主力流出({mf_ratio:.1f}%)")
+    elif ctx.opening_bias == "bearish" and ctx.opening_score < -3:
+        warn_reasons.append("开盘偏弱，控制仓位")
         size_mul *= 0.85
+
+    # 8. 资金流趋势评分（替代单日阈值判断）
+    mf_score = ctx.mf_trend_score
+    mf_strength = ctx.mf_trend_strength
+    if mf_strength:
+        if mf_score >= 8:
+            size_mul = min(1.0, size_mul * 1.2)  # 强势吸筹，加仓
+        elif mf_score >= 5:
+            size_mul = min(1.0, size_mul * 1.1)  # 温和流入
+        elif mf_score >= 2:
+            pass  # 小幅流入，不调整
+        elif mf_score >= 0:
+            warn_reasons.append(f"资金{ctx.mf_trend_strength}")
+            size_mul *= 0.9
+        elif mf_score >= -3:
+            warn_reasons.append(f"资金{ctx.mf_trend_strength}，谨慎")
+            size_mul *= 0.75
+        else:
+            reject_reasons.append(f"资金持续流出({ctx.mf_trend_strength})，不买入")
+            size_mul = 0.0
+
+    # 保留单日 mf_ratio 作为辅助（暂无趋势数据时的 fallback）
+    if mf_score == 0 and ctx.yesterday_mf_ratio != 0:
+        mf_ratio = ctx.yesterday_mf_ratio
+        if mf_ratio > 5:
+            size_mul = min(1.0, size_mul * 1.1)
+        elif mf_ratio < -8:
+            reject_reasons.append(f"昨日主力大幅流出({mf_ratio:.1f}%)，今日承压")
+        elif mf_ratio < -3:
+            warn_reasons.append(f"昨日主力流出({mf_ratio:.1f}%)")
+            size_mul *= 0.85
 
     ma5_ang = ctx.ma5_angle
     if ma5_ang < -2:
@@ -302,7 +355,7 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
         size_mul = min(1.0, size_mul * 1.05)
 
     dk_j = ctx.daily_kdj_j_daily
-    if dk_j > 100:
+    if dk_j > 110:  # 放宽：之前 100
         reject_reasons.append(f"日线KDJ极度超买(J={dk_j:.0f})")
     elif dk_j > 85:
         warn_reasons.append(f"日线KDJ超买(J={dk_j:.0f})")
@@ -328,6 +381,20 @@ def evaluate_buy(ctx: BuyEvalInput) -> tuple[bool, str, float]:
     if bb_w > bb_warn:
         warn_reasons.append(f"布林带宽({bb_w:.0f})，波动剧烈")
         size_mul *= 0.85 if sector_strong else 0.8
+
+    # 8b. 波动率异动 — 资金活动信号
+    if ctx.vol_breakout and ctx.vol_signal:
+        vol_r = ctx.vol_ratio
+        if ctx.vol_signal.startswith("极端") and vol_r > 3.0:
+            if sector_strong:
+                size_mul = min(1.0, size_mul * 1.1)
+            else:
+                warn_reasons.append(f"波动率极端异动({vol_r:.1f}x)")
+                size_mul *= 0.8
+        elif ctx.vol_signal.startswith("强烈"):
+            size_mul = min(1.0, size_mul * 1.1)
+        elif ctx.vol_signal.startswith("温和"):
+            size_mul = min(1.0, size_mul * 1.05)
 
     # 9. 价格走势
     if ctx.price_action == "declining":

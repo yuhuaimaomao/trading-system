@@ -213,6 +213,8 @@ class PaperAccount:
                     "holding_days": pos.holding_days,
                     "entry_date": pos.entry_date,
                     "locked_volume": pos.locked_volume,
+                    "stop_loss": getattr(pos, "stop_loss", 0) or 0,
+                    "take_profit": getattr(pos, "take_profit", 0) or 0,
                 }
             ],
         )
@@ -283,6 +285,8 @@ class PaperAccount:
                     "pnl_pct": pos.pnl_pct,
                     "entry_date": pos.entry_date,
                     "locked_volume": getattr(pos, "locked_volume", 0),
+                    "stop_loss": getattr(pos, "stop_loss", 0) or 0,
+                    "take_profit": getattr(pos, "take_profit", 0) or 0,
                 }
             )
         self.repo.insert_positions(trade_date, "paper", pos_rows)
@@ -360,6 +364,8 @@ class PaperAccount:
                     locked_volume=row.get("locked_volume", 0),
                     holding_days=row.get("holding_days", 0) or 0,
                     pre_close=row.get("pre_close", 0) or 0,
+                    stop_loss=row.get("stop_loss", 0) or 0,
+                    take_profit=row.get("take_profit", 0) or 0,
                 )
                 logger.info(f"恢复持仓: {code} {row.get('stock_name', '')} {volume}股 成本{avg_cost:.2f}")
             # 扣除已占用资金，确保 cash 与持仓一致
@@ -515,6 +521,8 @@ class PaperAccount:
                     "holding_days": pos.holding_days,
                     "entry_date": pos.entry_date,
                     "locked_volume": getattr(pos, "locked_volume", 0),
+                    "stop_loss": getattr(pos, "stop_loss", 0) or 0,
+                    "take_profit": getattr(pos, "take_profit", 0) or 0,
                 }
             )
 

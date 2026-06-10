@@ -39,6 +39,8 @@ _POSITION_COLS = frozenset(
         "holding_days",
         "entry_date",
         "locked_volume",
+        "stop_loss",
+        "take_profit",
         "trade_date",
         "account",
         "created_at",
@@ -53,7 +55,8 @@ _SNAPSHOT_ALL_COLS = (
 _POSITION_ALL_COLS = (
     "id, trade_date, account, stock_code, stock_name, volume, "
     "avg_cost, current_price, market_value, pnl, pnl_pct, "
-    "pre_close, daily_pnl, holding_days, entry_date, locked_volume, created_at"
+    "pre_close, daily_pnl, holding_days, entry_date, locked_volume, "
+    "stop_loss, take_profit, created_at"
 )
 
 

@@ -30,20 +30,20 @@ class TestEvaluateBuy:
         assert "持续走弱" in reason
 
     def test_zone_top_reject(self):
-        ok, reason, mul = evaluate_buy(self._make_ctx(price=10.45, buy_min=9.5, buy_max=10.5))
+        ok, reason, mul = evaluate_buy(self._make_ctx(price=10.46, buy_min=9.5, buy_max=10.5))
         assert not ok
         assert "顶部" in reason
 
     def test_bb_overbought_reject(self):
-        ok, reason, mul = evaluate_buy(self._make_ctx(daily_bb_pct_b=95))
+        ok, reason, mul = evaluate_buy(self._make_ctx(daily_bb_pct_b=98))
         assert not ok
-        assert "布林带超买" in reason
+        assert "布林带" in reason
 
     def test_intra_rsi_extreme(self):
         ok, reason, mul = evaluate_buy(
             self._make_ctx(
                 intra_available=True,
-                intra_rsi6=90,
+                intra_rsi6=93,
             )
         )
         assert not ok
@@ -136,15 +136,18 @@ class TestSizing:
 
     def test_normal(self):
         amount, reason = calculate_position_size("000001", 10.0, 9.5, 10.5, "normal", "走强")
-        assert amount == 16000
+        # 动态上限：200000 * 0.3 = 60000，走强 ×1.2 触及 cap
+        assert amount == 60000
 
     def test_cautious(self):
         amount, reason = calculate_position_size("000001", 10.0, 9.5, 10.5, "v_reversal", "横盘")
-        assert amount == 8000
+        # cautious_cap = 60000 * 0.5 = 30000
+        assert amount == 30000
 
     def test_sector_weak_reduce(self):
         amount, reason = calculate_position_size("000001", 10.0, 9.5, 10.5, "normal", "持续走弱")
-        assert amount < 10000
+        # 60000 * 0.3 = 18000 > 5000 → 18000
+        assert amount < 25000
 
     def test_breadth_down(self):
         amount, reason = calculate_position_size(
@@ -156,12 +159,13 @@ class TestSizing:
             "走强",
             market_breadth={"up": 200, "down": 800},
         )
-        assert amount < 10000
+        # breadth: 60000*0.3=18000, sector走强: 18000*1.2=21600
+        assert amount < 25000
 
     def test_zone_bottom_boost(self):
         amount, reason = calculate_position_size("000001", 9.55, 9.5, 10.5, "normal", "横盘")
         # 买入区下沿，偏激进
-        assert amount > 15000
+        assert amount > 50000
 
 
 class TestSellDecision:

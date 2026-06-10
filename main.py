@@ -66,8 +66,6 @@ def cmd_monitor():
     """盘中盯盘 — 拉起 Watcher 进程（PID 文件防多实例）"""
     import atexit
     import os
-
-    # stdout/stderr 重定向必须在 import Watcher 之前（logger 初始化时会捕获 sys.stdout）
     import sys as _sys
     from datetime import datetime as _dt
 
@@ -78,13 +76,20 @@ def cmd_monitor():
     _monitor_fh = open(  # noqa: SIM115
         str(_log_dir / "monitor.log"), "a", encoding="utf-8", buffering=1
     )
+
+    # 保存原始 stderr，确保 import 阶段异常可见
+    _orig_stderr = _sys.stderr
     _sys.stdout = _monitor_fh
     _sys.stderr = _monitor_fh
 
-    from data.collect.live.quotes import QuoteClient
-    from system.message import MessageSender
-    from system.utils.logger import get_task_logger, set_current_task
-    from trade.core.watcher import Watcher
+    try:
+        from data.collect.live.quotes import QuoteClient
+        from system.message import MessageSender
+        from system.utils.logger import get_task_logger, set_current_task
+        from trade.core.watcher import Watcher
+    except Exception:
+        _sys.stderr = _orig_stderr
+        raise
 
     set_current_task("monitor")
     logger = get_task_logger("monitor")
@@ -656,9 +661,14 @@ def cmd_test():
 
 def cmd_stock():
     """个股综合分析。用法: python main.py stock 600519 [--quick|--deep]"""
+    import re
+
     code = sys.argv[2] if len(sys.argv) > 2 else None
     if not code:
         print("用法: python main.py stock <股票代码> [--quick|--deep]")
+        sys.exit(1)
+    if not re.match(r"^\d{6}$", code):
+        print(f"无效股票代码: {code}，需为 6 位数字")
         sys.exit(1)
 
     from stock import StockAnalyzer

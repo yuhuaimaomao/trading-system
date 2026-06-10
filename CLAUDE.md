@@ -32,6 +32,10 @@ trading-system — QMT 量化交易系统。
 
 依赖单向，各模块独立。
 
+**数据流**：QMT (Windows) → Collector (Mac, TCP 15555) → Watcher。全市场 4717 只快照每 7 秒推送到 `_market_snapshot`，`_get_realtime_prices` 直接读内存，不走 QMT HTTP。
+
+**双引擎**：引擎1 信号跟踪（`_check_buy_candidates` → `evaluate_buy`）+ 引擎2 盘中发现（`_scout_intraday`）。详解见 [交易系统说明文档](docs/project/交易系统说明文档.md)
+
 ### 目录结构
 
 ```
@@ -79,7 +83,7 @@ data/
 ├── _base.py              # 共享基类 + connect() + get_db_conn()
 ├── schema.py             # DDL + 迁移
 ├── market/               # 行情基础数据（跨域共享）
-│   ├── stock_basic.py    #   StockReader — 个股查询
+│   ├── stock_basic.py    #   StockReader — 个股查询/资金流趋势/波动率异动
 │   ├── sector_data.py    #   SectorReader — 板块查询
 │   └── events_data.py    #   LimitPoolReader — 涨跌停/龙虎榜
 ├── trade/                # 交易线
@@ -106,8 +110,9 @@ data/
 
 | 文档 | 内容 |
 |------|------|
-| [docs/project/交易系统说明文档.md](docs/project/交易系统说明文档.md) | 系统说明书，面向人类，极尽详细 |
+| [docs/project/交易系统说明文档.md](docs/project/交易系统说明文档.md) | 系统说明书，双引擎详解、模块接口、数据流 |
 | [docs/project/数据库字典.md](docs/project/数据库字典.md) | 全部 46 张表的结构、索引、用途 |
-| [docs/project/约定与规范.md](docs/project/约定与规范.md) | 关键约定、编码规范、日志、AI调用、审计、测试、注意事项 |
+| [docs/project/约定与规范.md](docs/project/约定与规范.md) | 关键约定、编码规范、日志、AI调用、审计、测试 |
+| [docs/project/已知陷阱.md](docs/project/已知陷阱.md) | 踩过的坑，QMT行情/Watcher稳定性/数据一致性/代码路径/交易逻辑 |
 | [docs/project/更新记录.md](docs/project/更新记录.md) | 重大变更、bug 修复、架构调整时间线 |
 | `docs/` 下其他文件 | 各功能模块设计文档（中文文件名） |

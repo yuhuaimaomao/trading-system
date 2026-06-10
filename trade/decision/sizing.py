@@ -1,5 +1,17 @@
 """仓位计算 + 买入区修正 — 纯规则函数，不依赖 Watcher state。"""
 
+from system.config import settings
+
+
+def _get_max_amount(total_value: float) -> int:
+    """动态单笔上限：账户总资产 × 仓位百分比，百元取整。"""
+    return int(total_value * settings.DEFAULT_POSITION_PCT // 100 * 100)
+
+
+def _get_cautious_amount(total_value: float) -> int:
+    """谨慎模式单笔上限：动态上限的 50%。"""
+    return int(_get_max_amount(total_value) * 0.5 // 100 * 100)
+
 
 def calculate_position_size(
     code: str,
@@ -11,8 +23,17 @@ def calculate_position_size(
     market_breadth: dict | None = None,
     industry_cache: dict[str, str] | None = None,
     morning_sector_bias: dict[str, dict] | None = None,
+    total_value: float | None = None,
 ) -> tuple[int, str]:
-    """根据盘面动态计算买入金额（0-16000），返回 (金额, 决策理由)。"""
+    """根据盘面动态计算买入金额，返回 (金额, 决策理由)。
+
+    total_value: 当前账户总资产，用于动态计算单笔上限。
+                 不传时使用 PAPER_INITIAL_CAPITAL（向后兼容）。
+    """
+    tv = total_value or settings.PAPER_INITIAL_CAPITAL
+    max_cap = _get_max_amount(tv)
+    cautious_cap = _get_cautious_amount(tv)
+
     BLOCKED = (
         "panic",
         "one_sided",
@@ -35,13 +56,13 @@ def calculate_position_size(
         "gap_down_recover",
     )
     if pattern in CAUTIOUS:
-        base = 8000
+        base = cautious_cap
         reason = f"市场{pattern}模式，谨慎参与"
     elif pattern in ("normal", "uptrend"):
-        base = 16000
+        base = max_cap
         reason = "大盘正常" if pattern == "normal" else "大盘上行"
     else:
-        base = 16000
+        base = max_cap
         reason = ""
 
     # 市场宽度修正
@@ -64,9 +85,9 @@ def calculate_position_size(
         base = max(base * 0.6, 5000)
         reason += " 板块走弱" if reason else "板块走弱"
     elif "持续走强" in sector_trend:
-        base = min(base * 1.3, 16000)
+        base = min(base * 1.3, max_cap)
     elif "走强" in sector_trend:
-        base = min(base * 1.2, 16000)
+        base = min(base * 1.2, max_cap)
 
     # 早盘 AI 板块倾向修正
     cache = industry_cache or {}
@@ -75,7 +96,7 @@ def calculate_position_size(
     if bias:
         b_mult = bias.get("size_mult", 1.0)
         if bias.get("bias") == "focus":
-            base = min(int(base * b_mult), 16000)
+            base = min(int(base * b_mult), max_cap)
             reason += f" AI聚焦({b_mult:.1f}x)" if reason else f"AI聚焦({b_mult:.1f}x)"
         elif bias.get("bias") == "avoid":
             base = max(int(base * b_mult), 3000)
@@ -85,7 +106,7 @@ def calculate_position_size(
     zone_range = buy_max - buy_min if buy_max > buy_min else 1
     position_in_zone = (price - buy_min) / zone_range
     if position_in_zone <= 0.33:
-        base = min(base * 1.1, 16000)
+        base = min(base * 1.1, max_cap)
         reason += " 买入区下沿"
     elif position_in_zone >= 0.67:
         base = max(base * 0.7, 5000)
@@ -162,9 +183,7 @@ def calc_unified_stop_loss(
     # 5. 支撑位约束（从 indicators 获取）
     supports = ind.get("_supports", []) if ind else []
     if supports:
-        nearest_support = (
-            supports[0][0] if isinstance(supports[0], tuple) else supports[0]
-        )
+        nearest_support = supports[0][0] if isinstance(supports[0], tuple) else supports[0]
         raw_sl = max(raw_sl, nearest_support * 0.99)
 
     # 6. 硬地板（不低于 93%）
@@ -211,9 +230,7 @@ def calc_unified_take_profit(
     # 阻力位约束
     resistances = ind.get("_resistances", []) if ind else []
     if resistances:
-        nearest_resistance = (
-            resistances[0][0] if isinstance(resistances[0], tuple) else resistances[0]
-        )
+        nearest_resistance = resistances[0][0] if isinstance(resistances[0], tuple) else resistances[0]
         raw_tp = min(raw_tp, nearest_resistance)
 
     # 硬天花板

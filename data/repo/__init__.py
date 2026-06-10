@@ -460,10 +460,22 @@ class TradeRepository:
             return StockReader.get_daily_indicators(conn, code)
 
     def get_money_flow(self, code: str) -> dict | None:
-        from data.readers.stock_reader import StockReader
+        from data.market.stock_basic import StockReader
 
         with self._signal._conn() as conn:
             return StockReader.get_money_flow(conn, code)
+
+    def get_money_flow_trend(self, code: str, days: int = 5) -> dict:
+        from data.market.stock_basic import StockReader
+
+        with self._signal._conn() as conn:
+            return StockReader.get_money_flow_trend(conn, code, days)
+
+    def get_volatility_breakout(self, code: str, lookback: int = 20) -> dict:
+        from data.market.stock_basic import StockReader
+
+        with self._signal._conn() as conn:
+            return StockReader.get_volatility_breakout(conn, code, lookback)
 
     def get_support_resistance(self, code: str, price: float) -> dict:
         from data.readers.stock_reader import StockReader
