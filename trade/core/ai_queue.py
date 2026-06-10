@@ -39,7 +39,7 @@ class AIQueue:
         key: str,
         prompt: str,
         system_prompt: str = "",
-        max_tokens: int = 100,
+        max_tokens: int = None,
         dedupe: bool = True,
     ) -> bool:
         from system.ai import ai

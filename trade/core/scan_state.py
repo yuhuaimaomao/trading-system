@@ -27,6 +27,7 @@ class MarketRegime:
     breadth_healthy: bool = True
     ma20_above: bool = True
     multi_day_downtrend: bool = False
+    regime_unstable_day: bool = False  # 当日 regime 高频抖动，信号不可信
 
 
 @dataclass
@@ -134,9 +135,7 @@ class ScanState:
     # ═══════════════════════════════════════════════════════════════
     # 市场宽度 + 量能
     # ═══════════════════════════════════════════════════════════════
-    market_breadth: dict = field(
-        default_factory=lambda: {"up": 0, "down": 0, "flat": 0, "total": 0}
-    )
+    market_breadth: dict = field(default_factory=lambda: {"up": 0, "down": 0, "flat": 0, "total": 0})
     market_turnovers: list[float] = field(default_factory=list)
     volume_alerted_divergence: bool = False
 
@@ -161,20 +160,12 @@ class ScanState:
     # ═══════════════════════════════════════════════════════════════
     # 板块趋势跟踪
     # ═══════════════════════════════════════════════════════════════
-    sector_trend_history: dict[str, list[float]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-    sector_trend_continuity: dict[str, int] = field(
-        default_factory=lambda: defaultdict(int)
-    )
+    sector_trend_history: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    sector_trend_continuity: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     sector_trend_last_dir: dict[str, str] = field(default_factory=dict)
     sector_trend_start: dict[str, str] = field(default_factory=dict)
-    concept_trend_history: dict[str, list[float]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-    concept_trend_continuity: dict[str, int] = field(
-        default_factory=lambda: defaultdict(int)
-    )
+    concept_trend_history: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    concept_trend_continuity: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     concept_trend_last_dir: dict[str, str] = field(default_factory=dict)
     concept_trend_start: dict[str, str] = field(default_factory=dict)
 
@@ -209,9 +200,7 @@ class ScanState:
     pos_meta: dict[str, dict] = field(default_factory=dict)
     bought_watch: dict[str, dict] = field(default_factory=dict)
     recent_prices: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
-    snapshot_price_history: dict[str, list[tuple[float, float]]] = field(
-        default_factory=dict
-    )
+    snapshot_price_history: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
 
     # 止损提醒循环
     sl_reminders: dict[str, dict] = field(default_factory=dict)

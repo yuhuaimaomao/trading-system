@@ -120,7 +120,6 @@ class AIAuditor:
                 prompt=prompt,
                 model="audit",
                 system_prompt="你是策略审计分析师。严格按 JSON 格式输出（用```json包裹），不要额外解释。",
-                max_tokens=4096,
             )
             return text
         except Exception as e:

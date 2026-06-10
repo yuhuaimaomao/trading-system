@@ -1,0 +1,647 @@
+任务: audit
+模型: qwen3.7-plus
+日期: 2026-06-10
+时间: 2026-06-10 21:18:37
+============================================================
+
+[system] 你是一个量化交易系统的盯盘审计 AI。
+
+你的工作是：收到当日 Watcher 的决策日志 + 规则审计发现 + 市场结构演变数据后，
+做三件事：
+1. 因果串联 — 把分散的发现串成因果链，找到根本原因
+2. 模式提炼 — 发现 RuleAuditor 单个发现看不出的规律
+3. 改进建议 — 给出可执行的、定位到具体模块和方法的改进方案
+
+**重要原则：**
+- 你不是在做统计报告，而是在帮系统自我进化
+- 单个决策的 "对/错" 不重要，重要的是发现 "在什么条件下容易出错"
+- 改进建议必须定位到具体模块（market_state/buy_decision/position_risk/sector_heat）
+- param_tune 类改进（调阈值/系数）可标记 auto_applicable=true，rule 类改进需人工审核
+
+**特别注意 — 止损审计：**
+- stop_too_tight (P0): 止损后股价反弹超过成本价 → 止损太紧/被开盘恐慌扫出
+- stop_early (P1): 止损后反弹但未超成本 → 可能过早
+- stop_late (P1): 止损后继续深跌 → 止损太宽
+- 当同时存在 stop_too_tight 和 stop_late 时，优先分析 stop_too_tight 的根因
+- 开盘5分钟内的止损需要特别关注——这往往是开盘恐慌而非真正的止损需求
+
+**输出格式：** 严格 JSON，用 ```json 包裹。
+{
+  "causal_chains": [
+    {"pattern": "...", "events": [...], "root_cause": "...", "impact": "..."}
+  ],
+  "new_patterns": [
+    {"description": "...", "frequency": N, "conditions": {...}}
+  ],
+  "improvements": [
+    {
+      "type": "param_tune|rule_add|rule_modify|watch_add",
+      "target_module": "market_state|buy_decision|position_risk|...",
+      "target_method": "method_name",
+      "suggested_change": "...",
+      "code_diff": "建议的代码 diff",
+      "rationale": "...",
+      "auto_applicable": false
+    }
+  ],
+  "lessons": [
+    {
+      "type": "regime_detection|signal_filter|stop_timing|tp_timing|sizing|sector|resonance",
+      "key": "unique_lesson_key",
+      "content": "教训描述",
+      "trigger_conditions": {...}
+    }
+  ]
+}
+
+[user] ## 今日决策时间线
+[2026-06-10T09:30:59] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3986.192, "index_change": -0.00594476745527155, "up_count": 540, "down_count": 3993, "top_sectors": [], "worst_sectors":
+[2026-06-10T09:31:16] buy_filter 603328 | {"signal_id": 999, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=60%)，等回调到区间下半部", "price": 13.44, "buy_zone_min": 13.2, "buy_zone_max": 13.6, "market_regime": "unknown", "sector_trend":
+[2026-06-10T09:32:03] buy_filter 603328 | {"signal_id": 999, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=78%)，等回调到区间下半部", "price": 13.51, "buy_zone_min": 13.2, "buy_zone_max": 13.6, "market_regime": "unknown", "sector_trend":
+[2026-06-10T09:32:18] buy_filter 000048 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.83, "buy_zone_min": 17.56, "buy_zone_max": 17.96, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002982 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 12.92, "buy_zone_min": 12.73, "buy_zone_max": 13.02, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002299 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.01, "buy_zone_min": 15.77, "buy_zone_max": 16.13, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 300761 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 17.8, "buy_zone_min": 17.53, "buy_zone_max": 17.93, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 603477 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 13.9, "buy_zone_min": 13.69, "buy_zone_max": 14.0, "market_regime": "unknown", "sector_trend":
+[2026-06-10T09:32:18] buy_filter 300967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.38, "buy_zone_min": 17.12, "buy_zone_max": 17.51, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 605296 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 24.61, "buy_zone_min": 24.24, "buy_zone_max": 24.79, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 300498 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 12.67, "buy_zone_min": 12.48, "buy_zone_max": 12.77, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002714 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 34.24, "buy_zone_min": 33.73, "buy_zone_max": 34.5, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 001201 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 11.09, "buy_zone_min": 10.92, "buy_zone_max": 11.17, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002240 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 48.54, "buy_zone_min": 47.81, "buy_zone_max": 48.9, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 002460 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 69.7, "buy_zone_min": 68.65, "buy_zone_max": 70.22, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 58.76, "buy_zone_min": 57.88, "buy_zone_max": 59.2, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 002756 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 61.88, "buy_zone_min": 60.95, "buy_zone_max": 62.34, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002192 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 80.44, "buy_zone_min": 79.23, "buy_zone_max": 81.04, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002466 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 60.89, "buy_zone_min": 59.98, "buy_zone_max": 61.35, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 000762 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 28.19, "buy_zone_min": 27.77, "buy_zone_max": 28.4, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 603399 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 18.1, "buy_zone_min": 17.83, "buy_zone_max": 18.24, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 301219 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 54.1, "buy_zone_min": 53.29, "buy_zone_max": 54.51, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 300618 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 34.95, "buy_zone_min": 34.43, "buy_zone_max": 35.21, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 300922 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 25.33, "buy_zone_min": 24.8, "buy_zone_max": 25.6, "market_regime": "unknown", "sector_trend":
+[2026-06-10T09:32:18] buy_filter 300875 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 32.6, "buy_zone_min": 31.92, "buy_zone_max": 32.94, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 600435 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 11.94, "buy_zone_min": 11.69, "buy_zone_max": 12.07, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 301357 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 89.52, "buy_zone_min": 87.64, "buy_zone_max": 90.46, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 000519 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 19.03, "buy_zone_min": 18.63, "buy_zone_max": 19.23, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 600967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 11.8, "buy_zone_min": 11.55, "buy_zone_max": 11.92, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 601606 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 31.56, "buy_zone_min": 30.9, "buy_zone_max": 31.89, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 600118 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 81.99, "buy_zone_min": 80.27, "buy_zone_max": 82.85, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 600879 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 22.3, "buy_zone_min": 21.83, "buy_zone_max": 22.53, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:18] buy_filter 601698 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 31.98, "buy_zone_min": 31.31, "buy_zone_max": 32.32, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 300722 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 23.14, "buy_zone_min": 22.65, "buy_zone_max": 23.38, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 002829 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 21.63, "buy_zone_min": 21.18, "buy_zone_max": 21.86, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:32:18] buy_filter 003009 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 58.19, "buy_zone_min": 56.97, "buy_zone_max": 58.8, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:32:36] buy_filter 301377 | {"signal_id": 1001, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=60%)，等回调到区间下半部", "price": 431.0, "buy_zone_min": 425.0, "buy_zone_max": 435.0, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:06] buy_filter 603328 | {"signal_id": 999, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=53%)，等回调到区间下半部", "price": 13.41, "buy_zone_min": 13.2, "buy_zone_max": 13.6, "market_regime": "unknown", "sector_trend":
+[2026-06-10T09:33:15] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 59.22, "buy_zone_min": 58.15, "buy_zone_max": 59.75, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 002240 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 48.26, "buy_zone_min": 47.39, "buy_zone_max": 48.69, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 002756 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 62.23, "buy_zone_min": 61.11, "buy_zone_max": 62.79, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 002460 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 69.10000000000001, "buy_zone_min": 67.86, "buy_zone_max": 69.72, "market_regime": "unknown", "
+[2026-06-10T09:33:15] buy_filter 002192 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 79.94, "buy_zone_min": 78.5, "buy_zone_max": 80.66, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:33:15] buy_filter 603399 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.97, "buy_zone_min": 17.65, "buy_zone_max": 18.13, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 603919 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.95, "buy_zone_min": 17.57, "buy_zone_max": 18.14, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 002304 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 42.22, "buy_zone_min": 41.33, "buy_zone_max": 42.66, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 000568 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 84.88, "buy_zone_min": 83.1, "buy_zone_max": 85.77, "market_regime": "unknown", "sector_trend"
+[2026-06-10T09:33:15] buy_filter 603198 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 34.06, "buy_zone_min": 33.34, "buy_zone_max": 34.42, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 000596 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 86.32000000000001, "buy_zone_min": 84.51, "buy_zone_max": 87.23, "market_regime": "unknown", "
+[2026-06-10T09:33:15] buy_filter 600559 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 11.73, "buy_zone_min": 11.48, "buy_zone_max": 11.85, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 603589 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 19.78, "buy_zone_min": 19.36, "buy_zone_max": 19.99, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 600519 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 1258.52, "buy_zone_min": 1232.09, "buy_zone_max": 1271.73, "market_regime": "unknown", "sector
+[2026-06-10T09:33:15] buy_filter 600779 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 29.55, "buy_zone_min": 28.93, "buy_zone_max": 29.86, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:15] buy_filter 000860 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 10.38, "buy_zone_min": 10.16, "buy_zone_max": 10.49, "market_regime": "unknown", "sector_trend
+[2026-06-10T09:33:45] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3992.001, "index_change": -0.004496150116755863, "up_count": 1296, "down_count": 3199, "top_sectors": [["能源金属", 1.4
+[2026-06-10T09:33:58] buy_filter 002982 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 13.08, "buy_zone_min": 12.88, "buy_zone_max": 13.18, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 17.8, "buy_zone_min": 17.53, "buy_zone_max": 17.93, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 603477 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 14.07, "buy_zone_min": 13.86, "buy_zone_max": 14.18, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300761 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 17.92, "buy_zone_min": 17.65, "buy_zone_max": 18.05, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 605296 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 24.78, "buy_zone_min": 24.41, "buy_zone_max": 24.97, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 001201 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 11.18, "buy_zone_min": 11.01, "buy_zone_max": 11.26, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300498 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 12.74, "buy_zone_min": 12.55, "buy_zone_max": 12.84, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 002714 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 34.42, "buy_zone_min": 33.9, "buy_zone_max": 34.68, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 59.84, "buy_zone_min": 58.94, "buy_zone_max": 60.29, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 002240 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 48.6, "buy_zone_min": 47.87, "buy_zone_max": 48.96, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 002756 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 62.72, "buy_zone_min": 61.78, "buy_zone_max": 63.19, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 301498 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 41.3, "buy_zone_min": 40.56, "buy_zone_max": 41.67, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 603151 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 12.59, "buy_zone_min": 12.36, "buy_zone_max": 12.7, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 002311 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 44.46, "buy_zone_min": 43.66, "buy_zone_max": 44.86, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 001366 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 13.21, "buy_zone_min": 12.97, "buy_zone_max": 13.33, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 002891 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 27.71, "buy_zone_min": 27.21, "buy_zone_max": 27.96, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300673 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 13.3, "buy_zone_min": 13.06, "buy_zone_max": 13.42, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 603668 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 10.58, "buy_zone_min": 10.39, "buy_zone_max": 10.68, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 002568 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 19.48, "buy_zone_min": 19.13, "buy_zone_max": 19.66, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 600573 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.02, "buy_zone_min": 11.8, "buy_zone_max": 12.13, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 000729 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 11.27, "buy_zone_min": 11.07, "buy_zone_max": 11.37, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 601579 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.05, "buy_zone_min": 15.76, "buy_zone_max": 16.19, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 600132 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 48.9, "buy_zone_min": 48.02, "buy_zone_max": 49.34, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 600600 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 59.73, "buy_zone_min": 58.65, "buy_zone_max": 60.27, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 000869 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.5, "buy_zone_min": 17.18, "buy_zone_max": 17.66, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 600596 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 15.34, "buy_zone_min": 15.02, "buy_zone_max": 15.5, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 002258 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 13.15, "buy_zone_min": 12.87, "buy_zone_max": 13.29, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300804 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 39.0, "buy_zone_min": 38.18, "buy_zone_max": 39.41, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 000792 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 30.05, "buy_zone_min": 29.42, "buy_zone_max": 30.37, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 603810 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.68, "buy_zone_min": 12.41, "buy_zone_max": 12.81, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 603360 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 19.63, "buy_zone_min": 19.22, "buy_zone_max": 19.84, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 600141 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 28.95, "buy_zone_min": 28.34, "buy_zone_max": 29.25, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 600078 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.39, "buy_zone_min": 12.13, "buy_zone_max": 12.52, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 301035 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 50.22, "buy_zone_min": 49.17, "buy_zone_max": 50.75, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 600426 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 27.2, "buy_zone_min": 26.63, "buy_zone_max": 27.49, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:33:58] buy_filter 301286 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 63.25, "buy_zone_min": 61.64, "buy_zone_max": 64.05, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 605366 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 10.39, "buy_zone_min": 10.12, "buy_zone_max": 10.52, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 603379 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 55.74, "buy_zone_min": 54.31, "buy_zone_max": 56.45, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 603977 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 12.94, "buy_zone_min": 12.61, "buy_zone_max": 13.11, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 301076 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 29.83, "buy_zone_min": 29.05, "buy_zone_max": 30.22, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:33:58] buy_filter 300618 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 35.06, "buy_zone_min": 34.12, "buy_zone_max": 35.53, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 301377 | {"signal_id": 1001, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=60%)，等回调到区间下半部", "price": 430.99, "buy_zone_min": 425.0, "buy_zone_max": 435.0, "market_regime": "normal", "sector_trend
+[2026-06-10T09:34:38] buy_filter 300967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.66, "buy_zone_min": 17.4, "buy_zone_max": 17.79, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 603477 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 13.99, "buy_zone_min": 13.78, "buy_zone_max": 14.09, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 59.26, "buy_zone_min": 58.37, "buy_zone_max": 59.7, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 000762 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 28.39, "buy_zone_min": 27.96, "buy_zone_max": 28.6, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 300618 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 35.2, "buy_zone_min": 34.67, "buy_zone_max": 35.46, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 002971 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 47.95, "buy_zone_min": 47.09, "buy_zone_max": 48.38, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 603065 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 11.44, "buy_zone_min": 11.23, "buy_zone_max": 11.54, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 603276 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.0, "buy_zone_min": 16.69, "buy_zone_max": 17.15, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 603722 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 38.97, "buy_zone_min": 38.27, "buy_zone_max": 39.32, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 600378 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 57.12, "buy_zone_min": 56.09, "buy_zone_max": 57.63, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 300174 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 26.16, "buy_zone_min": 25.69, "buy_zone_max": 26.4, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 603004 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 20.32, "buy_zone_min": 19.95, "buy_zone_max": 20.5, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 300530 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 19.62, "buy_zone_min": 19.27, "buy_zone_max": 19.8, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 300522 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 13.0, "buy_zone_min": 12.77, "buy_zone_max": 13.12, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:34:38] buy_filter 002430 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 25.64, "buy_zone_min": 25.18, "buy_zone_max": 25.87, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 002311 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 44.23, "buy_zone_min": 43.43, "buy_zone_max": 44.63, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 600573 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.17, "buy_zone_min": 11.95, "buy_zone_max": 12.28, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:34:38] buy_filter 601579 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 16.18, "buy_zone_min": 15.89, "buy_zone_max": 16.33, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:05] buy_filter 603328 | {"signal_id": 999, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=73%)，等回调到区间下半部", "price": 13.49, "buy_zone_min": 13.2, "buy_zone_max": 13.6, "market_regime": "normal", "sector_trend": "
+[2026-06-10T09:35:19] buy_filter 002756 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 63.27, "buy_zone_min": 62.32, "buy_zone_max": 63.74, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 59.8, "buy_zone_min": 58.9, "buy_zone_max": 60.25, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:35:19] buy_filter 000762 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 28.57, "buy_zone_min": 28.14, "buy_zone_max": 28.78, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 002460 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 69.45, "buy_zone_min": 68.41, "buy_zone_max": 69.97, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 300761 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 18.08, "buy_zone_min": 17.81, "buy_zone_max": 18.22, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 600573 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.27, "buy_zone_min": 12.09, "buy_zone_max": 12.36, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 002568 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 19.34, "buy_zone_min": 19.05, "buy_zone_max": 19.49, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 603276 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.89, "buy_zone_min": 16.59, "buy_zone_max": 17.04, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 300174 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 26.39, "buy_zone_min": 25.91, "buy_zone_max": 26.63, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 002549 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.89, "buy_zone_min": 16.59, "buy_zone_max": 17.04, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 603722 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 38.5, "buy_zone_min": 37.81, "buy_zone_max": 38.85, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:35:19] buy_filter 300530 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 19.74, "buy_zone_min": 19.38, "buy_zone_max": 19.92, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 603004 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 20.2, "buy_zone_min": 19.84, "buy_zone_max": 20.38, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:35:19] buy_filter 002669 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 18.27, "buy_zone_min": 17.94, "buy_zone_max": 18.43, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 300804 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 39.65, "buy_zone_min": 38.82, "buy_zone_max": 40.07, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 600596 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 15.24, "buy_zone_min": 14.92, "buy_zone_max": 15.4, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:35:19] buy_filter 002258 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 13.01, "buy_zone_min": 12.74, "buy_zone_max": 13.15, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 600389 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 22.94, "buy_zone_min": 22.46, "buy_zone_max": 23.18, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 300505 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 18.99, "buy_zone_min": 18.59, "buy_zone_max": 19.19, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:35:19] buy_filter 603585 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 15.18, "buy_zone_min": 14.86, "buy_zone_max": 15.34, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 002192 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 80.49, "buy_zone_min": 79.28, "buy_zone_max": 81.09, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 603399 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 18.12, "buy_zone_min": 17.85, "buy_zone_max": 18.26, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 002982 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 13.0, "buy_zone_min": 12.8, "buy_zone_max": 13.1, "market_regime": "normal", "sector_trend": "
+[2026-06-10T09:36:09] buy_filter 300967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.5, "buy_zone_min": 17.24, "buy_zone_max": 17.63, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 600435 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 12.38, "buy_zone_min": 12.19, "buy_zone_max": 12.47, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 301357 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 91.12, "buy_zone_min": 89.75, "buy_zone_max": 91.8, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 601606 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 32.08, "buy_zone_min": 31.6, "buy_zone_max": 32.32, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 600967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 11.93, "buy_zone_min": 11.75, "buy_zone_max": 12.02, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 600184 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 25.62, "buy_zone_min": 25.24, "buy_zone_max": 25.81, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 300174 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 26.54, "buy_zone_min": 26.06, "buy_zone_max": 26.78, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:09] buy_filter 603276 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.75, "buy_zone_min": 16.45, "buy_zone_max": 16.9, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 603722 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 38.19, "buy_zone_min": 37.5, "buy_zone_max": 38.53, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 603823 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 37.36, "buy_zone_min": 36.69, "buy_zone_max": 37.7, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:09] buy_filter 300530 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 19.48, "buy_zone_min": 19.13, "buy_zone_max": 19.66, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:21] buy_filter 002815 | {"signal_id": 1000, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=100%)，等回调到区间下半部", "price": 18.1, "buy_zone_min": 17.7, "buy_zone_max": 18.1, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:36] buy_filter 603328 | {"signal_id": 999, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=55%)，等回调到区间下半部", "price": 13.42, "buy_zone_min": 13.2, "buy_zone_max": 13.6, "market_regime": "normal", "sector_trend": "
+[2026-06-10T09:36:48] buy_filter 600435 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=68%)，等回调到区间下半部", "price": 12.54, "buy_zone_min": 12.35, "buy_zone_max": 12.63, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 601606 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 33.03, "buy_zone_min": 32.53, "buy_zone_max": 33.28, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 301357 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 92.7, "buy_zone_min": 91.31, "buy_zone_max": 93.4, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 600967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.11, "buy_zone_min": 11.93, "buy_zone_max": 12.2, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 300875 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 33.15, "buy_zone_min": 32.65, "buy_zone_max": 33.4, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 300922 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 25.06, "buy_zone_min": 24.68, "buy_zone_max": 25.25, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 600184 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 25.42, "buy_zone_min": 25.04, "buy_zone_max": 25.61, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 002738 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 60.41, "buy_zone_min": 59.5, "buy_zone_max": 60.86, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 002756 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 62.95, "buy_zone_min": 62.01, "buy_zone_max": 63.42, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 002460 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 70.05, "buy_zone_min": 69.0, "buy_zone_max": 70.58, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 002466 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 61.31, "buy_zone_min": 60.39, "buy_zone_max": 61.77, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 603399 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 18.25, "buy_zone_min": 17.98, "buy_zone_max": 18.39, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 301219 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 54.4, "buy_zone_min": 53.58, "buy_zone_max": 54.81, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 002299 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 15.92, "buy_zone_min": 15.68, "buy_zone_max": 16.04, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 300967 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 17.39, "buy_zone_min": 17.13, "buy_zone_max": 17.52, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 600573 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 12.15, "buy_zone_min": 11.93, "buy_zone_max": 12.26, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 601579 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 16.07, "buy_zone_min": 15.78, "buy_zone_max": 16.21, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 600596 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 15.56, "buy_zone_min": 15.23, "buy_zone_max": 15.72, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 300804 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 38.88, "buy_zone_min": 38.06, "buy_zone_max": 39.29, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 000893 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 47.03, "buy_zone_min": 46.04, "buy_zone_max": 47.52, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 600184 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 25.42, "buy_zone_min": 24.9, "buy_zone_max": 25.68, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:36:48] buy_filter 301683 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 128.2, "buy_zone_min": 125.54, "buy_zone_max": 129.53, "market_regime": "normal", "sector_tren
+[2026-06-10T09:36:48] buy_filter 603681 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 22.32, "buy_zone_min": 21.79, "buy_zone_max": 22.58, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 002597 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=67%)，等回调到区间下半部", "price": 19.57, "buy_zone_min": 19.09, "buy_zone_max": 19.81, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 301077 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 23.04, "buy_zone_min": 22.47, "buy_zone_max": 23.33, "market_regime": "normal", "sector_trend"
+[2026-06-10T09:36:48] buy_filter 603120 | {"signal_id": null, "entry_rule": "confirm", "reason_filtered": "需确认信号(zone_pos=66%)，等回调到区间下半部", "price": 48.76, "buy_zone_min": 47.49, "buy_zone_max": 49.4, "market_regime": "normal", "sector_trend":
+[2026-06-10T09:49:44] sector_alert - | {"top_sectors": [["地面兵装Ⅱ", 2.26], ["影视院线", 2.05], ["数字媒体", 1.49], ["非白酒", 1.34], ["出版", 1.32]], "bottom_sectors": [["焦炭Ⅱ", -3.52], ["贵金属", -2.63], ["其他电源设备Ⅱ", -2.41]], "warnings": [], "good": []}
+[2026-06-10T09:56:03] regime_change - | {"pattern": "one_sided", "confidence": "low", "prev_pattern": "normal", "index_price": 4001.942, "index_change": -0.002017116726812039, "up_count": 1328, "down_count": 3261, "top_sectors": [["非白酒", 1.
+[2026-06-10T10:01:54] sector_alert - | {"top_sectors": [["非白酒", 2.21], ["出版", 1.38], ["地面兵装Ⅱ", 1.3], ["影视院线", 1.19], ["动物保健Ⅱ", 1.06]], "bottom_sectors": [["其他电源设备Ⅱ", -3.15], ["贵金属", -2.97], ["电网设备", -2.39]], "warnings": [], "good": []}
+[2026-06-10T10:06:17] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "one_sided", "index_price": 3996.396, "index_change": -0.0034001485325285945, "up_count": 1250, "down_count": 3334, "top_sectors": [["非白酒", 2
+[2026-06-10T10:12:53] sector_alert - | {"top_sectors": [["非白酒", 2.06], ["保险Ⅱ", 1.57], ["银行Ⅱ", 1.07], ["地面兵装Ⅱ", 0.84], ["影视院线", 0.83]], "bottom_sectors": [["贵金属", -3.67], ["其他电源设备Ⅱ", -3.66], ["电网设备", -2.98]], "warnings": [], "good": []}
+[2026-06-10T10:20:38] sector_alert - | {"top_sectors": [["非白酒", 1.95], ["保险Ⅱ", 1.94], ["银行Ⅱ", 1.06], ["影视院线", 0.82], ["旅游及景区", 0.66]], "bottom_sectors": [["贵金属", -4.03], ["其他电源设备Ⅱ", -4.02], ["电网设备", -3.43]], "warnings": [], "good": []}
+[2026-06-10T10:31:25] sector_alert - | {"top_sectors": [["保险Ⅱ", 2.52], ["旅游及景区", 2.45], ["非白酒", 2.03], ["银行Ⅱ", 1.32], ["养殖业", 1.06]], "bottom_sectors": [["其他电源设备Ⅱ", -4.16], ["贵金属", -4.03], ["电网设备", -3.66]], "warnings": [], "good": []}
+[2026-06-10T10:32:20] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3984.2, "index_change": -0.00644152175692819, "up_count": 925, "down_count": 3715, "top_sectors": [["旅游及景区", 2.62], ["保险Ⅱ
+[2026-06-10T10:33:56] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3981.925, "index_change": -0.007008849084372251, "up_count": 928, "down_count": 3724, "top_sectors": [["旅游及景区", 3.0
+[2026-06-10T10:38:23] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3977.643, "index_change": -0.008076671333214424, "up_count": 841, "down_count": 3800, "top_sectors": [["旅游及景区", 2.54], ["
+[2026-06-10T10:40:04] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3973.218, "index_change": -0.009180154156924521, "up_count": 808, "down_count": 3854, "top_sectors": [["旅游及景区", 2.5
+[2026-06-10T10:49:25] sector_alert - | {"top_sectors": [["保险Ⅱ", 2.41], ["旅游及景区", 2.41], ["非白酒", 1.64], ["银行Ⅱ", 1.31], ["白酒Ⅱ", 0.63]], "bottom_sectors": [["其他电源设备Ⅱ", -3.91], ["贵金属", -3.83], ["电网设备", -3.81]], "warnings": [], "good": []}
+[2026-06-10T11:00:39] sector_alert - | {"top_sectors": [["旅游及景区", 2.72], ["保险Ⅱ", 2.33], ["银行Ⅱ", 1.46], ["非白酒", 1.44], ["白酒Ⅱ", 0.44]], "bottom_sectors": [["贵金属", -4.04], ["其他电源设备Ⅱ", -4.0], ["电网设备", -3.95]], "warnings": [], "good": []}
+[2026-06-10T11:01:25] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3984.416, "index_change": -0.006387656832652087, "up_count": 887, "down_count": 3767, "top_sectors": [["旅游及景区", 2.83], ["
+[2026-06-10T11:08:07] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3981.092, "index_change": -0.00721657816734413, "up_count": 814, "down_count": 3837, "top_sectors": [["旅游及景区", 2.73
+[2026-06-10T11:11:42] sector_alert - | {"top_sectors": [["旅游及景区", 2.6], ["保险Ⅱ", 2.38], ["银行Ⅱ", 1.54], ["非白酒", 1.54], ["白酒Ⅱ", 0.36]], "bottom_sectors": [["焦炭Ⅱ", -4.47], ["其他电源设备Ⅱ", -4.35], ["电网设备", -4.29]], "warnings": [], "good": []}
+[2026-06-10T11:23:03] sector_alert - | {"top_sectors": [["保险Ⅱ", 2.88], ["旅游及景区", 2.54], ["银行Ⅱ", 1.53], ["非白酒", 1.52], ["白酒Ⅱ", 0.27]], "bottom_sectors": [["焦炭Ⅱ", -4.36], ["其他电源设备Ⅱ", -4.24], ["电网设备", -4.14]], "warnings": [], "good": []}
+[2026-06-10T13:01:03] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "", "index_price": 3968.774, "index_change": -0.01028837509897366, "up_count": 805, "down_count": 3852, "top_sectors": [["保险Ⅱ", 2.49], ["旅游及景
+[2026-06-10T13:01:46] position_size 601166 | {"amount": 6000, "base_amount": 6000, "reason": "大盘正常 普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T13:02:07] position_size 600926 | {"amount": 5000, "base_amount": 5000, "reason": "大盘正常 普跌 买入区上沿", "sector_mult": 0.3, "zone_mult": 0.7182}
+[2026-06-10T13:02:13] position_size 601009 | {"amount": 6000, "base_amount": 6000, "reason": "大盘正常 普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T13:08:56] position_size 002568 | {"amount": 6000, "base_amount": 6000, "reason": "大盘正常 普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T13:23:30] sector_alert - | {"top_sectors": [["保险Ⅱ", 2.64], ["旅游及景区", 2.18], ["银行Ⅱ", 1.79], ["非白酒", 1.39], ["化学制品", 0.26]], "bottom_sectors": [["焦炭Ⅱ", -5.31], ["元件", -4.24], ["其他电源设备Ⅱ", -4.15]], "warnings": [], "good": []}
+[2026-06-10T13:33:41] sector_alert - | {"top_sectors": [["保险Ⅱ", 3.12], ["旅游及景区", 2.18], ["银行Ⅱ", 1.86], ["非白酒", 1.72], ["证券Ⅱ", 0.71]], "bottom_sectors": [["焦炭Ⅱ", -5.44], ["元件", -4.45], ["其他电源设备Ⅱ", -4.38]], "warnings": [], "good": []}
+[2026-06-10T13:39:06] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3974.433, "index_change": -0.008877163957871895, "up_count": 1034, "down_count": 3612, "top_sectors": [["保险Ⅱ", 3.01], ["旅
+[2026-06-10T13:40:36] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3976.218, "index_change": -0.00843203020864652, "up_count": 1022, "down_count": 3617, "top_sectors": [["保险Ⅱ", 3.06]
+[2026-06-10T13:44:22] position_size 601066 | {"amount": 6000, "base_amount": 6000, "reason": "大盘正常 普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T13:44:55] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3977.859, "index_change": -0.008022806408938434, "up_count": 1025, "down_count": 3614, "top_sectors": [["保险Ⅱ", 3.29], ["旅
+[2026-06-10T13:46:23] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3978.662, "index_change": -0.007822558565449384, "up_count": 1039, "down_count": 3600, "top_sectors": [["保险Ⅱ", 3.18
+[2026-06-10T13:47:27] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3975.369, "index_change": -0.008643749286009122, "up_count": 1002, "down_count": 3636, "top_sectors": [["保险Ⅱ", 3.13], ["旅
+[2026-06-10T13:50:11] regime_change - | {"pattern": "one_sided", "confidence": "low", "prev_pattern": "unknown", "index_price": 3966.996, "index_change": -0.010731763225653036, "up_count": 923, "down_count": 3721, "top_sectors": [["保险Ⅱ", 2.
+[2026-06-10T13:52:03] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3964.485, "index_change": -0.011357942970361716, "up_count": 893, "down_count": 3742, "top_sectors": [["保险Ⅱ", 2.78], ["旅游
+[2026-06-10T13:54:52] regime_change - | {"pattern": "normal", "confidence": "low", "prev_pattern": "unknown", "index_price": 3975.446, "index_change": -0.008624547438003376, "up_count": 1048, "down_count": 3603, "top_sectors": [["保险Ⅱ", 3.15
+[2026-06-10T13:58:04] regime_change - | {"pattern": "uptrend", "confidence": "low", "prev_pattern": "normal", "index_price": 3988.854, "index_change": -0.005280932138499584, "up_count": 1236, "down_count": 3396, "top_sectors": [["保险Ⅱ", 3.16
+[2026-06-10T13:58:28] buy_filter 600749 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=67%)，暂不追高", "price": 17.2, "buy_zone_min": 16.94, "buy_zone_max": 17.33, "market_regime": "uptrend", "sector_trend": "旅
+[2026-06-10T13:59:39] buy_filter 600749 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=67%)，暂不追高", "price": 17.08, "buy_zone_min": 16.82, "buy_zone_max": 17.21, "market_regime": "uptrend", "sector_trend": "
+[2026-06-10T13:59:39] buy_filter 300859 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=67%)，暂不追高", "price": 31.13, "buy_zone_min": 30.66, "buy_zone_max": 31.36, "market_regime": "uptrend", "sector_trend": "
+[2026-06-10T13:59:39] buy_filter 002868 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=67%)，暂不追高", "price": 25.57, "buy_zone_min": 24.95, "buy_zone_max": 25.88, "market_regime": "uptrend", "sector_trend": "
+[2026-06-10T14:00:15] buy_filter 600749 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=67%)，暂不追高", "price": 17.2, "buy_zone_min": 16.94, "buy_zone_max": 17.33, "market_regime": "uptrend", "sector_trend": "旅
+[2026-06-10T14:02:29] sector_alert - | {"top_sectors": [["保险Ⅱ", 3.15], ["旅游及景区", 2.85], ["非白酒", 1.89], ["银行Ⅱ", 1.85], ["动物保健Ⅱ", 1.22]], "bottom_sectors": [["焦炭Ⅱ", -5.13], ["煤炭开采", -4.18], ["其他电源设备Ⅱ", -3.85]], "warnings": [], "good": []}
+[2026-06-10T14:02:40] buy_filter 300859 | {"signal_id": null, "entry_rule": "pullback", "reason_filtered": "等回调买入(zone_pos=66%)，暂不追高", "price": 31.36, "buy_zone_min": 30.89, "buy_zone_max": 31.6, "market_regime": "uptrend", "sector_trend": "旅
+[2026-06-10T14:04:21] regime_change - | {"pattern": "wide_choppy", "confidence": "low", "prev_pattern": "uptrend", "index_price": 3984.655, "index_change": -0.0063280562914392645, "up_count": 1139, "down_count": 3505, "top_sectors": [["保险Ⅱ"
+[2026-06-10T14:06:19] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3981.368, "index_change": -0.007147750764102594, "up_count": 1096, "down_count": 3547, "top_sectors": [["保险Ⅱ", 3.1], ["旅游
+[2026-06-10T14:08:11] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3982.445, "index_change": -0.006879174266670735, "up_count": 1090, "down_count": 3549, "top_sectors": [["保险Ⅱ", 3.14], ["旅
+[2026-06-10T14:10:40] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3982.723, "index_change": -0.006809848114130358, "up_count": 1113, "down_count": 3531, "top_sectors": [["保险Ⅱ", 3.18], ["旅
+[2026-06-10T14:12:10] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3984.002, "index_change": -0.006490897937514505, "up_count": 1155, "down_count": 3484, "top_sectors": [["保险Ⅱ", 3.12], ["旅
+[2026-06-10T14:13:32] position_size 002377 | {"amount": 5000, "base_amount": 5000, "reason": "普跌", "sector_mult": 0.39, "zone_mult": 0.5}
+[2026-06-10T14:14:10] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3986.402, "index_change": -0.00589239877889208, "up_count": 1195, "down_count": 3451, "top_sectors": [["保险Ⅱ", 3.12], ["旅游
+[2026-06-10T14:14:46] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3985.502, "index_change": -0.006116835963375504, "up_count": 1190, "down_count": 3456, "top_sectors": [["保险Ⅱ", 3.12], ["旅
+[2026-06-10T14:19:13] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3987.321, "index_change": -0.005663223476069619, "up_count": 1199, "down_count": 3456, "top_sectors": [["保险Ⅱ", 3.22], ["旅
+[2026-06-10T14:20:19] position_size 000007 | {"amount": 5000, "base_amount": 5000, "reason": "普跌 板块走弱", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T14:25:45] position_size 002377 | {"amount": 5000, "base_amount": 5000, "reason": "普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T14:29:35] position_size 002809 | {"amount": 6000, "base_amount": 6000, "reason": "普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T14:30:24] position_size 002842 | {"amount": 5000, "base_amount": 5000, "reason": "普跌", "sector_mult": 0.3, "zone_mult": 0.5}
+[2026-06-10T14:33:22] regime_change - | {"pattern": "unknown", "confidence": "low", "prev_pattern": "", "index_price": 3997.445, "index_change": -0.003138554525280725, "up_count": 1301, "down_count": 3335, "top_sectors": [["保险Ⅱ", 3.24], ["旅
+[2026-06-10T14:33:48] buy_filter 600593 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.35, "buy_zone_min": 38.76, "buy_zone_max": 39.65, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:48] buy_filter 600749 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.92, "buy_zone_min": 16.67, "buy_zone_max": 17.05, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:48] buy_filter 603099 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 38.37, "buy_zone_min": 37.79, "buy_zone_max": 38.66, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:48] buy_filter 600054 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.22, "buy_zone_min": 11.05, "buy_zone_max": 11.3, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋缓
+[2026-06-10T14:33:48] buy_filter 300859 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 31.14, "buy_zone_min": 30.67, "buy_zone_max": 31.37, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:48] buy_filter 603402 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 95.60000000000001, "buy_zone_min": 94.17, "buy_zone_max": 96.32, "market_regime": "unknown", "sector_trend":
+[2026-06-10T14:33:48] buy_filter 603199 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 32.8, "buy_zone_min": 32.31, "buy_zone_max": 33.05, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋缓
+[2026-06-10T14:33:48] buy_filter 002159 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.77, "buy_zone_min": 13.56, "buy_zone_max": 13.87, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:51] buy_filter 000415 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 3.91, "buy_zone_min": 3.87, "buy_zone_max": 3.95, "market_regime": "unknown", "sector_trend": "多元金融 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 000488 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 2.18, "buy_zone_min": 2.16, "buy_zone_max": 2.2, "market_regime": "unknown", "sector_trend": "造纸 走弱 趋缓 -0.4%
+[2026-06-10T14:33:51] buy_filter 000567 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 5.76, "buy_zone_min": 5.7, "buy_zone_max": 5.82, "market_regime": "unknown", "sector_trend": "多元金融 走强 加速 +0.
+[2026-06-10T14:33:51] buy_filter 000628 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 53.84, "buy_zone_min": 53.3, "buy_zone_max": 54.38, "market_regime": "unknown", "sector_trend": "房屋建设Ⅱ 横盘 -0
+[2026-06-10T14:33:51] buy_filter 000833 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 25.68, "buy_zone_min": 25.42, "buy_zone_max": 25.94, "market_regime": "unknown", "sector_trend": "综合Ⅱ 走强 加速
+[2026-06-10T14:33:51] buy_filter 000859 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.57, "buy_zone_min": 11.45, "buy_zone_max": 11.69, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 000920 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.61, "buy_zone_min": 13.47, "buy_zone_max": 13.75, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 000963 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 28.66, "buy_zone_min": 28.37, "buy_zone_max": 28.95, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0
+[2026-06-10T14:33:51] buy_filter 001211 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 35.52, "buy_zone_min": 35.16, "buy_zone_max": 35.88, "market_regime": "unknown", "sector_trend": "家居用品 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002057 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.1, "buy_zone_min": 10.99, "buy_zone_max": 11.21, "market_regime": "unknown", "sector_trend": "专业服务 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002059 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 4.8, "buy_zone_min": 4.75, "buy_zone_max": 4.85, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋缓 +2
+[2026-06-10T14:33:51] buy_filter 002064 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.33, "buy_zone_min": 10.23, "buy_zone_max": 10.43, "market_regime": "unknown", "sector_trend": "化学纤维 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002085 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.86, "buy_zone_min": 12.73, "buy_zone_max": 12.99, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002194 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.44, "buy_zone_min": 12.32, "buy_zone_max": 12.56, "market_regime": "unknown", "sector_trend": "通信设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002199 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.88, "buy_zone_min": 13.74, "buy_zone_max": 14.02, "market_regime": "unknown", "sector_trend": "元件 持续走弱 -1
+[2026-06-10T14:33:51] buy_filter 002272 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.69, "buy_zone_min": 20.48, "buy_zone_max": 20.9, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002332 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.540000000000001, "buy_zone_min": 8.45, "buy_zone_max": 8.63, "market_regime": "unknown", "sector_trend": "
+[2026-06-10T14:33:51] buy_filter 002422 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 36.81, "buy_zone_min": 36.44, "buy_zone_max": 37.18, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0
+[2026-06-10T14:33:51] buy_filter 002474 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 7.2, "buy_zone_min": 7.13, "buy_zone_max": 7.27, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走弱 趋缓 -1
+[2026-06-10T14:33:51] buy_filter 002549 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.63, "buy_zone_min": 16.46, "buy_zone_max": 16.8, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 002553 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 19.79, "buy_zone_min": 19.59, "buy_zone_max": 19.99, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002577 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.24, "buy_zone_min": 18.06, "buy_zone_max": 18.42, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002584 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.14, "buy_zone_min": 8.06, "buy_zone_max": 8.22, "market_regime": "unknown", "sector_trend": "电子化学品Ⅱ 走强 趋缓
+[2026-06-10T14:33:51] buy_filter 002625 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.16, "buy_zone_min": 36.79, "buy_zone_max": 37.53, "market_regime": "unknown", "sector_trend": "航空装备Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002653 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 49.11, "buy_zone_min": 48.62, "buy_zone_max": 49.6, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0.
+[2026-06-10T14:33:51] buy_filter 002735 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.97, "buy_zone_min": 18.78, "buy_zone_max": 19.16, "market_regime": "unknown", "sector_trend": "包装印刷 横盘 -0
+[2026-06-10T14:33:51] buy_filter 002768 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 65.56, "buy_zone_min": 64.9, "buy_zone_max": 66.22, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 002809 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.96, "buy_zone_min": 8.87, "buy_zone_max": 9.05, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速 +1
+[2026-06-10T14:33:51] buy_filter 002823 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.35, "buy_zone_min": 18.17, "buy_zone_max": 18.53, "market_regime": "unknown", "sector_trend": "电机Ⅱ 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002838 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 32.67, "buy_zone_min": 32.34, "buy_zone_max": 33.0, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 002842 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 35.6, "buy_zone_min": 35.24, "buy_zone_max": 35.96, "market_regime": "unknown", "sector_trend": "小金属 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 002843 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.51, "buy_zone_min": 22.28, "buy_zone_max": 22.74, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 002869 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 19.32, "buy_zone_min": 19.13, "buy_zone_max": 19.51, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002870 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 40.53, "buy_zone_min": 40.12, "buy_zone_max": 40.94, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002935 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 19.63, "buy_zone_min": 19.43, "buy_zone_max": 19.83, "market_regime": "unknown", "sector_trend": "军工电子Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 002955 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 29.92, "buy_zone_min": 29.62, "buy_zone_max": 30.22, "market_regime": "unknown", "sector_trend": "光学光电子 走弱 趋
+[2026-06-10T14:33:51] buy_filter 003004 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 67.22, "buy_zone_min": 66.55, "buy_zone_max": 67.89, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300006 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 5.11, "buy_zone_min": 5.06, "buy_zone_max": 5.16, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0.1%
+[2026-06-10T14:33:51] buy_filter 300043 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 4.7, "buy_zone_min": 4.65, "buy_zone_max": 4.75, "market_regime": "unknown", "sector_trend": "游戏Ⅱ 横盘 +0.1% 网
+[2026-06-10T14:33:51] buy_filter 300054 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 71.54, "buy_zone_min": 70.82, "buy_zone_max": 72.26, "market_regime": "unknown", "sector_trend": "电子化学品Ⅱ 走强
+[2026-06-10T14:33:51] buy_filter 300120 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 9.19, "buy_zone_min": 9.1, "buy_zone_max": 9.28, "market_regime": "unknown", "sector_trend": "光学光电子 走弱 趋缓 -1
+[2026-06-10T14:33:51] buy_filter 300122 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.54, "buy_zone_min": 12.41, "buy_zone_max": 12.67, "market_regime": "unknown", "sector_trend": "生物制品 横盘 -0
+[2026-06-10T14:33:51] buy_filter 300174 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 25.46, "buy_zone_min": 25.21, "buy_zone_max": 25.71, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300181 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.39, "buy_zone_min": 13.26, "buy_zone_max": 13.52, "market_regime": "unknown", "sector_trend": "中药Ⅱ 横盘 +0.
+[2026-06-10T14:33:51] buy_filter 300185 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 2.86, "buy_zone_min": 2.83, "buy_zone_max": 2.89, "market_regime": "unknown", "sector_trend": "风电设备 走弱 趋缓 -0
+[2026-06-10T14:33:51] buy_filter 300190 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 4.25, "buy_zone_min": 4.21, "buy_zone_max": 4.29, "market_regime": "unknown", "sector_trend": "环境治理 走弱 趋缓 -0
+[2026-06-10T14:33:51] buy_filter 300264 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.86, "buy_zone_min": 8.77, "buy_zone_max": 8.95, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 300283 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.11, "buy_zone_min": 19.91, "buy_zone_max": 20.31, "market_regime": "unknown", "sector_trend": "电网设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300331 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 63.36, "buy_zone_min": 62.73, "buy_zone_max": 63.99, "market_regime": "unknown", "sector_trend": "光学光电子 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300334 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.45, "buy_zone_min": 11.34, "buy_zone_max": 11.56, "market_regime": "unknown", "sector_trend": "环境治理 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300343 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 6.45, "buy_zone_min": 6.39, "buy_zone_max": 6.51, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速 +1
+[2026-06-10T14:33:51] buy_filter 300347 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 38.47, "buy_zone_min": 38.09, "buy_zone_max": 38.85, "market_regime": "unknown", "sector_trend": "医疗服务 横盘 -0
+[2026-06-10T14:33:51] buy_filter 300376 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 6.32, "buy_zone_min": 6.26, "buy_zone_max": 6.38, "market_regime": "unknown", "sector_trend": "其他电源设备Ⅱ 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300397 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.42, "buy_zone_min": 13.29, "buy_zone_max": 13.55, "market_regime": "unknown", "sector_trend": "军工电子Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300400 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.0, "buy_zone_min": 38.61, "buy_zone_max": 39.39, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300401 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.05, "buy_zone_min": 11.93, "buy_zone_max": 12.17, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0
+[2026-06-10T14:33:51] buy_filter 300411 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.99, "buy_zone_min": 10.88, "buy_zone_max": 11.1, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300435 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.4, "buy_zone_min": 18.22, "buy_zone_max": 18.58, "market_regime": "unknown", "sector_trend": "燃气Ⅱ 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 300475 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 179.2, "buy_zone_min": 177.41, "buy_zone_max": 180.99, "market_regime": "unknown", "sector_trend": "其他电子Ⅱ 走弱
+[2026-06-10T14:33:51] buy_filter 300521 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.74, "buy_zone_min": 26.47, "buy_zone_max": 27.01, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300540 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.97, "buy_zone_min": 26.7, "buy_zone_max": 27.24, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300556 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.19, "buy_zone_min": 21.97, "buy_zone_max": 22.41, "market_regime": "unknown", "sector_trend": "软件开发 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300576 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.96, "buy_zone_min": 43.52, "buy_zone_max": 44.4, "market_regime": "unknown", "sector_trend": "电子化学品Ⅱ 走强 趋
+[2026-06-10T14:33:51] buy_filter 300581 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.04, "buy_zone_min": 10.93, "buy_zone_max": 11.15, "market_regime": "unknown", "sector_trend": "航空装备Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300596 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 38.79, "buy_zone_min": 38.4, "buy_zone_max": 39.18, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300604 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 226.94, "buy_zone_min": 224.67, "buy_zone_max": 229.21, "market_regime": "unknown", "sector_trend": "半导体 走强
+[2026-06-10T14:33:51] buy_filter 300606 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.67, "buy_zone_min": 39.27, "buy_zone_max": 40.07, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300637 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.42, "buy_zone_min": 10.32, "buy_zone_max": 10.52, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300641 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 15.88, "buy_zone_min": 15.72, "buy_zone_max": 16.04, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300651 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 23.8, "buy_zone_min": 23.56, "buy_zone_max": 24.04, "market_regime": "unknown", "sector_trend": "文娱用品 横盘 -0.
+[2026-06-10T14:33:51] buy_filter 300656 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.23, "buy_zone_min": 36.86, "buy_zone_max": 37.6, "market_regime": "unknown", "sector_trend": "其他电子Ⅱ 走弱 -1
+[2026-06-10T14:33:51] buy_filter 300665 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.67, "buy_zone_min": 10.56, "buy_zone_max": 10.78, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300666 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 245.51, "buy_zone_min": 243.05, "buy_zone_max": 247.97, "market_regime": "unknown", "sector_trend": "半导体 走强
+[2026-06-10T14:33:51] buy_filter 300671 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 50.2, "buy_zone_min": 49.7, "buy_zone_max": 50.7, "market_regime": "unknown", "sector_trend": "半导体 走强 加速 +1.
+[2026-06-10T14:33:51] buy_filter 300674 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.59, "buy_zone_min": 16.42, "buy_zone_max": 16.76, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300691 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.16, "buy_zone_min": 16.0, "buy_zone_max": 16.32, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300700 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.43, "buy_zone_min": 22.21, "buy_zone_max": 22.65, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300706 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 57.01, "buy_zone_min": 56.44, "buy_zone_max": 57.58, "market_regime": "unknown", "sector_trend": "半导体 走强 加速
+[2026-06-10T14:33:51] buy_filter 300747 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 46.9, "buy_zone_min": 46.43, "buy_zone_max": 47.37, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300804 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.31, "buy_zone_min": 38.92, "buy_zone_max": 39.7, "market_regime": "unknown", "sector_trend": "农化制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300854 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 34.04, "buy_zone_min": 33.7, "buy_zone_max": 34.38, "market_regime": "unknown", "sector_trend": "环境治理 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300880 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 23.09, "buy_zone_min": 22.86, "buy_zone_max": 23.32, "market_regime": "unknown", "sector_trend": "电网设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300893 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.79, "buy_zone_min": 20.58, "buy_zone_max": 21.0, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300920 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 40.88, "buy_zone_min": 40.47, "buy_zone_max": 41.29, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 300923 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 23.67, "buy_zone_min": 23.43, "buy_zone_max": 23.91, "market_regime": "unknown", "sector_trend": "轨交设备Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 300927 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 23.71, "buy_zone_min": 23.47, "buy_zone_max": 23.95, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速
+[2026-06-10T14:33:51] buy_filter 300957 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 33.59, "buy_zone_min": 33.25, "buy_zone_max": 33.93, "market_regime": "unknown", "sector_trend": "化妆品 走强 加速
+[2026-06-10T14:33:51] buy_filter 300985 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 29.95, "buy_zone_min": 29.65, "buy_zone_max": 30.25, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 300994 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.98, "buy_zone_min": 12.85, "buy_zone_max": 13.11, "market_regime": "unknown", "sector_trend": "摩托车及其他 横盘
+[2026-06-10T14:33:51] buy_filter 301072 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 35.76, "buy_zone_min": 35.4, "buy_zone_max": 36.12, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 301161 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 32.74, "buy_zone_min": 32.41, "buy_zone_max": 33.07, "market_regime": "unknown", "sector_trend": "工程机械 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 301195 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 35.52, "buy_zone_min": 35.16, "buy_zone_max": 35.88, "market_regime": "unknown", "sector_trend": "软件开发 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 301217 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 129.96, "buy_zone_min": 128.66, "buy_zone_max": 131.26, "market_regime": "unknown", "sector_trend": "电池 走弱 趋
+[2026-06-10T14:33:51] buy_filter 301256 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.06, "buy_zone_min": 11.94, "buy_zone_max": 12.18, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速
+[2026-06-10T14:33:51] buy_filter 301302 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 32.36, "buy_zone_min": 32.04, "buy_zone_max": 32.68, "market_regime": "unknown", "sector_trend": "军工电子Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 301313 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 68.21000000000001, "buy_zone_min": 67.53, "buy_zone_max": 68.89, "market_regime": "unknown", "sector_trend":
+[2026-06-10T14:33:51] buy_filter 301322 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 57.24, "buy_zone_min": 56.67, "buy_zone_max": 57.81, "market_regime": "unknown", "sector_trend": "摩托车及其他 横盘
+[2026-06-10T14:33:51] buy_filter 301357 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 92.38, "buy_zone_min": 91.46, "buy_zone_max": 93.3, "market_regime": "unknown", "sector_trend": "地面兵装Ⅱ 走强 加速
+[2026-06-10T14:33:51] buy_filter 301396 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 175.72, "buy_zone_min": 173.96, "buy_zone_max": 177.48, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走
+[2026-06-10T14:33:51] buy_filter 301536 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 85.83, "buy_zone_min": 84.97, "buy_zone_max": 86.69, "market_regime": "unknown", "sector_trend": "半导体 走强 加速
+[2026-06-10T14:33:51] buy_filter 301555 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 41.5, "buy_zone_min": 41.09, "buy_zone_max": 41.91, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 301565 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.87, "buy_zone_min": 26.6, "buy_zone_max": 27.14, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 301571 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 57.28, "buy_zone_min": 56.71, "buy_zone_max": 57.85, "market_regime": "unknown", "sector_trend": "军工电子Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 301601 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.97, "buy_zone_min": 18.78, "buy_zone_max": 19.16, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 301629 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 370.98, "buy_zone_min": 367.27, "buy_zone_max": 374.69, "market_regime": "unknown", "sector_trend": "半导体 走强
+[2026-06-10T14:33:51] buy_filter 301678 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 57.29, "buy_zone_min": 56.72, "buy_zone_max": 57.86, "market_regime": "unknown", "sector_trend": "半导体 走强 加速
+[2026-06-10T14:33:51] buy_filter 600054 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.22, "buy_zone_min": 11.11, "buy_zone_max": 11.33, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:51] buy_filter 600063 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.34, "buy_zone_min": 8.26, "buy_zone_max": 8.42, "market_regime": "unknown", "sector_trend": "化学纤维 走弱 趋缓 -0
+[2026-06-10T14:33:51] buy_filter 600110 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.34, "buy_zone_min": 12.22, "buy_zone_max": 12.46, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 600141 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 29.83, "buy_zone_min": 29.53, "buy_zone_max": 30.13, "market_regime": "unknown", "sector_trend": "农化制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 600158 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 9.52, "buy_zone_min": 9.42, "buy_zone_max": 9.62, "market_regime": "unknown", "sector_trend": "数据不足", "zone_
+[2026-06-10T14:33:51] buy_filter 600228 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 6.92, "buy_zone_min": 6.85, "buy_zone_max": 6.99, "market_regime": "unknown", "sector_trend": "数字媒体 走弱 趋缓 -0
+[2026-06-10T14:33:51] buy_filter 600353 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.99, "buy_zone_min": 26.72, "buy_zone_max": 27.26, "market_regime": "unknown", "sector_trend": "其他电子Ⅱ 走弱 -
+[2026-06-10T14:33:51] buy_filter 600366 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.73, "buy_zone_min": 13.59, "buy_zone_max": 13.87, "market_regime": "unknown", "sector_trend": "金属新材料 走弱 趋
+[2026-06-10T14:33:51] buy_filter 600367 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 58.5, "buy_zone_min": 57.91, "buy_zone_max": 59.09, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速
+[2026-06-10T14:33:51] buy_filter 600370 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 1.42, "buy_zone_min": 1.41, "buy_zone_max": 1.43, "market_regime": "unknown", "sector_trend": "化学纤维 走弱 趋缓 -0
+[2026-06-10T14:33:51] buy_filter 600556 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 5.32, "buy_zone_min": 5.27, "buy_zone_max": 5.37, "market_regime": "unknown", "sector_trend": "广告营销 走弱 趋缓 -1
+[2026-06-10T14:33:51] buy_filter 600610 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.01, "buy_zone_min": 7.93, "buy_zone_max": 8.09, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 600722 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 9.85, "buy_zone_min": 9.75, "buy_zone_max": 9.95, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 600749 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.92, "buy_zone_min": 16.75, "buy_zone_max": 17.09, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:51] buy_filter 600808 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 2.84, "buy_zone_min": 2.81, "buy_zone_max": 2.87, "market_regime": "unknown", "sector_trend": "普钢 走弱 趋缓 -0.5
+[2026-06-10T14:33:51] buy_filter 600847 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 15.06, "buy_zone_min": 14.91, "buy_zone_max": 15.21, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 600869 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 31.3, "buy_zone_min": 30.99, "buy_zone_max": 31.61, "market_regime": "unknown", "sector_trend": "电网设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 600888 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.93, "buy_zone_min": 10.82, "buy_zone_max": 11.04, "market_regime": "unknown", "sector_trend": "工业金属 走强 加速
+[2026-06-10T14:33:51] buy_filter 600901 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 6.78, "buy_zone_min": 6.71, "buy_zone_max": 6.85, "market_regime": "unknown", "sector_trend": "多元金融 走强 加速 +0
+[2026-06-10T14:33:51] buy_filter 601208 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 62.13, "buy_zone_min": 61.51, "buy_zone_max": 62.75, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 601606 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 33.37, "buy_zone_min": 33.04, "buy_zone_max": 33.7, "market_regime": "unknown", "sector_trend": "地面兵装Ⅱ 走强 加速
+[2026-06-10T14:33:51] buy_filter 601633 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 17.14, "buy_zone_min": 16.97, "buy_zone_max": 17.31, "market_regime": "unknown", "sector_trend": "乘用车 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 601728 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 6.31, "buy_zone_min": 6.25, "buy_zone_max": 6.37, "market_regime": "unknown", "sector_trend": "通信服务 走弱 趋缓 -1
+[2026-06-10T14:33:51] buy_filter 603019 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 82.98, "buy_zone_min": 82.15, "buy_zone_max": 83.81, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋
+[2026-06-10T14:33:51] buy_filter 603020 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.01, "buy_zone_min": 11.89, "buy_zone_max": 12.13, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603033 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.42, "buy_zone_min": 10.32, "buy_zone_max": 10.52, "market_regime": "unknown", "sector_trend": "橡胶 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 603061 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 320.3, "buy_zone_min": 317.1, "buy_zone_max": 323.5, "market_regime": "unknown", "sector_trend": "半导体 走强 加速
+[2026-06-10T14:33:51] buy_filter 603099 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 38.37, "buy_zone_min": 37.99, "buy_zone_max": 38.75, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋
+[2026-06-10T14:33:51] buy_filter 603125 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 24.82, "buy_zone_min": 24.57, "buy_zone_max": 25.07, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603150 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 78.62, "buy_zone_min": 77.83, "buy_zone_max": 79.41, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 603194 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.45, "buy_zone_min": 37.08, "buy_zone_max": 37.82, "market_regime": "unknown", "sector_trend": "工程机械 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 603202 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 67.0, "buy_zone_min": 66.33, "buy_zone_max": 67.67, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 603217 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 24.26, "buy_zone_min": 24.02, "buy_zone_max": 24.5, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603228 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 75.86, "buy_zone_min": 75.1, "buy_zone_max": 76.62, "market_regime": "unknown", "sector_trend": "元件 持续走弱 -1.
+[2026-06-10T14:33:51] buy_filter 603233 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.41, "buy_zone_min": 16.25, "buy_zone_max": 16.57, "market_regime": "unknown", "sector_trend": "医药商业 横盘 +0
+[2026-06-10T14:33:51] buy_filter 603259 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 97.06, "buy_zone_min": 96.09, "buy_zone_max": 98.03, "market_regime": "unknown", "sector_trend": "医疗服务 横盘 -0
+[2026-06-10T14:33:51] buy_filter 603283 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 49.82, "buy_zone_min": 49.32, "buy_zone_max": 50.32, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋
+[2026-06-10T14:33:51] buy_filter 603285 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.86, "buy_zone_min": 43.42, "buy_zone_max": 44.3, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603317 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.74, "buy_zone_min": 13.6, "buy_zone_max": 13.88, "market_regime": "unknown", "sector_trend": "调味发酵品Ⅱ 走强 加
+[2026-06-10T14:33:51] buy_filter 603318 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 9.06, "buy_zone_min": 8.97, "buy_zone_max": 9.15, "market_regime": "unknown", "sector_trend": "燃气Ⅱ 走强 加速 +0.
+[2026-06-10T14:33:51] buy_filter 603330 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 9.0, "buy_zone_min": 8.91, "buy_zone_max": 9.09, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +0.6%
+[2026-06-10T14:33:51] buy_filter 603360 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.12, "buy_zone_min": 19.92, "buy_zone_max": 20.32, "market_regime": "unknown", "sector_trend": "农化制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603370 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.25, "buy_zone_min": 42.82, "buy_zone_max": 43.68, "market_regime": "unknown", "sector_trend": "电机Ⅱ 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 603375 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 47.8, "buy_zone_min": 47.32, "buy_zone_max": 48.28, "market_regime": "unknown", "sector_trend": "半导体 走强 加速 +
+[2026-06-10T14:33:51] buy_filter 603386 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.66, "buy_zone_min": 18.47, "buy_zone_max": 18.85, "market_regime": "unknown", "sector_trend": "元件 持续走弱 -1
+[2026-06-10T14:33:51] buy_filter 603393 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.72, "buy_zone_min": 26.45, "buy_zone_max": 26.99, "market_regime": "unknown", "sector_trend": "燃气Ⅱ 走强 加速
+[2026-06-10T14:33:51] buy_filter 603496 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.63, "buy_zone_min": 22.4, "buy_zone_max": 22.86, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 603505 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 17.96, "buy_zone_min": 17.78, "buy_zone_max": 18.14, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603527 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.72, "buy_zone_min": 13.58, "buy_zone_max": 13.86, "market_regime": "unknown", "sector_trend": "工业金属 走强 加速
+[2026-06-10T14:33:51] buy_filter 603650 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 59.92, "buy_zone_min": 59.32, "buy_zone_max": 60.52, "market_regime": "unknown", "sector_trend": "橡胶 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 603663 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 74.66, "buy_zone_min": 73.91, "buy_zone_max": 75.41, "market_regime": "unknown", "sector_trend": "化学原料 走强 加速
+[2026-06-10T14:33:51] buy_filter 603713 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 55.61, "buy_zone_min": 55.05, "buy_zone_max": 56.17, "market_regime": "unknown", "sector_trend": "物流 走弱 趋缓 -
+[2026-06-10T14:33:51] buy_filter 603800 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 79.44, "buy_zone_min": 78.65, "buy_zone_max": 80.23, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 603822 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 81.97, "buy_zone_min": 81.15, "buy_zone_max": 82.79, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603826 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 30.63, "buy_zone_min": 30.32, "buy_zone_max": 30.94, "market_regime": "unknown", "sector_trend": "非金属材料Ⅱ 走弱
+[2026-06-10T14:33:51] buy_filter 603867 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.47, "buy_zone_min": 39.08, "buy_zone_max": 39.86, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 603991 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 109.17, "buy_zone_min": 108.08, "buy_zone_max": 110.26, "market_regime": "unknown", "sector_trend": "半导体 走强
+[2026-06-10T14:33:51] buy_filter 605020 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 33.1, "buy_zone_min": 32.77, "buy_zone_max": 33.43, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:33:51] buy_filter 605100 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.89, "buy_zone_min": 37.51, "buy_zone_max": 38.27, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 605186 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 31.7, "buy_zone_min": 31.38, "buy_zone_max": 32.02, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋缓
+[2026-06-10T14:33:51] buy_filter 605398 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 25.27, "buy_zone_min": 25.02, "buy_zone_max": 25.52, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走弱 趋
+[2026-06-10T14:33:51] buy_filter 605507 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 16.1, "buy_zone_min": 15.94, "buy_zone_max": 16.26, "market_regime": "unknown", "sector_trend": "化学制药 横盘 +0.
+[2026-06-10T14:33:51] buy_filter 605566 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.96, "buy_zone_min": 43.52, "buy_zone_max": 44.4, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:34:31] buy_filter 003027 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.94, "buy_zone_min": 20.73, "buy_zone_max": 21.15, "market_regime": "unknown", "sector_trend": "环境治理 走弱 趋缓
+[2026-06-10T14:34:31] buy_filter 300826 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 14.5, "buy_zone_min": 14.36, "buy_zone_max": 14.64, "market_regime": "unknown", "sector_trend": "工程咨询服务Ⅱ 走弱
+[2026-06-10T14:34:31] buy_filter 300856 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 11.47, "buy_zone_min": 11.36, "buy_zone_max": 11.58, "market_regime": "unknown", "sector_trend": "化妆品 走强 加速
+[2026-06-10T14:34:31] buy_filter 600721 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 8.02, "buy_zone_min": 7.94, "buy_zone_max": 8.1, "market_regime": "unknown", "sector_trend": "医疗服务 走弱 趋缓 -0.
+[2026-06-10T14:34:31] buy_filter 600847 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 15.15, "buy_zone_min": 15.0, "buy_zone_max": 15.3, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓 -1.
+[2026-06-10T14:34:31] buy_filter 603773 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 155.0, "buy_zone_min": 153.45, "buy_zone_max": 156.55, "market_regime": "unknown", "sector_trend": "光学光电子 走弱
+[2026-06-10T14:35:06] buy_filter 002868 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 25.49, "buy_zone_min": 24.9, "buy_zone_max": 25.79, "market_regime": "unknown", "sector_trend": "动物保健Ⅱ 走强 加速
+[2026-06-10T14:35:06] buy_filter 000869 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 17.48, "buy_zone_min": 17.02, "buy_zone_max": 17.71, "market_regime": "unknown", "sector_trend": "非白酒 走强 加速
+[2026-06-10T14:35:09] buy_filter 300397 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.49, "buy_zone_min": 13.36, "buy_zone_max": 13.62, "market_regime": "unknown", "sector_trend": "军工电子Ⅱ 走弱 趋
+[2026-06-10T14:35:09] buy_filter 300477 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 2.55, "buy_zone_min": 2.52, "buy_zone_max": 2.58, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓 -1.5
+[2026-06-10T14:35:09] buy_filter 300576 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.72, "buy_zone_min": 43.28, "buy_zone_max": 44.16, "market_regime": "unknown", "sector_trend": "电子化学品Ⅱ 横盘
+[2026-06-10T14:35:09] buy_filter 300893 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 20.9, "buy_zone_min": 20.69, "buy_zone_max": 21.11, "market_regime": "unknown", "sector_trend": "汽车零部件 走弱 趋缓
+[2026-06-10T14:35:09] buy_filter 300936 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 110.8, "buy_zone_min": 109.69, "buy_zone_max": 111.91, "market_regime": "unknown", "sector_trend": "元件 持续走弱
+[2026-06-10T14:35:09] buy_filter 301217 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 129.23, "buy_zone_min": 127.94, "buy_zone_max": 130.52, "market_regime": "unknown", "sector_trend": "电池 走弱 趋
+[2026-06-10T14:35:09] buy_filter 301313 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 68.58, "buy_zone_min": 67.89, "buy_zone_max": 69.27, "market_regime": "unknown", "sector_trend": "数字媒体 横盘 -0
+[2026-06-10T14:35:09] buy_filter 301396 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 174.56, "buy_zone_min": 172.81, "buy_zone_max": 176.31, "market_regime": "unknown", "sector_trend": "IT服务Ⅱ 走
+[2026-06-10T14:35:09] buy_filter 603285 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.63, "buy_zone_min": 43.19, "buy_zone_max": 44.07, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:35:47] buy_filter 002843 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.38, "buy_zone_min": 22.16, "buy_zone_max": 22.6, "market_regime": "unknown", "sector_trend": "通用设备 走弱 趋缓
+[2026-06-10T14:35:47] buy_filter 300174 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 25.31, "buy_zone_min": 25.06, "buy_zone_max": 25.56, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:35:47] buy_filter 300637 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 10.36, "buy_zone_min": 10.26, "buy_zone_max": 10.46, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:35:47] buy_filter 300671 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 49.93, "buy_zone_min": 49.43, "buy_zone_max": 50.43, "market_regime": "unknown", "sector_trend": "半导体 走强 加速
+[2026-06-10T14:35:47] buy_filter 300936 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 112.0, "buy_zone_min": 110.88, "buy_zone_max": 113.12, "market_regime": "unknown", "sector_trend": "元件 持续走弱
+[2026-06-10T14:35:47] buy_filter 600110 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 12.27, "buy_zone_min": 12.15, "buy_zone_max": 12.39, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓 -
+[2026-06-10T14:35:47] buy_filter 603379 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 60.63, "buy_zone_min": 60.02, "buy_zone_max": 61.24, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:35:47] buy_filter 605186 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 31.87, "buy_zone_min": 31.55, "buy_zone_max": 32.19, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋
+[2026-06-10T14:36:25] buy_filter 000920 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 13.53, "buy_zone_min": 13.39, "buy_zone_max": 13.67, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:36:25] buy_filter 300006 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 5.14, "buy_zone_min": 5.09, "buy_zone_max": 5.19, "market_regime": "unknown", "sector_trend": "化学制药 横盘 -0.0%
+[2026-06-10T14:36:25] buy_filter 300054 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 71.18, "buy_zone_min": 70.47, "buy_zone_max": 71.89, "market_regime": "unknown", "sector_trend": "电子化学品Ⅱ 横盘
+[2026-06-10T14:36:25] buy_filter 300521 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 26.6, "buy_zone_min": 26.33, "buy_zone_max": 26.87, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:36:25] buy_filter 300651 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 23.68, "buy_zone_min": 23.44, "buy_zone_max": 23.92, "market_regime": "unknown", "sector_trend": "文娱用品 走弱 趋缓
+[2026-06-10T14:36:25] buy_filter 300666 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 244.26, "buy_zone_min": 241.82, "buy_zone_max": 246.7, "market_regime": "unknown", "sector_trend": "半导体 走强 加
+[2026-06-10T14:36:25] buy_filter 300854 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 33.76, "buy_zone_min": 33.42, "buy_zone_max": 34.1, "market_regime": "unknown", "sector_trend": "环境治理 走弱 趋缓
+[2026-06-10T14:36:25] buy_filter 300859 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 31.29, "buy_zone_min": 30.98, "buy_zone_max": 31.6, "market_regime": "unknown", "sector_trend": "旅游及景区 走强 趋缓
+[2026-06-10T14:36:25] buy_filter 300873 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 22.8, "buy_zone_min": 22.57, "buy_zone_max": 23.03, "market_regime": "unknown", "sector_trend": "物流 走弱 趋缓 -0
+[2026-06-10T14:36:25] buy_filter 301217 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 128.5, "buy_zone_min": 127.22, "buy_zone_max": 129.78, "market_regime": "unknown", "sector_trend": "电池 走弱 趋缓
+[2026-06-10T14:36:25] buy_filter 603285 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 43.36, "buy_zone_min": 42.93, "buy_zone_max": 43.79, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:36:25] buy_filter 603386 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 18.53, "buy_zone_min": 18.34, "buy_zone_max": 18.72, "market_regime": "unknown", "sector_trend": "元件 持续走弱 -2
+[2026-06-10T14:36:25] buy_filter 603800 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 79.01, "buy_zone_min": 78.22, "buy_zone_max": 79.8, "market_regime": "unknown", "sector_trend": "专用设备 走弱 趋缓
+[2026-06-10T14:36:25] buy_filter 603867 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 39.23, "buy_zone_min": 38.84, "buy_zone_max": 39.62, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:37:03] buy_filter 002422 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.02, "buy_zone_min": 36.65, "buy_zone_max": 37.39, "market_regime": "unknown", "sector_trend": "化学制药 横盘 -0
+[2026-06-10T14:37:03] buy_filter 002842 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 35.4, "buy_zone_min": 35.05, "buy_zone_max": 35.75, "market_regime": "unknown", "sector_trend": "小金属 横盘 +0.2
+[2026-06-10T14:37:03] buy_filter 003004 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 67.74, "buy_zone_min": 67.06, "buy_zone_max": 68.42, "market_regime": "unknown", "sector_trend": "计算机设备 走弱 趋
+[2026-06-10T14:37:03] buy_filter 300656 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 37.03, "buy_zone_min": 36.66, "buy_zone_max": 37.4, "market_regime": "unknown", "sector_trend": "其他电子Ⅱ 走弱 趋缓
+[2026-06-10T14:37:03] buy_filter 300747 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 47.16, "buy_zone_min": 46.69, "buy_zone_max": 47.63, "market_regime": "unknown", "sector_trend": "自动化设备 走弱 趋
+[2026-06-10T14:37:03] buy_filter 301555 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 41.28, "buy_zone_min": 40.87, "buy_zone_max": 41.69, "market_regime": "unknown", "sector_trend": "塑料 走强 加速 +
+[2026-06-10T14:37:03] buy_filter 600160 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 40.32, "buy_zone_min": 39.92, "buy_zone_max": 40.72, "market_regime": "unknown", "sector_trend": "化学制品 走强 加速
+[2026-06-10T14:37:03] buy_filter 603016 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 38.41, "buy_zone_min": 38.03, "buy_zone_max": 38.79, "market_regime": "unknown", "sector_trend": "电网设备 走弱 趋缓
+[2026-06-10T14:38:21] buy_filter 601579 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 15.88, "buy_zone_min": 15.27, "buy_zone_max": 15.9, "market_regime": "unknown", "sector_trend": "非白酒 走强 加速 +
+[2026-06-10T14:38:21] buy_filter 300119 | {"signal_id": null, "entry_rule": "next_day", "reason_filtered": "尾盘拉升/次日再看，今日不追", "price": 15.35, "buy_zone_min": 14.75, "buy_zone_max": 15.37, "market_regime": "unknown", "sector_trend": "动物保健Ⅱ 走强 加
+[2026-06-10T14:53:40] position_size 002064 | {"amount": 9600, "base_amount": 9600, "reason": "板块走弱", "sector_mult": 0.0, "zone_mult": 0.5}
+[2026-06-10T14:56:33] position_size 002422 | {"amount": 16000, "base_amount": 16000, "reason": "", "sector_mult": 0.0, "zone_mult": 0.5}
+[2026-06-10T15:00:07] position_size 002842 | {"amount": 16000, "base_amount": 16000, "reason": "", "sector_mult": 0.0, "zone_mult": 0.5}
+[2026-06-10T15:04:35] position_size 300181 | {"amount": 16000, "base_amount": 16000, "reason": "", "sector_mult": 0.0, "zone_mult": 0.5}
+[2026-06-10T15:09:45] position_size 300401 | {"amount": 16000, "base_amount": 16000, "reason": "", "sector_mult": 0.0, "zone_mult": 0.5}
+[2026-06-10T15:12:07] position_size 300521 | {"amount": 9600, "base_amount": 9600, "reason": "板块走弱", "sector_mult": 0.0, "zone_mult": 0.5}
+
+## 规则审计发现
+⚠️ [P1] 过滤掉 605296 但收盘涨 +3.58%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 601606 但收盘涨 +5.67%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 600573 但收盘涨 +8.24%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 000729 但收盘涨 +5.15%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 600132 但收盘涨 +3.87%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 605366 但收盘涨 +3.08%（需确认信号(zone_pos=68%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 603379 但收盘涨 +8.90%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 002430 但收盘涨 +5.07%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 600573 但收盘涨 +6.90%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 600573 但收盘涨 +6.03%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 002669 但收盘涨 +4.71%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 601606 但收盘涨 +3.96%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 603823 但收盘涨 +3.88%（需确认信号(zone_pos=66%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 600573 但收盘涨 +7.08%（需确认信号(zone_pos=67%)，等回调到区间下半部）
+⚠️ [P1] 过滤掉 300264 但收盘涨 +5.42%（尾盘拉升/次日再看，今日不追）
+⚠️ [P1] 过滤掉 300665 但收盘涨 +3.75%（尾盘拉升/次日再看，今日不追）
+⚠️ [P1] 过滤掉 300893 但收盘涨 +3.42%（尾盘拉升/次日再看，今日不追）
+⚠️ [P1] 过滤掉 603375 但收盘涨 +4.62%（尾盘拉升/次日再看，今日不追）
+
+## 市场结构演变
+2026-06-10T09 -: -0.66%
+2026-06-10T09 IT服务Ⅱ: -0.20%
+2026-06-10T09 一般零售: -0.45%
+2026-06-10T09 专业工程: -0.56%
+2026-06-10T09 专业服务: -0.63%
+2026-06-10T09 专业连锁Ⅱ: -0.55%
+2026-06-10T09 专用设备: -0.64%
+2026-06-10T09 个护用品: -0.47%
+2026-06-10T09 中药Ⅱ: -0.51%
+2026-06-10T09 乘用车: -0.79%
+2026-06-10T09 互联网电商: -0.77%
+2026-06-10T09 休闲食品: -0.56%
+2026-06-10T09 保险Ⅱ: -0.33%
+2026-06-10T09 元件: -1.47%
+2026-06-10T09 光伏设备: -1.17%
+2026-06-10T09 光学光电子: -1.22%
+2026-06-10T09 其他家电Ⅱ: -0.59%
+2026-06-10T09 其他电子Ⅱ: -1.46%
+2026-06-10T09 其他电源设备Ⅱ: -1.57%
+2026-06-10T09 养殖业: +0.24%
+2026-06-10T09 军工电子Ⅱ: -0.48%
+2026-06-10T09 农产品加工: -0.28%
+2026-06-10T09 农化制品: -0.55%
+2026-06-10T09 冶钢原料: -1.03%
+2026-06-10T09 出版: -0.26%
+2026-06-10T09 动物保健Ⅱ: +0.10%
+2026-06-10T09 包装印刷: -0.80%
+2026-06-10T09 化妆品: -0.79%
+2026-06-10T09 化学制品: -0.23%
+2026-06-10T09 化学制药: -0.49%
+2026-06-10T09 化学原料: -0.52%
+2026-06-10T09 化学纤维: -0.51%
+2026-06-10T09 医疗器械: -0.61%
+2026-06-10T09 医疗服务: -0.38%
+2026-06-10T09 医药商业: -0.57%
+2026-06-10T09 半导体: -0.74%
+2026-06-10T09 厨卫电器: -0.22%
+2026-06-10T09 商用车: -0.59%
+2026-06-10T09 地面兵装Ⅱ: -0.62%
+2026-06-10T09 基础建设: -0.84%
+2026-06-10T09 塑料: -0.20%
+2026-06-10T09 多元金融: -0.69%
+2026-06-10T09 家居用品: -0.31%
+2026-06-10T09 家电零部件Ⅱ: -0.77%
+2026-06-10T09 小家电: -0.58%
+2026-06-10T09 小金属: -1.89%
+2026-06-10T09 工业金属: -2.08%
+2026-06-10T09 工程咨询服务Ⅱ: -0.92%
+2026-06-10T09 工程机械: -0.31%
+2026-06-10T09 广告营销: -0.54%
+
+## 历史教训
+[regime_detection] (1次) regime 检测必须引入最短确认时间或迟滞，否则在真实上涨行情中也会因微小波动产生抖动，导致交易逻辑不连续
+[signal_filter] (1次) 买入触发时必须再次验证价格是否落在计算的买入区间内，若显著偏离应拒绝执行
+[sizing] (1次) 当市场宽度显示绝大多数个股下跌时（下跌家数/上涨家数>3且指数微跌），应暂停新开仓位或至少降低开仓系数
+[regime_detection] (1次) regime 切换必须经过最短确认时间（建议 120s）且需要宽度方向验证：仅当 up_count 趋势方向与 regime 方向一致时才确认切换，否则维持旧判。特别地，开盘 30 分钟内若 regime 切换 >5 次且全为 low confidence，则当日应标记为「regime_unstable_day」，全局降低仓位系数至 0.5x
+[signal_filter] (1次) 新开仓前必须通过市场宽度准入检查：当日 down_count/up_count 持续 >2.5 超过 10 分钟则禁止新开仓，需等比值回落至 <2.0 并稳定 5 分钟后方可恢复。此规则高于 regime 判断，即使 regime 显示 normal/uptrend 也需遵守
+[stop_timing] (1次) 开盘 5 分钟内若 market_breadth_down_ratio > 2.5，止损 effective 偏移量应从固定 1% 提升至 3%，避免在恐慌性开盘急跌中被过早扫出。同时应检查持仓的成本价是否已远离当前波动率下的合理持有区间（如距 MA20 超过 2σ），若是则应在开盘前提前收紧止损而非放宽
+[sizing] (1次) 当日若被标记为 regime_unstable_day，所有新开仓 position_size 的 sector_mult 和 zone_mult 乘积应强制上限于 0.3（当前正常为 1.0*1.0=1.0），已有持仓的加仓操作同样受限。这可防止在方向不明的高噪声环境中过度暴露
+
+## 当前策略参数
+ABNORMAL_NEAR_LIMIT_PCT=8.5
+ABNORMAL_RAPID_RISE_PCT=1.0
+ABNORMAL_VOLUME_SURGE_RATIO=2.0
+ACCOUNT_MODE=manual
+AI_MODEL=deepseek-v4-pro
+AI_MODEL_AUDIT=qwen3.7-plus
+AI_MODEL_DEFAULT=deepseek-v4-pro
+AI_MODEL_MORNING=qwen3.7-plus
+AI_MODEL_REVIEW=qwen3.7-plus
+AI_MODEL_SCREENING=qwen3.7-plus
+AI_MODEL_STRATEGY=qwen3.7-plus
+AI_MODEL_WATCHER=
+AI_MODEL_WATCHER_CHASE=
+AI_MODEL_WATCHER_INDEX=
+AI_MODEL_WATCHER_SWAP=
+AI_MODEL_WATCHER_TRAPPED=
+AI_PROVIDER=
+AUDIT_AI_MODEL=qwen3.7-plus
+AUDIT_AUTO_APPLY_PARAM=False
+AUDIT_ENABLED=True
+AUDIT_RETENTION_DAYS=90
+BATCH_ENABLED=True
+BATCH_POLL_INTERVAL=10
+BATCH_TIMEOUT_MINUTES=180
+BREADTH_DOWN_UP_RATIO=3.0
+BREADTH_IMPROVEMENT_THRESHOLD=50
+BREADTH_ROLLING_WINDOW_MEDIUM=20
+BREADTH_ROLLING_WINDOW_SHORT=10
+CASH_RESERVE_PCT=0.2
+DASHSCOPE_ANALYSIS_MODEL=deepseek-v4-pro
+DASHSCOPE_API_KEY=sk-f5907100fbd04e238a59f67ed96d9513
+DASHSCOPE_COMPAT_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1
+DASHSCOPE_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+DASHSCOPE_MODEL=deepseek-v4-pro
+DATABASE_PATH=/Users/biss/trading-system/storage/stock_market.db
+DEEPSEEK_API_KEY=sk-8d1735d97f8b44149ace25cbfe653b54
+DEEPSEEK_ENDPOINT=https://api.deepseek.com/v1/chat/completions
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEFAULT_COMMISSION_RATE=8.5e-05
+DEFAULT_POSITION_PCT=0.3
+
+请完成审计分析。

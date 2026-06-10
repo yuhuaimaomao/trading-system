@@ -8,7 +8,10 @@
 不给 AI 喂加工过的「得分」，只喂原始数据 + 环比对比，让 AI 自己定性。
 """
 
+import os
 import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -986,25 +989,6 @@ class ReviewAnalyzer:
 
             prompt = REVIEW_REPORT_PROMPT.format(**prompt_data)
 
-            # 保存 Prompt 到日志目录
-            try:
-                prompt_dir = LOGS_DIR / trade_date / "prompts"
-                prompt_dir.mkdir(parents=True, exist_ok=True)
-                prompt_path = prompt_dir / "review_prompt.txt"
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                with open(prompt_path, "w", encoding="utf-8") as f:
-                    f.write("=" * 80 + "\n")
-                    f.write(f"复盘 AI Prompt 调试日志 - {current_time}\n")
-                    f.write("=" * 80 + "\n\n")
-                    f.write("【完整 Prompt 内容】\n\n")
-                    f.write(prompt)
-                    f.write("\n\n" + "=" * 80 + "\n")
-                    f.write(f"Prompt 总字数：{len(prompt)}字\n")
-                    f.write("=" * 80 + "\n")
-                self.logger.info(f"✅ 复盘 Prompt 已保存到：{prompt_path}")
-            except Exception as e:
-                self.logger.warning(f"保存 Prompt 日志失败：{e}")
-
             # ===== 12. 调用 AI（单次调用，数据已预计算嵌入）=====
             system_prompt = (
                 '你是一个顶级游资复盘手，代号"刺客"，风格犀利、直接、有观点。'
@@ -1034,6 +1018,11 @@ class ReviewAnalyzer:
                     if settings.BATCH_ENABLED:
                         self.logger.info(f"调用 {model_label} AI 生成复盘报告（Batch模式，Prompt {len(prompt)}字）...")
                         report_text = self._run_batch_review(prompt, trade_date, system_prompt)
+                        if report_text is None:
+                            # Batch 已提交，子进程负责收尾
+                            self.logger.info(f"✅ {model_label} Batch 已提交，报告稍后通过子进程推送")
+                            reports[model_name] = None
+                            continue
                     else:
                         self.logger.info(f"调用 {model_label} AI 生成复盘报告（预计算模式，Prompt {len(prompt)}字）...")
                         report_text = self._run_fc_review(prompt, trade_date, system_prompt, precomputed=True)
@@ -1063,31 +1052,15 @@ class ReviewAnalyzer:
             if not report:
                 report = next((v for v in reports.values() if v), None)
             if not report:
-                raise RuntimeError("所有模型均调用失败，无法生成复盘报告")
+                # 可能是 Batch 模式，子进程稍后推送
+                elapsed = time.time() - start_time
+                self.logger.info(f"📤 Batch 已提交，主进程退出（{elapsed:.0f}s），子进程稍后推送报告")
+                return "报告正在通过批处理生成，稍后推送。", []
 
             elapsed = time.time() - start_time
             self.logger.info(f"✅ 复盘 AI 分析完成，耗时 {elapsed:.1f}秒")
 
-            # 解析股票池
-            stock_pool = self._extract_stock_pool(report)
-            cleaned_report = self._remove_stock_pool(report)
-            cleaned_report = self._remove_predictions(cleaned_report)
-            # 去掉 AI 输出开头的 markdown 分隔线
-            cleaned_report = cleaned_report.lstrip("-").lstrip()
-
-            # 提取预测
-            try:
-                self._extract_predictions(report, trade_date)
-            except Exception as e:
-                self.logger.warning(f"预测提取失败（不影响主流程）: {e}")
-
-            # 提取经验教训
-            try:
-                self._extract_lessons(cleaned_report, trade_date)
-            except Exception as e:
-                self.logger.warning(f"教训提取失败（不影响主流程）: {e}")
-
-            return cleaned_report, stock_pool
+            return self._finalize_report(report, trade_date)
 
         except Exception as e:
             self.logger.error(f"❌ 复盘 AI 分析失败：{e}", exc_info=True)
@@ -1211,7 +1184,7 @@ class ReviewAnalyzer:
 }}
 """
         try:
-            result_text = ai.chat(extract_prompt, model="review", max_tokens=800)
+            result_text = ai.chat(extract_prompt, model="review")
             # 清理 JSON
             result_text = re.sub(r"```(?:json)?\s*", "", result_text)
             result_text = result_text.strip()
@@ -1440,77 +1413,24 @@ class ReviewAnalyzer:
             batch_id = batch_info["id"]
             self.logger.info(f"Batch: 任务已创建 → {batch_id}")
 
-            # ── Step 4: 轮询等待 ──
-            self.logger.info("Batch: 等待完成...")
-            status = batch_info.get("status", "unknown")
-            while time.time() < deadline:
-                resp = requests.get(
-                    f"{batch_base}/batches/{batch_id}",
-                    headers=headers,
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                info = resp.json()
-                status = info.get("status", status)
-
-                if status in ("completed", "failed", "expired", "cancelled"):
-                    break
-
-                counts = info.get("request_counts", {})
-                self.logger.info(
-                    f"Batch: {status} | "
-                    f"total={counts.get('total', '?')} "
-                    f"completed={counts.get('completed', '?')} "
-                    f"failed={counts.get('failed', '?')}"
-                )
-                time.sleep(settings.BATCH_POLL_INTERVAL)
-
-            if status != "completed":
-                errors = info.get("errors", "")
-                raise RuntimeError(f"状态={status} errors={errors}")
-
+            # ── Step 4: 启动子进程异步等待 ──
+            self.logger.info(f"Batch: 任务已提交 → {batch_id}，启动子进程异步轮询")
             elapsed = time.time() - batch_start
-            self.logger.info(f"Batch: 完成（{elapsed:.0f}s）")
+            self.logger.info(f"Batch: 主进程退出（{elapsed:.0f}s），子进程接管后续轮询+收尾")
 
-            # ── Step 5: 下载结果 ──
-            output_file_id = info["output_file_id"]
-            resp = requests.get(
-                f"{batch_base}/files/{output_file_id}/content",
-                headers=headers,
-                timeout=30,
+            # spawn 子进程，主进程不等待
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    f"from review.review_analyzer import ReviewAnalyzer; "
+                    f"ReviewAnalyzer._batch_poll_and_finalize('{trade_date}', '{batch_id}')",
+                ],
+                env={**os.environ},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            resp.raise_for_status()
-
-            # 验证并保存原始结果
-            result_path = LOGS_DIR / trade_date / "prompts" / "batch_output.jsonl"
-            result_path.write_text(resp.text, encoding="utf-8")
-
-            results = [_json.loads(line) for line in resp.text.strip().split("\n") if line.strip()]
-            if not results:
-                raise RuntimeError("Batch 返回空结果")
-
-            result = results[0]
-
-            # 检查行级错误
-            if result.get("error"):
-                raise RuntimeError(f"请求级错误: {result['error']}")
-
-            body = result.get("response", {}).get("body", {})
-            choices = body.get("choices", [])
-            if not choices:
-                raise RuntimeError("Batch 响应无 choices")
-
-            content = choices[0].get("message", {}).get("content", "")
-            if not content:
-                raise RuntimeError("Batch 响应内容为空")
-
-            usage = body.get("usage", {})
-            self.logger.info(
-                f"Batch: 报告 {len(content)}字 | "
-                f"input={usage.get('prompt_tokens', '?')} "
-                f"output={usage.get('completion_tokens', '?')}"
-            )
-            return content
+            return None  # 告诉上层：已提交，报告稍后推送
 
         except Exception as e:
             self.logger.error(f"Batch API 失败: {e}，回退实时模式")
@@ -1589,7 +1509,6 @@ class ReviewAnalyzer:
                     model="review",
                     tools=tools,
                     tool_choice=tool_choice,
-                    max_tokens=4000,
                 )
 
                 content = response.get("content", "")
@@ -1667,6 +1586,132 @@ class ReviewAnalyzer:
                 self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
             except Exception as e:
                 self.logger.warning(f"保存 FC 日志失败: {e}")
+
+    def _finalize_report(self, report: str, trade_date: str) -> tuple:
+        """收尾：解析股票池 → 清理报告 → 提取预测/教训 → 返回 (cleaned_report, stock_pool)"""
+        stock_pool = self._extract_stock_pool(report)
+        cleaned_report = self._remove_stock_pool(report)
+        cleaned_report = self._remove_predictions(cleaned_report)
+        cleaned_report = cleaned_report.lstrip("-").lstrip()
+
+        try:
+            self._extract_predictions(report, trade_date)
+        except Exception as e:
+            self.logger.warning(f"预测提取失败（不影响主流程）: {e}")
+
+        try:
+            self._extract_lessons(cleaned_report, trade_date)
+        except Exception as e:
+            self.logger.warning(f"教训提取失败（不影响主流程）: {e}")
+
+        return cleaned_report, stock_pool
+
+    @staticmethod
+    def _batch_poll_and_finalize(trade_date: str, batch_id: str) -> None:
+        """子进程入口：轮询 Batch → 下载 → 收尾 → 推送 → 记录股票池"""
+        import json as _json
+        import os as _os
+        import time as _time
+
+        from system.config import settings as _settings
+        from system.config.settings import STORAGE_PATH as _SP
+
+        batch_base = _settings.DASHSCOPE_COMPAT_ENDPOINT
+        api_key = _os.environ.get("DASHSCOPE_API_KEY", "")
+        headers = {"Authorization": f"Bearer {api_key}"}
+        deadline = _time.time() + _settings.BATCH_TIMEOUT_MINUTES * 60
+        log_prefix = f"[Batch子进程 {batch_id[:8]}...]"
+
+        # 用文件日志（子进程 stdout 不可见）
+        log_path = _SP / "logs" / trade_date / "tasks" / "batch_finalize.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(str(log_path), "a", encoding="utf-8")
+
+        def _log(msg):
+            line = f"{_time.strftime('%Y-%m-%d %H:%M:%S')} {log_prefix} {msg}"
+            log_fh.write(line + "\n")
+            log_fh.flush()
+
+        try:
+            _log(f"启动，轮询间隔 5 分钟，超时 {_settings.BATCH_TIMEOUT_MINUTES} 分钟")
+
+            # ── 轮询 ──
+            status = "unknown"
+            while _time.time() < deadline:
+                _time.sleep(300)  # 5 分钟
+                resp = requests.get(f"{batch_base}/batches/{batch_id}", headers=headers, timeout=30)
+                info = resp.json()
+                status = info.get("status", status)
+                counts = info.get("request_counts", {})
+                _log(
+                    f"{status} | total={counts.get('total', '?')} completed={counts.get('completed', '?')} failed={counts.get('failed', '?')}"
+                )
+                if status in ("completed", "failed", "expired", "cancelled"):
+                    break
+
+            if status != "completed":
+                _log(f"Batch 非正常结束: {status}")
+                return
+
+            # ── 下载结果 ──
+            output_file_id = info["output_file_id"]
+            resp = requests.get(f"{batch_base}/files/{output_file_id}/content", headers=headers, timeout=30)
+            results = [_json.loads(line) for line in resp.text.strip().split("\n") if line.strip()]
+            content = results[0]["response"]["body"]["choices"][0]["message"]["content"]
+            _log(f"下载完成，报告 {len(content)} 字")
+
+            # ── 收尾 ──
+            analyzer = ReviewAnalyzer()
+            cleaned_report, stock_pool = analyzer._finalize_report(content, trade_date)
+
+            # 保存报告
+            reports_dir = _SP / "reports"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            report_path = reports_dir / f"review_reports_{trade_date}.txt"
+            report_path.write_text(content, encoding="utf-8")
+            _log(f"报告已保存: {report_path}")
+
+            # ── 推送 ──
+            from system.config.settings import (
+                TELEGRAM_PRIVATE_CHAT_ID,
+                TELEGRAM_REPORT_BOT_TOKEN,
+                TELEGRAM_REPORT_CHAT_ID,
+            )
+            from system.message import MessageSender
+
+            targets = []
+            if TELEGRAM_REPORT_CHAT_ID:
+                targets.append((TELEGRAM_REPORT_CHAT_ID, "群"))
+            if TELEGRAM_PRIVATE_CHAT_ID:
+                targets.append((TELEGRAM_PRIVATE_CHAT_ID, "私聊"))
+
+            for chat_id, label in targets:
+                try:
+                    sender = MessageSender(chat_id=chat_id, bot_token=TELEGRAM_REPORT_BOT_TOKEN)
+                    sender.send(cleaned_report)
+                    _log(f"推送成功 ({label})")
+                except Exception as e:
+                    _log(f"推送失败 ({label}): {e}")
+
+            # ── 记录股票池 ──
+            if stock_pool:
+                from review.stock_tracker import StockTracker
+
+                tracker = StockTracker()
+                stocks = tracker.enrich_stock_pool(stock_pool)
+                if stocks:
+                    tracker.record_stocks(stocks, trade_date, cleaned_report, source="复盘")
+                    _log(f"已记录 {len(stocks)} 只股票到追踪表")
+
+            _log("✅ 收尾完成")
+
+        except Exception as e:
+            _log(f"❌ 失败: {e}")
+            import traceback
+
+            log_fh.write(traceback.format_exc() + "\n")
+        finally:
+            log_fh.close()
 
     # ═══════════════════════════════════════════════════════════
     # 预计算 FC 工具数据（消除多轮 FC 对话）
@@ -1768,44 +1813,51 @@ class ReviewAnalyzer:
         )
         self.logger.info(f"预计算：候选股票 {len(all_codes)} 只，开始批量查询...")
 
-        # ── 3. 批量电报 ──
+        # ── 3. 批量电报（一次查询全部，不再逐只查）──
+        all_codes_list = list(all_codes)
+        telegraph_raw = tools.get_telegraph_news(stock_codes=all_codes_list, trade_date=trade_date)
         telegraph_results = {}
-        for code in all_codes:
-            try:
-                telegraph_results[code] = tools.get_telegraph_news(code, trade_date)
-            except Exception:
-                telegraph_results[code] = {"has_news": False, "error": "查询失败"}
+        news_by_code = telegraph_raw.get("news_by_code", {})
+        for code in all_codes_list:
+            items = news_by_code.get(code, [])
+            telegraph_results[code] = {
+                "stock_code": code,
+                "trade_date": trade_date,
+                "has_news": bool(items),
+                "count": len(items),
+                "items": items,
+            }
 
         news_count = sum(1 for r in telegraph_results.values() if r.get("has_news"))
-        self.logger.info(f"  ✅ 电报批量：{news_count}/{len(all_codes)} 只有新闻")
+        self.logger.info(f"  ✅ 电报批量：{news_count}/{len(all_codes_list)} 只有新闻")
 
-        # ── 4. 批量监管风险 ──
+        # ── 4. 批量监管风险（一次查询全部）──
+        regulatory_raw = tools.get_regulatory_risks(stock_codes=all_codes_list, trade_date=trade_date)
         regulatory_results = {}
-        for code in all_codes:
-            try:
-                regulatory_results[code] = tools.get_regulatory_risks(code, trade_date)
-            except Exception:
-                regulatory_results[code] = {
-                    "code": code,
-                    "risks": [],
-                    "error": "查询失败",
-                }
+        risks_by_code = regulatory_raw.get("risks_by_code", {})
+        for code in all_codes_list:
+            risks = risks_by_code.get(code, [])
+            regulatory_results[code] = {"code": code, "risks": risks, "error": None}
 
         risk_count = sum(1 for r in regulatory_results.values() if r.get("risks"))
         self.logger.info(f"  ✅ 监管风险批量：{risk_count} 只有风险记录")
 
-        # ── 5. 连板股龙虎榜席位 ──
+        # ── 5. 连板股龙虎榜席位（一次查询全部）──
         chain_codes: set[str] = set()
         if chain:
             for stocks in chain.values():
                 chain_codes.update(s["code"] for s in stocks)
 
+        chain_codes_list = list(chain_codes)
         lhb_results = {}
-        for code in chain_codes:
-            try:
-                lhb_results[code] = tools.get_lhb_seats(code, trade_date)
-            except Exception:
-                lhb_results[code] = {"code": code, "error": "查询失败"}
+        if chain_codes_list:
+            lhb_raw = tools.get_lhb_seats(stock_codes=chain_codes_list, trade_date=trade_date)
+            seats = lhb_raw.get("seats", {})
+            for code in chain_codes_list:
+                s = seats.get(code, {"buy_seats": [], "sell_seats": []})
+                lhb_results[code] = {"code": code, "trade_date": trade_date, **s, "error": None}
+        else:
+            lhb_results = {}
 
         self.logger.info(f"  ✅ 龙虎榜席位：{len(chain_codes)} 只连板股")
 

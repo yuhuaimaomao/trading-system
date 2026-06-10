@@ -5,11 +5,32 @@
 
 import os
 import re
-from typing import Dict, Optional
+import subprocess
+from typing import Dict, List, Optional
 
 from system.utils.logger import get_system_logger
 
 logger = get_system_logger("misc")
+
+# tesseract OCR 支持的图片格式
+OCR_IMAGE_EXT = ".jpg"
+
+
+def _check_tesseract() -> Optional[str]:
+    """检查 tesseract 是否可用，返回可执行文件路径或 None"""
+    try:
+        result = subprocess.run(["which", "tesseract"], capture_output=True, text=True, timeout=5)
+        path = result.stdout.strip()
+        if path:
+            # 验证中文语言包
+            lang_check = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=5)
+            if "chi_sim" in lang_check.stdout:
+                return path
+            logger.warning("tesseract 缺少 chi_sim 中文语言包")
+            return None
+    except Exception:
+        pass
+    return None
 
 
 def _get_pdfplumber():
@@ -168,6 +189,95 @@ class RegulatoryAnalysisService:
 
         return result
 
+    def _extract_page_images(self, pdf_filepath: str, max_pages: int = 5) -> List[bytes]:
+        """
+        从 PDF 提取页面图片（用于 OCR 回退）
+
+        Args:
+            pdf_filepath: PDF 文件路径
+            max_pages: 最大页数
+
+        Returns:
+            每页图片的 JPEG 字节数据列表
+        """
+        plumber = _get_pdfplumber()
+        if not plumber:
+            return []
+
+        images = []
+        try:
+            with plumber.open(pdf_filepath) as pdf:
+                for page in pdf.pages[:max_pages]:
+                    if page.images:
+                        stream = page.images[0]["stream"]
+                        images.append(stream.get_data())
+        except Exception as e:
+            logger.warning(f"提取页面图片失败: {e}")
+
+        return images
+
+    def _ocr_pages(self, page_images: List[bytes], work_dir: str) -> str:
+        """
+        对页面图片执行 OCR
+
+        Args:
+            page_images: 页面图片字节数据列表
+            work_dir: 工作目录（tesseract 需能访问，避免 macOS 沙箱限制）
+
+        Returns:
+            合并后的 OCR 文本
+        """
+        tesseract_bin = _check_tesseract()
+        if not tesseract_bin:
+            logger.warning("tesseract OCR 不可用")
+            return ""
+
+        text_parts = []
+        for i, img_data in enumerate(page_images):
+            try:
+                img_path = os.path.join(work_dir, f"_ocr_page_{i}{OCR_IMAGE_EXT}")
+                out_path = os.path.join(work_dir, f"_ocr_page_{i}")
+
+                # 保存图片
+                with open(img_path, "wb") as f:
+                    f.write(img_data)
+
+                # 运行 OCR（--psm 6: 假设统一文本块）
+                result = subprocess.run(
+                    [
+                        tesseract_bin,
+                        img_path,
+                        out_path,
+                        "-l",
+                        "chi_sim",
+                        "--psm",
+                        "6",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+
+                # 读取输出
+                txt_path = out_path + ".txt"
+                if os.path.exists(txt_path):
+                    with open(txt_path, "r", encoding="utf-8") as f:
+                        page_text = f.read().strip()
+                    if page_text:
+                        text_parts.append(page_text)
+
+                # 清理临时文件
+                os.remove(img_path)
+                if os.path.exists(txt_path):
+                    os.remove(txt_path)
+
+            except subprocess.TimeoutExpired:
+                logger.warning(f"第{i + 1}页 OCR 超时，跳过")
+            except Exception as e:
+                logger.warning(f"第{i + 1}页 OCR 失败: {e}")
+
+        return "\n".join(text_parts)
+
     def extract_pdf_text(self, pdf_filepath: str, max_pages: int = 5) -> Optional[str]:
         """
         提取 PDF 文本内容
@@ -191,17 +301,32 @@ class RegulatoryAnalysisService:
             text_content = ""
 
             with plumber.open(pdf_filepath) as pdf:
-                # 提取前 N 页文本（通常关键信息在前几页）
                 for page in pdf.pages[:max_pages]:
                     text = page.extract_text()
                     if text:
                         text_content += text + "\n"
 
-            if not text_content.strip():
-                self.logger.warning(f"PDF 内容为空：{pdf_filepath}")
+            if text_content.strip():
+                return text_content
+
+            # 文字层为空 → 尝试 OCR 回退（扫描件 PDF）
+            self.logger.info(f"文字层为空，尝试 OCR 回退：{os.path.basename(pdf_filepath)}")
+
+            page_images = self._extract_page_images(pdf_filepath, max_pages)
+            if not page_images:
+                self.logger.warning(f"PDF 无图片（无法 OCR）：{pdf_filepath}")
                 return None
 
-            return text_content
+            # OCR 工作目录：用 PDF 所在目录，避免 macOS 沙箱限制 tesseract 读取 /tmp
+            work_dir = os.path.dirname(os.path.abspath(pdf_filepath))
+            ocr_text = self._ocr_pages(page_images, work_dir)
+
+            if not ocr_text.strip():
+                self.logger.warning(f"OCR 后仍无内容：{pdf_filepath}")
+                return None
+
+            self.logger.info(f"OCR 提取成功：{len(ocr_text)} 字符 ({len(page_images)} 页)")
+            return ocr_text
 
         except Exception as e:
             self.logger.error(f"PDF 文本提取失败：{e}")
@@ -270,9 +395,7 @@ class RegulatoryAnalysisService:
             result["risk_type"] = "其他"
 
         # 生成摘要（前 500 字）
-        result["pdf_summary"] = (
-            text[:500].strip() + "..." if len(text) > 500 else text.strip()
-        )
+        result["pdf_summary"] = text[:500].strip() + "..." if len(text) > 500 else text.strip()
 
         return result
 
@@ -320,9 +443,7 @@ if __name__ == "__main__":
     service = RegulatoryAnalysisService()
 
     # 测试 PDF 分析
-    test_pdf = os.path.expanduser(
-        "~/trading-system/data/bulletin_pdf/regulatory_letter/1225030779.PDF.pdf"
-    )
+    test_pdf = os.path.expanduser("~/trading-system/data/bulletin_pdf/regulatory_letter/1225030779.PDF.pdf")
 
     if os.path.exists(test_pdf):
         print(f"测试 PDF: {test_pdf}")

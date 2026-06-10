@@ -42,19 +42,19 @@ AI_MODEL_DEFAULT = os.environ.get("AI_MODEL_DEFAULT", AI_MODEL)
 AI_MODEL_REVIEW = os.environ.get("AI_MODEL_REVIEW", "")  # 复盘报告
 AI_MODEL_SCREENING = os.environ.get("AI_MODEL_SCREENING", "")  # 趋势筛选
 AI_MODEL_MORNING = os.environ.get("AI_MODEL_MORNING", "")  # 早盘简报
-AI_MODEL_WATCHER = os.environ.get("AI_MODEL_WATCHER", "")  # 盯盘通用
-AI_MODEL_WATCHER_CHASE = os.environ.get("AI_MODEL_WATCHER_CHASE", "")  # 追高二判
-AI_MODEL_WATCHER_SWAP = os.environ.get("AI_MODEL_WATCHER_SWAP", "")  # 换仓评估
-AI_MODEL_WATCHER_INDEX = os.environ.get("AI_MODEL_WATCHER_INDEX", "")  # 指数波动
-AI_MODEL_WATCHER_TRAPPED = os.environ.get("AI_MODEL_WATCHER_TRAPPED", "")  # 被套离场
+AI_MODEL_WATCHER = os.environ.get("AI_MODEL_WATCHER", "")  # 盯盘（统一）
 AI_MODEL_AUDIT = os.environ.get("AI_MODEL_AUDIT", "")  # 审计
 # 向后兼容
-AI_MODEL_STRATEGY = os.environ.get("AI_MODEL_STRATEGY", AI_MODEL_SCREENING)
+AI_MODEL_STRATEGY = os.environ.get("AI_MODEL_STRATEGY", os.environ.get("AI_MODEL_SCREENING", AI_MODEL))
+AI_MODEL_WATCHER_CHASE = os.environ.get("AI_MODEL_WATCHER_CHASE", AI_MODEL_WATCHER)
+AI_MODEL_WATCHER_SWAP = os.environ.get("AI_MODEL_WATCHER_SWAP", AI_MODEL_WATCHER)
+AI_MODEL_WATCHER_INDEX = os.environ.get("AI_MODEL_WATCHER_INDEX", AI_MODEL_WATCHER)
+AI_MODEL_WATCHER_TRAPPED = os.environ.get("AI_MODEL_WATCHER_TRAPPED", AI_MODEL_WATCHER)
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
 
 # ===== Batch API =====
 BATCH_ENABLED = os.environ.get("BATCH_ENABLED", "false").lower() == "true"
-BATCH_TIMEOUT_MINUTES = int(os.environ.get("BATCH_TIMEOUT_MINUTES", "60"))
+BATCH_TIMEOUT_MINUTES = int(os.environ.get("BATCH_TIMEOUT_MINUTES", "180"))
 BATCH_POLL_INTERVAL = int(os.environ.get("BATCH_POLL_INTERVAL", "10"))
 
 # Provider 端点
@@ -75,7 +75,7 @@ DEEPSEEK_ENDPOINT = os.environ.get(
 # 向下兼容（旧环境变量仍生效）
 DASHSCOPE_MODEL = os.environ.get("DASHSCOPE_MODEL", AI_MODEL)
 DASHSCOPE_ANALYSIS_MODEL = os.environ.get("DASHSCOPE_ANALYSIS_MODEL", AI_MODEL)
-AUDIT_AI_MODEL = os.environ.get("AUDIT_AI_MODEL", AI_MODEL)
+AUDIT_AI_MODEL = os.environ.get("AI_MODEL_AUDIT") or AI_MODEL
 
 # ===== Telegram =====
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")

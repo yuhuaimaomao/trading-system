@@ -1531,7 +1531,6 @@ class Watcher(
             user_prompt,
             model="watcher",
             system_prompt=system_prompt,
-            max_tokens=max_tokens,
         )
 
     def _ai_chase_opinion(
@@ -1579,9 +1578,8 @@ class Watcher(
         ok = ai.submit(
             akey,
             prompt,
-            model="watcher_chase",
+            model="watcher",
             system_prompt=CHASE_OPINION_SYSTEM,
-            max_tokens=100,
         )
         if ok:
             # 保存上下文，等 AI 完成后重建提醒

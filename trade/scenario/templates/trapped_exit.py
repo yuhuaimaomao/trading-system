@@ -45,5 +45,4 @@ TRAPPED_EXIT_TEMPLATE = PromptTemplate(
         "market_env",
         "risk_level",
     ],
-    max_tokens=80,
 )

@@ -3,11 +3,10 @@
 用法:
     from system.ai import ai
     ai.chat(prompt, model="screening", system_prompt="你是...")
-    ai.submit("key", prompt, model="watcher_chase", system_prompt="你是...")
+    ai.submit("key", prompt, model="watcher", system_prompt="你是...")
 
 模型通过环境变量配置，不在代码里硬编码:
-    AI_MODEL_SCREENING=deepseek-v4-pro
-    AI_MODEL_REVIEW=qwen3.7-plus
+    .env: AI_MODEL=deepseek-v4-pro  AI_MODEL_REVIEW=qwen3.7-plus  AI_MODEL_MORNING=qwen3.7-plus
 """
 
 import os
@@ -39,11 +38,11 @@ _MODEL_ENV_MAP = {
     "strategy": "AI_MODEL_SCREENING",
     "morning": "AI_MODEL_MORNING",
     "watcher": "AI_MODEL_WATCHER",
-    "watcher_chase": "AI_MODEL_WATCHER_CHASE",
-    "watcher_swap": "AI_MODEL_WATCHER_SWAP",
-    "watcher_index": "AI_MODEL_WATCHER_INDEX",
-    "watcher_trapped": "AI_MODEL_WATCHER_TRAPPED",
-    "watcher_breakout": "AI_MODEL_WATCHER_BREAKOUT",
+    "watcher_chase": "AI_MODEL_WATCHER",
+    "watcher_swap": "AI_MODEL_WATCHER",
+    "watcher_index": "AI_MODEL_WATCHER",
+    "watcher_trapped": "AI_MODEL_WATCHER",
+    "watcher_breakout": "AI_MODEL_WATCHER",
     "audit": "AI_MODEL_AUDIT",
 }
 
@@ -96,13 +95,15 @@ class AIService:
         *,
         model: str = "",
         system_prompt: str = "",
-        max_tokens: int = 1000,
+        max_tokens: int = None,
         temperature: float = 0.6,
     ) -> str:
-        """同步单次调用。system_prompt 必传，不设默认值。"""
+        """同步单次调用。max_tokens 不传则由 API 自行决定。"""
+        task = model or "unknown"
         return self._call(
             prompt,
             _resolve_model(model),
+            task=task,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -115,7 +116,7 @@ class AIService:
         model: str = "",
         tools: list[dict] = None,
         tool_choice: str = "auto",
-        max_tokens: int = 4000,
+        max_tokens: int = None,
     ) -> dict:
         """FC 单轮调用，返回 {'content': str, 'tool_calls': list}。"""
         if tools is None:
@@ -141,7 +142,7 @@ class AIService:
         model: str = "",
         tools: list[dict] = None,
         tool_choice: str = "auto",
-        max_tokens: int = 4000,
+        max_tokens: int = None,
         max_rounds: int = 4,
     ) -> str:
         """FC 多轮对话，返回最终文本。"""
@@ -163,9 +164,7 @@ class AIService:
             tool_calls = msg.get("tool_calls", [])
             if not tool_calls:
                 return content
-            msgs.append(
-                {"role": "assistant", "content": content, "tool_calls": tool_calls}
-            )
+            msgs.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
             msgs.extend(self._fc.process_tool_calls(tool_calls))
         return content or ""
 
@@ -175,9 +174,7 @@ class AIService:
         if self._running:
             return
         self._running = True
-        self._worker = threading.Thread(
-            target=self._work, daemon=True, name="ai-worker"
-        )
+        self._worker = threading.Thread(target=self._work, daemon=True, name="ai-worker")
         self._worker.start()
 
     def stop_worker(self):
@@ -192,7 +189,7 @@ class AIService:
         *,
         model: str = "",
         system_prompt: str = "",
-        max_tokens: int = 100,
+        max_tokens: int = None,
     ) -> bool:
         if not self._running:
             return False
@@ -232,10 +229,16 @@ class AIService:
         prompt: str,
         model_name: str,
         *,
+        task: str,
         system_prompt: str,
-        max_tokens: int,
-        temperature: float,
+        max_tokens: int = None,
+        temperature: float = 0.6,
     ) -> str:
+        from datetime import datetime
+        from pathlib import Path
+
+        from system.config.settings import PROJECT_ROOT
+
         payload = self._build_payload(
             model_name,
             prompt=prompt,
@@ -243,9 +246,44 @@ class AIService:
             max_tokens=max_tokens,
             temperature=temperature,
         )
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # 落盘 prompt
+        try:
+            prompt_dir = Path(PROJECT_ROOT) / "storage" / "prompts"
+            prompt_dir.mkdir(parents=True, exist_ok=True)
+            prompt_path = prompt_dir / f"{task}_prompt_{date_str}.txt"
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(f"任务: {task}\n")
+                f.write(f"模型: {model_name}\n")
+                f.write(f"日期: {date_str}\n")
+                f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"[system] {system_prompt}\n\n")
+                f.write(f"[user] {prompt}\n")
+        except Exception:
+            pass
+
         data = self._request(model_name, payload)
         content = data["choices"][0].get("message", {}).get("content", "")
-        return (content or "").strip()
+        text = (content or "").strip()
+
+        # 落盘 response
+        try:
+            report_dir = Path(PROJECT_ROOT) / "storage" / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / f"{task}_ai_response_{date_str}_{model_name}.txt"
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"任务: {task}\n")
+                f.write(f"模型: {model_name}\n")
+                f.write(f"日期: {date_str}\n")
+                f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(text)
+        except Exception:
+            pass
+
+        return text
 
     @staticmethod
     def _build_payload(
@@ -254,7 +292,7 @@ class AIService:
         messages=None,
         prompt=None,
         system_prompt: str = "",
-        max_tokens: int = 1000,
+        max_tokens: int = None,
         temperature: float = 0.6,
         tools=None,
         tool_choice=None,
@@ -267,9 +305,10 @@ class AIService:
         payload = {
             "model": model_name,
             "messages": msgs,
-            "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
             if tool_choice:
@@ -292,13 +331,9 @@ class AIService:
         last_error = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                resp = self._session.post(
-                    endpoint, json=payload, headers=headers, timeout=timeout
-                )
+                resp = self._session.post(endpoint, json=payload, headers=headers, timeout=timeout)
                 if resp.status_code >= 500:
-                    raise requests.exceptions.HTTPError(
-                        f"服务端错误 {resp.status_code}", response=resp
-                    )
+                    raise requests.exceptions.HTTPError(f"服务端错误 {resp.status_code}", response=resp)
                 resp.raise_for_status()
                 return resp.json()
             except requests.exceptions.HTTPError as e:

@@ -531,7 +531,6 @@ def _submit_swap_ai(
         "swap_eval",
         prompt,
         system_prompt=SWAP_EVAL_SYSTEM,
-        max_tokens=150,
         dedupe=True,
     )
     if not ok:

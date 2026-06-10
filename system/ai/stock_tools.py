@@ -241,23 +241,23 @@ class StockTools:
             logger.error(f"❌ 查询板块成分股失败：{sector_name} - {e}")
             return []
 
-    def get_lhb_seats(self, stock_code: str, trade_date: str = None) -> Dict:
+    def get_lhb_seats(self, stock_code: str = None, stock_codes: List[str] = None, trade_date: str = None) -> Dict:
         """
-        查询某只股票在指定日期的龙虎榜席位明细
+        查询龙虎榜席位明细（支持单只或批量）
 
         Args:
-            stock_code: 股票代码（如 "001259"）
+            stock_code: 单只股票代码
+            stock_codes: 批量股票代码列表，一次查询所有
             trade_date: 交易日期（YYYY-MM-DD），默认最新
 
         Returns:
-            {
-                "code": "001259",
-                "trade_date": "2026-05-20",
-                "buy_seats": [{"name": "...", "buy": 1234.5, "sell": 0, "net": 1234.5, "is_inst": 1}, ...],
-                "sell_seats": [...],
-                "error": None
-            }
+            单只: {"code": "001259", "buy_seats": [...], "sell_seats": [...], ...}
+            批量: {"codes": [...], "seats": {"001259": {"buy_seats":[...], ...}, ...}}
         """
+        codes = stock_codes if stock_codes else ([stock_code] if stock_code else [])
+        if not codes:
+            return {"code": "", "error": "需要 stock_code 或 stock_codes"}
+
         try:
             conn = connect(self.db_path)
             cursor = conn.cursor()
@@ -267,152 +267,158 @@ class StockTools:
                 trade_date = cursor.fetchone()[0]
                 if not trade_date:
                     conn.close()
-                    return {
-                        "code": stock_code,
-                        "trade_date": None,
-                        "buy_seats": [],
-                        "sell_seats": [],
-                        "error": "无龙虎榜数据",
-                    }
+                    if stock_code:
+                        return {
+                            "code": stock_code,
+                            "trade_date": None,
+                            "buy_seats": [],
+                            "sell_seats": [],
+                            "error": "无龙虎榜数据",
+                        }
+                    return {"codes": codes, "seats": {}, "trade_date": None, "error": "无龙虎榜数据"}
 
-            # 买席 TOP5（去重合并，按买入额降序）
+            placeholders = ",".join(["?"] * len(codes))
+
+            # 批量买席
             cursor.execute(
-                """
-                SELECT seat_name, MAX(buy_amount), MAX(sell_amount),
+                f"""
+                SELECT stock_code, seat_name, MAX(buy_amount), MAX(sell_amount),
                        MAX(is_institution), MAX(is_hot_money)
                 FROM lhb_seats
-                WHERE stock_code = ? AND trade_date = ? AND seat_type = 'buy'
-                GROUP BY seat_name
-                ORDER BY MAX(buy_amount) DESC
-                LIMIT 5
+                WHERE stock_code IN ({placeholders}) AND trade_date = ? AND seat_type = 'buy'
+                GROUP BY stock_code, seat_name
+                ORDER BY stock_code, MAX(buy_amount) DESC
             """,
-                (stock_code, trade_date),
+                (*codes, trade_date),
             )
             buy_rows = cursor.fetchall()
 
-            # 卖席 TOP5
+            # 批量卖席
             cursor.execute(
-                """
-                SELECT seat_name, MAX(buy_amount), MAX(sell_amount),
+                f"""
+                SELECT stock_code, seat_name, MAX(buy_amount), MAX(sell_amount),
                        MAX(is_institution), MAX(is_hot_money)
                 FROM lhb_seats
-                WHERE stock_code = ? AND trade_date = ? AND seat_type = 'sell'
-                GROUP BY seat_name
-                ORDER BY MAX(sell_amount) DESC
-                LIMIT 5
+                WHERE stock_code IN ({placeholders}) AND trade_date = ? AND seat_type = 'sell'
+                GROUP BY stock_code, seat_name
+                ORDER BY stock_code, MAX(sell_amount) DESC
             """,
-                (stock_code, trade_date),
+                (*codes, trade_date),
             )
             sell_rows = cursor.fetchall()
             conn.close()
 
-            if not buy_rows and not sell_rows:
+            # 组装结果
+            def _make_seat(row, is_buy):
+                b, s = row[2] or 0, row[3] or 0
+                net = (b - s) if is_buy else (s - b)
                 return {
-                    "code": stock_code,
-                    "trade_date": trade_date,
-                    "buy_seats": [],
-                    "sell_seats": [],
-                    "error": f"{stock_code} 在 {trade_date} 未上龙虎榜",
+                    "name": row[1],
+                    "buy": round(b / 10000, 1),
+                    "sell": round(s / 10000, 1),
+                    "net": round(net / 10000, 1),
+                    "is_inst": bool(row[4]),
+                    "is_hm": bool(row[5]),
                 }
 
-            buy_seats = []
+            buy_by_code: Dict[str, list] = {}
             for row in buy_rows:
-                buy_seats.append(
-                    {
-                        "name": row[0],
-                        "buy": round(row[1] / 10000, 1) if row[1] else 0,
-                        "sell": round(row[2] / 10000, 1) if row[2] else 0,
-                        "net": round((row[1] or 0) / 10000 - (row[2] or 0) / 10000, 1),
-                        "is_inst": bool(row[3]),
-                        "is_hm": bool(row[4]),
-                    }
-                )
+                buy_by_code.setdefault(row[0], []).append(_make_seat(row, True))
 
-            sell_seats = []
+            sell_by_code: Dict[str, list] = {}
             for row in sell_rows:
-                sell_seats.append(
-                    {
-                        "name": row[0],
-                        "buy": round(row[1] / 10000, 1) if row[1] else 0,
-                        "sell": round(row[2] / 10000, 1) if row[2] else 0,
-                        "net": round((row[1] or 0) / 10000 - (row[2] or 0) / 10000, 1),
-                        "is_inst": bool(row[3]),
-                        "is_hm": bool(row[4]),
-                    }
-                )
+                sell_by_code.setdefault(row[0], []).append(_make_seat(row, False))
 
-            logger.info(f"✅ 查询龙虎榜席位成功：{stock_code} {trade_date} - 买{len(buy_seats)}卖{len(sell_seats)}")
-            return {
-                "code": stock_code,
-                "trade_date": trade_date,
-                "buy_seats": buy_seats,
-                "sell_seats": sell_seats,
-                "error": None,
-            }
+            seats_by_code = {}
+            for code in codes:
+                buys = buy_by_code.get(code, [])[:5]
+                sells = sell_by_code.get(code, [])[:5]
+                if buys or sells:
+                    seats_by_code[code] = {"buy_seats": buys, "sell_seats": sells}
+
+            # 单只返回（向后兼容）
+            if stock_code:
+                result = seats_by_code.get(stock_code, {"buy_seats": [], "sell_seats": []})
+                if not result["buy_seats"] and not result["sell_seats"]:
+                    return {
+                        "code": stock_code,
+                        "trade_date": trade_date,
+                        "buy_seats": [],
+                        "sell_seats": [],
+                        "error": f"{stock_code} 在 {trade_date} 未上龙虎榜",
+                    }
+                logger.info(f"✅ 龙虎榜席位：{stock_code} - 买{len(result['buy_seats'])}卖{len(result['sell_seats'])}")
+                return {"code": stock_code, "trade_date": trade_date, **result, "error": None}
+
+            logger.info(f"✅ 批量龙虎榜席位：{len(codes)}只 → {len(seats_by_code)}只有数据")
+            return {"codes": codes, "seats": seats_by_code, "trade_date": trade_date, "error": None}
 
         except Exception as e:
-            logger.error(f"❌ 查询龙虎榜席位失败：{stock_code} - {e}")
-            return {
-                "code": stock_code,
-                "trade_date": trade_date,
-                "buy_seats": [],
-                "sell_seats": [],
-                "error": str(e),
-            }
+            logger.error(f"❌ 龙虎榜席位查询失败：{e}")
+            if stock_code:
+                return {
+                    "code": stock_code,
+                    "trade_date": trade_date or "",
+                    "buy_seats": [],
+                    "sell_seats": [],
+                    "error": str(e),
+                }
+            return {"codes": codes if codes else [], "seats": {}, "error": str(e)}
 
-    def get_regulatory_risks(self, stock_code: str, trade_date: str = None) -> Dict:
+    def get_regulatory_risks(
+        self, stock_code: str = None, stock_codes: List[str] = None, trade_date: str = None
+    ) -> Dict:
         """
-        查询某只股票的监管函/问询函/处罚等风险记录
+        查询监管函/问询函/处罚等风险记录（支持单只或批量）
 
         Args:
-            stock_code: 股票代码（如 "000608"）
+            stock_code: 单只股票代码
+            stock_codes: 批量股票代码列表，一次查询所有
             trade_date: 交易日期（YYYY-MM-DD），默认查最近30天
 
         Returns:
-            {
-                "code": "000608",
-                "risks": [{"title": "...", "risk_type": "财务造假", "risk_level": 3,
-                           "issuer": "深交所", "summary": "..."}, ...],
-                "error": None
-            }
+            单只: {"code": "000608", "risks": [...], "error": None}
+            批量: {"codes": [...], "risks_by_code": {"000608": [...]}}
         """
+        codes = stock_codes if stock_codes else ([stock_code] if stock_code else [])
+        if not codes:
+            return {"code": "", "risks": [], "error": "需要 stock_code 或 stock_codes"}
+
         try:
             conn = connect(self.db_path)
             cursor = conn.cursor()
+            placeholders = ",".join(["?"] * len(codes))
 
             if trade_date:
                 cursor.execute(
-                    """
-                    SELECT title, risk_type, risk_level, issuer_short,
-                           COALESCE(pdf_summary, risk_summary, '') as summary,
-                           trade_date
+                    f"""
+                    SELECT stock_code, title, risk_type, risk_level, issuer_short,
+                           COALESCE(pdf_summary, risk_summary, '') as summary, trade_date
                     FROM regulatory_letter
-                    WHERE stock_code = ? AND trade_date = ?
-                    ORDER BY risk_level DESC, trade_date DESC
+                    WHERE stock_code IN ({placeholders}) AND trade_date = ?
+                    ORDER BY stock_code, risk_level DESC, trade_date DESC
                 """,
-                    (stock_code, trade_date),
+                    (*codes, trade_date),
                 )
             else:
                 cursor.execute(
-                    """
-                    SELECT title, risk_type, risk_level, issuer_short,
-                           COALESCE(pdf_summary, risk_summary, '') as summary,
-                           trade_date
+                    f"""
+                    SELECT stock_code, title, risk_type, risk_level, issuer_short,
+                           COALESCE(pdf_summary, risk_summary, '') as summary, trade_date
                     FROM regulatory_letter
-                    WHERE stock_code = ?
-                    ORDER BY risk_level DESC, trade_date DESC
-                    LIMIT 10
+                    WHERE stock_code IN ({placeholders})
+                    ORDER BY stock_code, risk_level DESC, trade_date DESC
                 """,
-                    (stock_code,),
+                    codes,
                 )
 
             rows = cursor.fetchall()
             conn.close()
 
-            risks = []
+            risks_by_code: Dict[str, list] = {}
             for row in rows:
-                title, risk_type, risk_level, issuer, summary, rdate = row
-                risks.append(
+                sc, title, risk_type, risk_level, issuer, summary, rdate = row
+                risks_by_code.setdefault(sc, []).append(
                     {
                         "title": (title or "")[:100],
                         "risk_type": risk_type or "未分类",
@@ -423,12 +429,20 @@ class StockTools:
                     }
                 )
 
-            logger.info(f"✅ 查询监管风险成功：{stock_code} - {len(risks)}条")
-            return {"code": stock_code, "risks": risks, "error": None}
+            if stock_code:
+                risks = risks_by_code.get(stock_code, [])
+                logger.info(f"✅ 监管风险：{stock_code} - {len(risks)}条")
+                return {"code": stock_code, "risks": risks, "error": None}
+
+            hit_count = sum(1 for v in risks_by_code.values() if v)
+            logger.info(f"✅ 批量监管风险：{len(codes)}只 → {hit_count}只有记录")
+            return {"codes": codes, "risks_by_code": risks_by_code, "error": None}
 
         except Exception as e:
-            logger.error(f"❌ 查询监管风险失败：{stock_code} - {e}")
-            return {"code": stock_code, "risks": [], "error": str(e)}
+            logger.error(f"❌ 监管风险查询失败：{e}")
+            if stock_code:
+                return {"code": stock_code, "risks": [], "error": str(e)}
+            return {"codes": codes if codes else [], "risks_by_code": {}, "error": str(e)}
 
     def get_yesterday_limit_ups(self, trade_date: str = None, limit: int = 50) -> Dict:
         """
@@ -931,75 +945,86 @@ class StockTools:
             logger.error(f"search_sector('{keyword}') 失败: {e}")
             return {"keyword": keyword, "candidates": [], "count": 0, "error": str(e)}
 
-    def get_telegraph_news(self, stock_code: str, trade_date: str = None) -> Dict:
-        """查询某只股票在今日电报中的相关新闻（通过 CLS stock_tags 匹配）"""
+    def get_telegraph_news(self, stock_code: str = None, stock_codes: List[str] = None, trade_date: str = None) -> Dict:
+        """查询电报相关新闻（支持单只或批量，通过 CLS stock_tags 匹配）"""
         import json as _json
         from datetime import datetime as _dt
+
+        codes = stock_codes if stock_codes else ([stock_code] if stock_code else [])
+        if not codes:
+            return {"stock_code": "", "has_news": False, "error": "需要 stock_code 或 stock_codes"}
 
         if trade_date is None:
             trade_date = _dt.now().strftime("%Y-%m-%d")
 
+        code_set = set(codes)
+
         try:
             conn = connect(self.db_path)
 
+            # 批量：一次查出当日所有电报，在 Python 中匹配 stock_tags
             cursor = conn.execute(
                 """
                 SELECT * FROM cls_telegraph
                 WHERE trade_date = ?
-                  AND stock_tags LIKE ?
                 ORDER BY score DESC, reading_num DESC
-                LIMIT 200
+                LIMIT 500
             """,
-                (trade_date, f'%"{stock_code}"%'),
+                (trade_date,),
             )
             rows = [dict(r) for r in cursor.fetchall()]
             conn.close()
 
-            # 过滤 + 格式化
-            matched = []
-            seen_titles = set()
+            # 按 stock_code 分组匹配
+            matched_by_code: Dict[str, list] = {}
+            seen_by_code: Dict[str, set] = {c: set() for c in codes}
+
             for r in rows:
                 title = r.get("title", "")
-                title_key = title[:20]
-                if title_key in seen_titles:
-                    continue
-                seen_titles.add(title_key)
-
-                # 解析 stock_tags + plate_tags
-                tags = []
                 stock_tags_raw = r.get("stock_tags")
+                tags = []
                 with contextlib.suppress(_json.JSONDecodeError, TypeError):
                     tags = _json.loads(stock_tags_raw) if stock_tags_raw else []
+
+                # 找出该电报涉及的目标股票代码（tags 是 [{"code":"xxx","name":"xxx"},...] 格式）
+                matched_codes = [t["code"] for t in tags if isinstance(t, dict) and t.get("code") in code_set]
+                if not matched_codes:
+                    continue
 
                 plate_tags_raw = r.get("plate_tags")
                 plates = []
                 with contextlib.suppress(_json.JSONDecodeError, TypeError):
                     plates = _json.loads(plate_tags_raw) if plate_tags_raw else []
 
-                matched.append(
-                    {
-                        "level": r.get("level", "C"),
-                        "category": r.get("category", ""),
-                        "title": title,
-                        "content": (r.get("content") or "")[:200],
-                        "reading_num": r.get("reading_num", 0),
-                        "score": r.get("score", 0),
-                        "plates": plates,
-                        "stock_tags": tags,
-                    }
-                )
-
-            if matched:
-                logger.info(f"查询 {stock_code} 电报：{len(matched)} 条匹配")
-                return {
-                    "stock_code": stock_code,
-                    "trade_date": trade_date,
-                    "has_news": True,
-                    "count": len(matched),
-                    "items": matched,
+                item = {
+                    "level": r.get("level", "C"),
+                    "category": r.get("category", ""),
+                    "title": title,
+                    "content": (r.get("content") or "")[:200],
+                    "reading_num": r.get("reading_num", 0),
+                    "score": r.get("score", 0),
+                    "plates": plates,
+                    "stock_tags": tags,
                 }
-            else:
-                logger.info(f"查询 {stock_code} 电报：无相关新闻")
+
+                for sc in matched_codes:
+                    title_key = title[:20]
+                    if title_key not in seen_by_code.get(sc, set()):
+                        seen_by_code.setdefault(sc, set()).add(title_key)
+                        matched_by_code.setdefault(sc, []).append(item)
+
+            if stock_code:
+                items = matched_by_code.get(stock_code, [])
+                if items:
+                    logger.info(f"电报 {stock_code}：{len(items)} 条")
+                    return {
+                        "stock_code": stock_code,
+                        "trade_date": trade_date,
+                        "has_news": True,
+                        "count": len(items),
+                        "items": items,
+                    }
+                logger.info(f"电报 {stock_code}：无相关新闻")
                 return {
                     "stock_code": stock_code,
                     "trade_date": trade_date,
@@ -1008,15 +1033,21 @@ class StockTools:
                     "items": [],
                 }
 
+            hit_count = sum(1 for v in matched_by_code.values() if v)
+            logger.info(f"✅ 批量电报：{len(codes)}只 → {hit_count}只有新闻")
+            return {"codes": codes, "news_by_code": matched_by_code, "trade_date": trade_date, "error": None}
+
         except Exception as e:
-            logger.error(f"查询电报失败：{e}")
-            return {
-                "stock_code": stock_code,
-                "trade_date": trade_date,
-                "has_news": False,
-                "error": str(e),
-                "items": [],
-            }
+            logger.error(f"电报查询失败：{e}")
+            if stock_code:
+                return {
+                    "stock_code": stock_code,
+                    "trade_date": trade_date,
+                    "has_news": False,
+                    "error": str(e),
+                    "items": [],
+                }
+            return {"codes": codes if codes else [], "news_by_code": {}, "trade_date": trade_date, "error": str(e)}
 
     # ============================================================
     # 自我校准工具（读取昨日复盘报告 + 推荐表现 + 历史统计）

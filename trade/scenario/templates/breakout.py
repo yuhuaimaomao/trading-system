@@ -44,5 +44,4 @@ BREAKOUT_TEMPLATE = PromptTemplate(
         "index_high",
         "index_low",
     ],
-    max_tokens=80,
 )

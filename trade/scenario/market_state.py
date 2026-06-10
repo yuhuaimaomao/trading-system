@@ -1126,7 +1126,7 @@ class MarketStateMixin:
         return current_pattern
 
     def _check_regime_jitter(self, pattern: str):
-        """5 分钟内 regime 切换超过 REGIME_JITTER_MAX 次时记录告警。"""
+        """5 分钟内 regime 切换超过 REGIME_JITTER_MAX 次时标记 unstable_day。"""
         from system.config import settings
 
         current_pattern = getattr(self._regime, "pattern", "") if hasattr(self, "_regime") else ""
@@ -1136,18 +1136,25 @@ class MarketStateMixin:
 
         # 记录切换时间点
         times = getattr(self, "_regime_switch_times", [])
-        times.append((self._scan_count, current_pattern, pattern))
-        # 只保留最近 REGIME_JITTER_WINDOW 轮内的记录
+        conf = getattr(self._regime, "confidence", "low") if hasattr(self, "_regime") else "low"
+        times.append((self._scan_count, current_pattern, pattern, conf))
         window = getattr(settings, "REGIME_JITTER_WINDOW", 5)
-        times = [(s, f, t) for s, f, t in times if self._scan_count - s <= window]
+        times = [(s, f, t, c) for s, f, t, c in times if self._scan_count - s <= window]
         self._regime_switch_times = times
 
         max_switches = getattr(settings, "REGIME_JITTER_MAX", 3)
         if len(times) > max_switches:
             logger.warning(
                 f"regime 抖动: {len(times)} 次切换 / {window} 轮 "
-                f"最近: {' → '.join(f'{f}→{t}' for _, f, t in times[-4:])}"
+                f"最近: {' → '.join(f'{f}→{t}' for _, f, t, _ in times[-4:])}"
             )
+
+        # 不稳定日检测：窗口内全部切换为 low confidence → 标记 unstable
+        if len(times) >= 4 and all(c == "low" for _, _, _, c in times):
+            if hasattr(self, "_regime") and self._regime is not None:
+                if not self._regime.regime_unstable_day:
+                    self._regime.regime_unstable_day = True
+                    logger.warning(f"⚠️ regime_unstable_day 已标记: {len(times)} 次切换全部 low confidence")
 
     def _push_regime_alert(
         self,
@@ -1719,7 +1726,6 @@ KDJ: K={kdj["k"]:.1f} D={kdj["d"]:.1f} J={kdj["j"]:.1f}
             "index_fluctuation",
             prompt,
             system_prompt="你是A股大盘技术分析专家，基于MACD/RSI/KDJ和均线系统做短线预判。简洁、准确、可操作。",
-            max_tokens=300,
             dedupe=True,
         )
         if ok:

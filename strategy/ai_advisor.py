@@ -86,7 +86,6 @@ class AIAdvisor:
             return [], []
 
         prompt = self._build_prompt(candidates, trade_date, holdings, account_summaries, review_context)
-        self._save_prompt(prompt, trade_date)
 
         # 调用 AI
         raw_signals: List[List[OrderSignal]] = []
@@ -222,32 +221,6 @@ class AIAdvisor:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # Prompt 落盘
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _save_prompt(prompt: str, trade_date: Optional[str] = None):
-        """保存发给 AI 的完整 prompt 到日志目录，方便调试"""
-        from datetime import datetime
-        from pathlib import Path
-
-        from system.config.settings import LOGS_DIR
-
-        date_str = trade_date or datetime.now().strftime("%Y-%m-%d")
-        prompt_dir = Path(LOGS_DIR) / date_str / "prompts"
-        prompt_dir.mkdir(parents=True, exist_ok=True)
-        prompt_path = prompt_dir / "strategy_prompt.txt"
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(prompt_path, "w", encoding="utf-8") as f:
-            f.write("=" * 80 + "\n")
-            f.write(f"策略管线 AI Prompt - {current_time}\n")
-            f.write("=" * 80 + "\n\n")
-            f.write(prompt)
-            f.write("\n\n" + "=" * 80 + "\n")
-            f.write(f"Prompt 总字数：{len(prompt)}字\n")
-        logger.info(f"Prompt 已落盘: {prompt_path}")
-
-    # ------------------------------------------------------------------
     # 调用 & 解析
     # ------------------------------------------------------------------
 
@@ -267,7 +240,6 @@ class AIAdvisor:
                 prompt=prompt,
                 model="screening",
                 system_prompt=system_prompt,
-                max_tokens=16384,
             )
             if not text:
                 logger.warning("AI 返回空内容")
@@ -276,9 +248,6 @@ class AIAdvisor:
             signals, holdings_review, ai_result = AIAdvisor._parse_json_response(text, "strategy")
             ai_result.model_used = model_name
             ai_result.raw_response = text
-
-            # 保存 AI 原始返回结果到 reports
-            AIAdvisor._save_response(text, model_name, trade_date, holdings_review)
 
             AIAdvisor._save_ai_decisions(model_name, trade_date, ai_result.decisions)
 
@@ -336,33 +305,6 @@ class AIAdvisor:
             )
         repo.insert_ai_decisions_batch(decision_rows)
         logger.info(f"AI 决策已入库: {len(decisions)} 条")
-
-    @staticmethod
-    def _save_response(
-        text: str,
-        model_name: str,
-        trade_date: Optional[str] = None,
-        holdings_review: Optional[List[HoldingReview]] = None,
-    ):
-        """保存 AI 原始返回结果到 reports 文件夹"""
-        from datetime import datetime
-        from pathlib import Path
-
-        from system.config.settings import STORAGE_PATH
-
-        date_str = trade_date or datetime.now().strftime("%Y-%m-%d")
-        report_dir = Path(STORAGE_PATH) / "reports"
-        report_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%H%M%S")
-
-        report_path = report_dir / f"strategy_ai_response_{date_str}_{model_name}_{ts}.txt"
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(f"模型: {model_name}\n")
-            f.write(f"日期: {date_str}\n")
-            f.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("=" * 60 + "\n\n")
-            f.write(text)
-        logger.info(f"AI 原始返回已落盘: {report_path}")
 
     @staticmethod
     def _parse_json_response(

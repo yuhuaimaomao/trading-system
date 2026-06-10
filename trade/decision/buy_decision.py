@@ -1228,21 +1228,47 @@ class BuyDecisionMixin:
                 continue
 
             # ── entry_rule 过滤（大盘环境决定入场策略） ──
+            # regime_unstable_day：强制最保守策略
+            _effective_entry_rule = entry_rule
+            if getattr(regime_obj, "regime_unstable_day", False):
+                _effective_entry_rule = "next_day"
+                # 同时将 position_mult 封顶 0.3
+                if position_mult > 0.3:
+                    position_mult = 0.3
+
             # 盘前 AI 信号跳过 entry_rule，信任 AI 选股；盘中动态候选遵守 entry_rule
             entry_skip_reason = ""
             if source != "signal":
                 zone_pos = (price - buy_min) / (buy_max - buy_min) if buy_max > buy_min else 0.5
-                if entry_rule == "next_day":
+                if _effective_entry_rule == "next_day":
                     entry_skip_reason = "尾盘拉升/次日再看，今日不追"
-                elif entry_rule == "confirm":
-                    if zone_pos > 0.5:
-                        entry_skip_reason = f"需确认信号(zone_pos={zone_pos:.0%})，等回调到区间下半部"
-                elif entry_rule == "pullback":
+                elif _effective_entry_rule == "confirm":
+                    # 动态阈值：极端普跌日放宽，相对强度股票不必等深回调
+                    confirm_threshold = 0.5
+                    breadth = getattr(self, "_market_breadth", {})
+                    up, down = breadth.get("up", 0), breadth.get("down", 0)
+                    if up + down > 0 and down / (up + down) > 0.75:
+                        # down/up > 3:1，全市场极端普跌
+                        sector_pct = (
+                            getattr(self, "_sector_stats", {}).get(getattr(self, "_sector_cache", {}).get(code, ""), 0)
+                            or 0
+                        )
+                        if sector_pct > 0:
+                            confirm_threshold = 0.75  # 板块走强 → 大幅放宽
+                        else:
+                            confirm_threshold = 0.60  # 板块一般 → 小幅放宽
+                    if zone_pos > confirm_threshold:
+                        entry_skip_reason = f"需确认信号(zone_pos={zone_pos:.0%}>{confirm_threshold:.0%})，等回调"
+                elif _effective_entry_rule == "pullback":
                     if zone_pos > 0.4:
                         entry_skip_reason = f"等回调买入(zone_pos={zone_pos:.0%})，暂不追高"
-                elif entry_rule == "range_boundary":
+                elif _effective_entry_rule == "range_boundary":
                     if zone_pos > 0.25:
                         entry_skip_reason = f"宽幅震荡(zone_pos={zone_pos:.0%})，等区间下沿再入场"
+                elif _effective_entry_rule == "standard":
+                    # standard/default 也做 zone_pos 检查，防止 pattern=unknown 时裸奔
+                    if zone_pos > 0.5:
+                        entry_skip_reason = f"zone_pos={zone_pos:.0%}>50%，等回调到区间下半部"
 
             if entry_skip_reason:
                 alert_state[c["alert_key"]] = (price, True)
@@ -1332,6 +1358,17 @@ class BuyDecisionMixin:
                 continue
 
             context = self._analyze_buy_context(code, price, buy_min, buy_max)
+
+            # position_mult=0 硬阻断：regime 明确禁止开仓时不计算仓位
+            if position_mult <= 0:
+                alert_state[c["alert_key"]] = (price, True)
+                if not quiet:
+                    self._alert(
+                        f"⛔ 禁止开仓 — {code} {name}\n"
+                        f"   现价: {price:.2f}  板块:{trend}\n"
+                        f"   → 大盘环境禁止买入 (position_mult={position_mult})"
+                    )
+                continue
 
             # 提前计算仓位，用于消息显示
             max_amount, _size_reason = self._calculate_position_size(code, price, buy_min, buy_max, pattern, trend)

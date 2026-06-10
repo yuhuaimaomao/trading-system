@@ -1,12 +1,4 @@
-"""盯盘 AI 模版 — 不同情景用不同模型。
-
-模型配置（.env）:
-  AI_MODEL_WATCHER_CHASE → 追高二判（默认 deepseek-v4-pro，需快速）
-  AI_MODEL_WATCHER_SWAP → 换仓评估（默认 deepseek-v4-pro）
-  AI_MODEL_WATCHER_INDEX → 指数波动（默认 deepseek-v4-pro）
-  AI_MODEL_WATCHER_BREAKOUT → 突破追涨（默认 deepseek-v4-pro）
-  AI_MODEL_WATCHER_TRAPPED → 被套离场（默认 deepseek-v4-pro）
-"""
+"""盯盘 AI 模版 — 所有盯盘子业务统一使用 AI_MODEL_WATCHER（默认 deepseek-v4-pro）。"""
 
 from dataclasses import dataclass
 
@@ -87,7 +79,7 @@ class PromptTemplate:
     system_prompt: str  # AI 角色定义 + 核心判断原则
     user_template: str  # {field} 占位模板
     required_fields: list[str]  # 模板必填字段（格式化前校验）
-    max_tokens: int = 100  # AI 返回长度
+    max_tokens: int = None  # None 则由 API 自行决定
     dedupe: bool = True  # 同名 key 是否替换旧任务
 
 
@@ -136,7 +128,6 @@ BREAKOUT_TEMPLATE = PromptTemplate(
         "index_high",
         "index_low",
     ],
-    max_tokens=80,
 )
 """被套离场场景模板 — 持仓浮亏 > 5% 时辅助判断离场时机。
 
@@ -184,6 +175,5 @@ TRAPPED_EXIT_TEMPLATE = PromptTemplate(
         "market_env",
         "risk_level",
     ],
-    max_tokens=80,
 )
 # PromptTemplate 已定义在文件头部

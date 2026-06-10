@@ -417,6 +417,15 @@ class ReviewService:
             logger.info("\n【阶段 3/4】AI 分析")
             analysis, stock_pool = self.analyze()
 
+            # Batch 模式：已提交异步处理，子进程负责推送+记录，主进程只需保证策略继续跑
+            is_batch = analysis.startswith("报告正在通过批处理生成")
+            if is_batch:
+                logger.info("📤 Batch 已提交，跳过推送（子进程稍后推送）")
+                logger.info("=" * 70)
+                logger.info("✅ 复盘主流程完成（Batch 异步模式）")
+                logger.info("=" * 70)
+                return True
+
             # 判断 AI 分析是否成功
             ai_success = bool(stock_pool) and not analysis.startswith("AI 分析失败")
 

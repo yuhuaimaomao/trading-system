@@ -40,7 +40,7 @@ class AIAuditor:
         if prompt is None:
             return None
 
-        text = self.ai.chat(prompt=prompt, system_prompt=WATCHER_AUDIT_SYSTEM, max_tokens=4096)
+        text = self.ai.chat(prompt=prompt, model="audit", system_prompt=WATCHER_AUDIT_SYSTEM)
         if not text:
             return None
 
@@ -115,7 +115,7 @@ class AIAuditor:
         return "\n".join(sorted(params)[:40])
 
     def _parse_response(self, text: str) -> dict | None:
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        m = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
         if not m:
             return None
         try:

@@ -271,7 +271,6 @@ class MorningBrief:
             full_prompt,
             model="morning",
             system_prompt=system_prompt,
-            max_tokens=6000,
         )
 
         if not content:

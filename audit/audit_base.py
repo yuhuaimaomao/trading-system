@@ -58,7 +58,6 @@ class BaseAIAuditor:
                 prompt=prompt,
                 model="audit",
                 system_prompt=system or "你是审计分析师。",
-                max_tokens=4096,
             )
             if text:
                 return self._parse(None, text)

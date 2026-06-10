@@ -69,7 +69,7 @@ trading-system/
 │   ├── message/                    消息收发（Telegram）
 │   ├── config/                     配置（settings/trading_calendar）
 │   ├── qmt/                        QMT 客户端
-│   └── utils/                      工具（日志 v4.0/DNS/股票代码）
+│   └── utils/                      工具（日志 v4.0/DNS/股票代码/监管函PDF分析含OCR回退）
 ├── tests/                          测试
 ├── ops/                            运维（scheduler/tools/pre_commit）
 ├── docs/                           文档（约定/更新记录/设计文档）
