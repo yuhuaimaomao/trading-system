@@ -371,7 +371,7 @@ class TradeRepository:
     def get_market_snapshots_batch(self, trade_date: str, latest_ts: float) -> list[dict]:
         with self._signal._conn() as conn:
             rows = conn.execute(
-                "SELECT ts, code, change_pct, price, amount FROM market_snapshots WHERE trade_date=? AND ts=?",
+                "SELECT ts, code, change_pct, price, amount, volume, high, low, open, pre_close FROM market_snapshots WHERE trade_date=? AND ts=?",
                 (trade_date, latest_ts),
             ).fetchall()
         return [
@@ -381,6 +381,11 @@ class TradeRepository:
                 "change_pct": r[2],
                 "price": r[3] or 0,
                 "amount": r[4] or 0,
+                "volume": r[5] or 0,
+                "high": r[6] or 0,
+                "low": r[7] or 0,
+                "open": r[8] or 0,
+                "pre_close": r[9] or 0,
             }
             for r in rows
         ]

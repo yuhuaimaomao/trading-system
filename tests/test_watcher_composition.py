@@ -96,6 +96,7 @@ class MockPosition:
 def _run_scan_loop(w, after_market_side_effect, lunch_break_side_effect=None):
     """Run the scan loop (simulating the while loop inside Watcher.run())."""
     if lunch_break_side_effect is None:
+
         def lunch_break_side_effect():
             return False
 
@@ -263,11 +264,7 @@ class TestMRO:
         for name, modpath in MIXIN_MODULE_MAP.items():
             mod = importlib.import_module(modpath)
             cls = getattr(mod, name)
-            methods = {
-                m
-                for m, _ in inspect.getmembers(cls, predicate=inspect.isfunction)
-                if not m.startswith("__")
-            }
+            methods = {m for m, _ in inspect.getmembers(cls, predicate=inspect.isfunction) if not m.startswith("__")}
             methods_by_mixin[name] = methods
 
         conflicts = []
@@ -279,9 +276,7 @@ class TestMRO:
                     for m in sorted(overlap):
                         conflicts.append(f"  {names[i]} & {names[j]} -> {m}")
 
-        assert not conflicts, "Method conflicts between mixins:\n" + "\n".join(
-            conflicts
-        )
+        assert not conflicts, "Method conflicts between mixins:\n" + "\n".join(conflicts)
 
     def test_mro_debug_output(self, capsys):
         """Print MRO for documentation."""
@@ -440,15 +435,9 @@ class TestScanOrder:
             return f
 
         with (
-            patch.object(
-                w, "_recv_collector_data", side_effect=_track("1_recv_collector_data")
-            ),
-            patch.object(
-                w, "_process_pending_ai", side_effect=_track("2_process_pending_ai")
-            ),
-            patch.object(
-                w, "_check_data_stale", side_effect=_track("3_check_data_stale")
-            ),
+            patch.object(w, "_recv_collector_data", side_effect=_track("1_recv_collector_data")),
+            patch.object(w, "_process_pending_ai", side_effect=_track("2_process_pending_ai")),
+            patch.object(w, "_check_data_stale", side_effect=_track("3_check_data_stale")),
             patch.object(w, "_check_replies", side_effect=_track("4_check_replies")),
             patch.object(
                 w,
@@ -460,19 +449,11 @@ class TestScanOrder:
                 "_get_realtime_prices",
                 side_effect=_track_return("6_get_realtime_prices", {"000001": 10.5}),
             ),
-            patch.object(
-                w, "_record_baseline", side_effect=_track("7_record_baseline")
-            ),
-            patch.object(
-                w, "_check_market_state", side_effect=_track("8_check_market_state")
-            ),
-            patch.object(
-                w, "_check_positions", side_effect=_track("9_check_positions")
-            ),
+            patch.object(w, "_record_baseline", side_effect=_track("7_record_baseline")),
+            patch.object(w, "_check_market_state", side_effect=_track("8_check_market_state")),
+            patch.object(w, "_check_positions", side_effect=_track("9_check_positions")),
             patch.object(w, "_check_signals", side_effect=_track("10_check_signals")),
-            patch.object(
-                w, "_check_review_picks", side_effect=_track("11_check_review_picks")
-            ),
+            patch.object(w, "_check_review_picks", side_effect=_track("11_check_review_picks")),
             patch.object(w, "_check_closing", side_effect=_track("12_check_closing")),
             patch.object(
                 w,
@@ -484,9 +465,7 @@ class TestScanOrder:
                 "_check_bought_signals",
                 side_effect=_track("14_check_bought_signals"),
             ),
-            patch.object(
-                w, "_check_sl_reminders", side_effect=_track("15_check_sl_reminders")
-            ),
+            patch.object(w, "_check_sl_reminders", side_effect=_track("15_check_sl_reminders")),
             patch.object(
                 w,
                 "_alert_index_divergence",
@@ -507,9 +486,7 @@ class TestScanOrder:
             "6_get_realtime_prices",
         ]
         for i, expected in enumerate(core_expected):
-            assert calls[i] == expected, (
-                f"Call #{i}: expected {expected}, got {calls[i]}"
-            )
+            assert calls[i] == expected, f"Call #{i}: expected {expected}, got {calls[i]}"
 
         # After prices are retrieved, the following are called in order.
         # _record_baseline is called first, then market state, then checks.
@@ -549,9 +526,7 @@ class TestScanOrder:
         ]
         for i, expected in enumerate(check_expected):
             if i < len(check_methods):
-                assert check_methods[i] == expected, (
-                    f"Check #{i}: expected {expected}, got {check_methods[i]}"
-                )
+                assert check_methods[i] == expected, f"Check #{i}: expected {expected}, got {check_methods[i]}"
 
     def test_early_return_no_watch_codes(self, watcher):
         """When _get_watch_codes returns empty, _scan returns immediately."""
@@ -697,7 +672,6 @@ class TestMorningInitFlow:
         w.paper_account.restore(w._trade_date)
         w._restore_pos_meta()
         w._init_bought_watch()
-        w._cleanup_old_snapshots()
         w._load_sector_history()
 
         # In non-trading hours path
@@ -707,9 +681,7 @@ class TestMorningInitFlow:
         if w._before_market():
             from datetime import date
 
-            wait = (
-                datetime.combine(date.today(), dt_time(9, 30)) - datetime.now()
-            ).total_seconds()
+            wait = (datetime.combine(date.today(), dt_time(9, 30)) - datetime.now()).total_seconds()
             if wait > 0:
                 pass  # skip actual sleep
 
@@ -727,7 +699,6 @@ class TestMorningInitFlow:
         w.paper_account.restore(w._trade_date)
         w._restore_pos_meta()
         w._init_bought_watch()
-        w._cleanup_old_snapshots()
         w._load_sector_history()
         w._ensure_collector_running()
 
@@ -774,9 +745,7 @@ class TestLunchBreakTransition:
             with patch("trade.core.watcher.time.sleep") as mock_sleep:
                 Watcher._lunch_break()
                 # Should sleep 1.5 hours = 5400 seconds
-                (dt_time(13, 0).hour * 3600) - (
-                    lunch_time.hour * 3600 + lunch_time.minute * 60
-                )
+                (dt_time(13, 0).hour * 3600) - (lunch_time.hour * 3600 + lunch_time.minute * 60)
                 mock_sleep.assert_called_once()
                 assert abs(mock_sleep.call_args[0][0] - 5400) < 10
 

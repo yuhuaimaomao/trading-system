@@ -26,6 +26,7 @@ ALL_TABLES = {
     "index_snapshots",
     "market_breadth",
     "stock_basic",
+    "intraday_fusion",
     "strategy_funnel",
     "strategy_ai_decisions",
     "strategy_lessons",
@@ -335,12 +336,39 @@ EXPECTED_COLUMNS = {
         "reason",
         "created_at",
     ],
+    "intraday_fusion": [
+        "id",
+        "trade_date",
+        "round_ts",
+        "stock_code",
+        "stock_name",
+        "price",
+        "open",
+        "high",
+        "low",
+        "prev_close",
+        "change_pct",
+        "volume",
+        "turnover",
+        "turnover_rate",
+        "amplitude",
+        "circ_market_cap",
+        "volume_ratio",
+        "pe_ttm",
+        "main_force_net",
+        "main_force_ratio",
+        "round_type",
+        "is_candidate",
+        "candidate_score",
+    ],
 }
 
 EXPECTED_INDEXES = {
     "idx_trade_signals_date",
     "idx_trade_orders_date",
     "idx_stock_basic_date_code",
+    "idx_if_date_round_code",
+    "idx_if_date_round",
     "idx_sf_push",
     "idx_sf_code",
     "idx_sad_push",
@@ -362,9 +390,7 @@ def _call_ensure_tables(db_path: str):
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
     return {r[0] for r in rows}
 
 
@@ -374,9 +400,7 @@ def _column_names(conn: sqlite3.Connection, table: str) -> list[str]:
 
 
 def _index_names(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_auto%'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_auto%'").fetchall()
     return {r[0] for r in rows}
 
 
@@ -451,10 +475,7 @@ class TestEnsureTables:
         assert len(tables) == len(ALL_TABLES)
 
         # 数据仍在
-        row = conn.execute(
-            "SELECT total_value FROM trade_portfolio_snapshots "
-            "WHERE trade_date='2026-06-01'"
-        ).fetchone()
+        row = conn.execute("SELECT total_value FROM trade_portfolio_snapshots WHERE trade_date='2026-06-01'").fetchone()
         assert row is not None
         assert row["total_value"] == 100000.0
 
@@ -564,8 +585,7 @@ class TestMigrations:
         assert "locked_volume" in cols, f"迁移后 locked_volume 不存在 (现有列: {cols})"
 
         row = conn.execute(
-            "SELECT stock_code, volume, locked_volume "
-            "FROM trade_portfolio_positions WHERE trade_date='2026-06-01'"
+            "SELECT stock_code, volume, locked_volume FROM trade_portfolio_positions WHERE trade_date='2026-06-01'"
         ).fetchone()
         assert row is not None
         assert row["stock_code"] == "000001"
@@ -651,9 +671,7 @@ class TestDataIntegrity:
         assert len(r1["reason"]) == 10000
         assert r1["status"] == "pending"
 
-        r2 = conn.execute(
-            "SELECT lesson_content FROM strategy_lessons WHERE lesson_key='key_1'"
-        ).fetchone()
+        r2 = conn.execute("SELECT lesson_content FROM strategy_lessons WHERE lesson_key='key_1'").fetchone()
         assert r2 is not None
         assert r2["lesson_content"] == special_chars
 
@@ -746,8 +764,7 @@ class TestUniqueConstraints:
         conn.commit()
 
         rows = conn.execute(
-            "SELECT total_value FROM trade_portfolio_snapshots "
-            "WHERE trade_date='2026-06-01' AND account='real'"
+            "SELECT total_value FROM trade_portfolio_snapshots WHERE trade_date='2026-06-01' AND account='real'"
         ).fetchall()
         assert len(rows) == 1, f"INSERT OR REPLACE 后应只有 1 行，实际 {len(rows)}"
         assert rows[0][0] == 200000.0

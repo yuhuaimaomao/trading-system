@@ -15,6 +15,20 @@ TYPE_LABELS = {
 }
 
 
+def format_improvement_list(imps: list[dict]) -> str:
+    """简洁列表格式：每条一行，适合手机阅读。"""
+    lines = []
+    for imp in imps:
+        imp_type = TYPE_LABELS.get(imp["improvement_type"], imp["improvement_type"])
+        module = imp.get("target_module", "?")
+        suggestion = (imp.get("suggested_change", "") or "")[:80]
+        # 截断到最后一个完整句子
+        if len(imp.get("suggested_change", "") or "") > 80:
+            suggestion += "…"
+        lines.append(f"  #{imp['id']} [{imp_type}] {module}\n     {suggestion}")
+    return "\n".join(lines)
+
+
 def format_improvement_card(imp: dict) -> str:
     lines = [
         f"🔧 盯盘改进建议 #{imp['id']}",

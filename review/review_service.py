@@ -6,8 +6,9 @@
 """
 
 import json
+import subprocess
+import sys
 from datetime import datetime
-from pathlib import Path
 
 from data._base import connect
 from data.collect.events.cls_digest_collector import CLSDigestCollector
@@ -27,7 +28,7 @@ from data.collect.market.main_index_collector import MainIndexCollector
 from data.collect.market.stock_basic_collector import StockBasicCollector
 from data.collect.market.suspend_resume_collector import SuspendResumeCollector
 from review.review_stats import CollectionStatsService
-from system.config.settings import DATABASE_PATH, LOGS_DIR
+from system.config.settings import DATABASE_PATH, PROJECT_ROOT
 from system.utils.logger import get_task_logger, set_current_task
 
 logger = get_task_logger("review")
@@ -56,206 +57,367 @@ class ReviewService:
 
         logger.info("ReviewService 初始化完成（14 个采集器）")
 
+    @staticmethod
+    def _save_review_signals(stock_pool: list, review_date: str) -> int:
+        """将复盘 STOCKS JSON 转为 REVIEW 信号写入 trade_signals。
+
+        盯盘管线只从 trade_signals 读 REVIEW 信号，不再查 stock_tracker。
+
+        信号 trade_date 使用下一个交易日——今日复盘得出的买入建议，明天开盘执行。
+        """
+        import re
+
+        from data.repo import TradeRepository
+        from system.config.trading_calendar import get_next_trading_day
+
+        signal_date = get_next_trading_day(review_date)
+        repo = TradeRepository()
+        # 先清理目标日期旧 REVIEW 信号（复盘可能重跑）
+        repo.expire_old_pending_signals(signal_date)
+
+        saved = 0
+        for s in stock_pool:
+            code = s.get("股票代码", "")
+            name = s.get("股票名称", "")
+            if not code:
+                continue
+
+            buy_cond = s.get("买入条件", "")
+            sl = s.get("止损位", "")
+            tp = s.get("目标位", "")
+
+            # 从买入条件提取参考价格
+            buy_min, buy_max = None, None
+            ma_match = re.search(r"约(\d+\.?\d*)", buy_cond)
+            if ma_match:
+                ref = float(ma_match.group(1))
+                buy_min = round(ref * 0.99, 2)
+                buy_max = round(ref * 1.02, 2)
+            elif sl:
+                sl_val = float(sl)
+                buy_min = round(sl_val * 1.02, 2)
+                buy_max = round(sl_val * 1.06, 2)
+
+            # 止损/止盈缺省时从技术指标补算
+            sl_val = float(sl) if sl else 0
+            tp_val = float(tp) if tp else 0
+            if sl_val <= 0 or tp_val <= 0:
+                calc_sl, calc_tp = ReviewService._calc_fallback_sl_tp(code, review_date)
+                if sl_val <= 0:
+                    sl_val = calc_sl
+                if tp_val <= 0:
+                    tp_val = calc_tp
+
+            signal_dict = {
+                "trade_date": signal_date,
+                "created_at": datetime.now().isoformat(),
+                "signal_type": "BUY",
+                "signal_source": "REVIEW",
+                "stock_code": code,
+                "stock_name": name,
+                "buy_zone_min": buy_min,
+                "buy_zone_max": buy_max,
+                "target_position": 0.05,  # REVIEW_PICK_POSITION_PCT
+                "stop_loss": sl_val if sl_val > 0 else None,
+                "take_profit": tp_val if tp_val > 0 else None,
+                "trailing_stop": 0.03,
+                "signal_score": 70,
+                "strategy_name": "review_trend_pick",
+                "reason": buy_cond[:80] if buy_cond else "",
+                "status": "pending",
+                "account": "paper",
+            }
+            if repo.insert_signal(signal_dict):
+                saved += 1
+
+        logger.info(f"✅ REVIEW 信号入库: {saved}/{len(stock_pool)} 只")
+        return saved
+
+    @staticmethod
+    def _calc_fallback_sl_tp(code: str, trade_date: str) -> tuple:
+        """AI 未给止损/止盈时，从技术指标自动补算。"""
+        from data.repo import TradeRepository
+
+        sl, tp = 0.0, 0.0
+        try:
+            repo = TradeRepository()
+            price = repo.get_stock_price(code, trade_date) or 0
+            if price > 0:
+                sr = repo.get_support_resistance(code, price)
+                for sup in sr.get("supports", []):
+                    sl = round(sup[0] * 0.99, 2)
+                    break
+                for res in sr.get("resistances", []):
+                    tp = round(res[0], 2)
+                    break
+        except Exception:
+            pass
+        if sl <= 0:
+            sl = round(price * 0.93, 2) if price > 0 else 0
+        if tp <= 0:
+            tp = round(price * 1.10, 2) if price > 0 else 0
+        return sl, tp
+
+    @staticmethod
+    def _run_in_subprocess(module_path, class_name, method, trade_date, method_kwargs=None, timeout=900):
+        """在独立子进程中执行采集器，返回 {success, count, total, error?}
+
+        子进程退出后 OS 强制回收该进程的所有 fd（包括 TIME_WAIT socket），
+        主进程 fd 数不增长。
+        """
+        # 构建方法调用参数
+        kw_lines = ""
+        if method_kwargs:
+            kw_parts = [f"{k}={json.dumps(v)}" for k, v in method_kwargs.items()]
+            kw_lines = ", ".join(kw_parts)
+
+        code = f"""
+import json, sys
+sys.path.insert(0, {json.dumps(str(PROJECT_ROOT))})
+from {module_path} import {class_name}
+c = {class_name}()
+c.trade_date = {json.dumps(trade_date)}
+try:
+    result = c.{method}({kw_lines})
+    if isinstance(result, dict):
+        stats = {{"success": result.get("success", False), "count": result.get("count", 0), "total": result.get("total", 0)}}
+    elif isinstance(result, list):
+        stats = {{"success": True, "count": len(result), "total": len(result)}}
+    else:
+        stats = {{"success": bool(result), "count": 0, "total": 0}}
+except Exception as e:
+    stats = {{"success": False, "count": 0, "total": 0, "error": str(e)}}
+print(json.dumps(stats))
+"""
+
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(PROJECT_ROOT),
+        )
+
+        if proc.returncode != 0:
+            return {"success": False, "count": 0, "total": 0, "error": proc.stderr[:500]}
+
+        try:
+            return json.loads(proc.stdout.strip())
+        except json.JSONDecodeError:
+            return {"success": False, "count": 0, "total": 0, "error": f"JSON解析失败: {proc.stdout[:200]}"}
+
     def collect(self):
         """
-        采集复盘数据（11 个模块）
+        采集复盘数据（14 个模块）
+
+        网络密集型采集器在独立子进程中执行：子进程退出时 OS 强制回收所有 fd，
+        保证主进程 fd 数稳定，避免 [Errno 24] Too many open files。
         """
         import time
 
         start_time = time.time()
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
-        # 确保所有采集器使用正确的交易日期
-        for col in [
-            self.industry_collector,
-            self.concept_collector,
-            self.stock_basic_collector,
-            self.strong_stock_collector,
-            self.suspend_resume_collector,
-            self.share_holder_change_collector,
-        ]:
-            col.trade_date = trade_date
-
         logger.info("=" * 60)
         logger.info("开始采集复盘数据...")
         logger.info("=" * 60)
 
-        def _collect_with_retry(name, collector):
-            """代理采集器：失败后等 120s 重试一次，应对代理池整点刷新"""
+        def _collect_network(name, module_path, class_name, method="fetch_and_save", method_kwargs=None, timeout=900):
+            """网络采集器：子进程执行 + 失败后等 10s 重试一次"""
             t0 = time.time()
             for attempt in (1, 2):
-                try:
-                    result = collector.fetch_and_save()
-                except Exception as e:
-                    logger.error(f"❌ {name}采集异常：{e}")
-                    result = {"success": False, "count": 0, "total": 0, "data": []}
+                result = ReviewService._run_in_subprocess(
+                    module_path,
+                    class_name,
+                    method,
+                    trade_date,
+                    method_kwargs=method_kwargs,
+                    timeout=timeout,
+                )
                 if result.get("success") and result.get("count", 0) > 0:
                     logger.info(f"  ✅ {name}完成，耗时 {time.time() - t0:.1f}秒")
                     return result
+                err = result.get("error", "")
                 if attempt == 1:
-                    logger.warning(f"  ⚠️ {name}第1次失败，等10s后重试...")
+                    logger.warning(f"  ⚠️ {name}第1次失败（{err}），等10s后重试...")
                     time.sleep(10)
             logger.error(f"  ❌ {name}重试后仍失败，跳过")
             return result
 
         # 采集行业板块
         logger.info("【1/13】采集行业板块...")
-        industry_result = _collect_with_retry("行业板块", self.industry_collector)
+        industry_result = _collect_network(
+            "行业板块",
+            "data.collect.market.industry_board_collector",
+            "IndustryBoardCollector",
+        )
 
         # 采集概念板块
         logger.info("【2/13】采集概念板块...")
-        concept_result = _collect_with_retry("概念板块", self.concept_collector)
+        concept_result = _collect_network(
+            "概念板块",
+            "data.collect.market.concept_board_collector",
+            "ConceptBoardCollector",
+        )
 
         # 采集个股行情
         logger.info("【3/13】采集个股行情...")
-        stock_basic_result = _collect_with_retry("个股行情", self.stock_basic_collector)
+        stock_basic_result = _collect_network(
+            "个股行情",
+            "data.collect.market.stock_basic_collector",
+            "StockBasicCollector",
+            timeout=900,
+        )
 
         # 采集强势股
         logger.info("【4/13】采集强势股...")
-        t0 = time.time()
-
-        try:
-            strong_stock_result = self.strong_stock_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 强势股采集异常：{e}")
-            strong_stock_result = {"success": False, "count": 0, "total": 0, "data": []}
-        logger.info(f"  ✅ 强势股完成，耗时 {time.time() - t0:.1f}秒")
+        strong_stock_result = _collect_network(
+            "强势股",
+            "data.collect.events.strong_stock_collector",
+            "StrongStockCollector",
+        )
 
         # 采集龙虎榜
         logger.info("【5/13】采集龙虎榜...")
-        t0 = time.time()
-
-        try:
-            lhb_result = self.lhb_collector.fetch_and_save(date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 龙虎榜采集异常：{e}")
-            lhb_result = {"success": False, "count": 0, "total": 0, "data": []}
-        logger.info(f"  ✅ 龙虎榜完成，耗时 {time.time() - t0:.1f}秒")
+        lhb_result = _collect_network(
+            "龙虎榜",
+            "data.collect.events.lhb_collector",
+            "LHBCollector",
+            method_kwargs={"date": trade_date},
+        )
 
         # 采集涨跌停
         logger.info("【6/13】采集涨跌停...")
-        t0 = time.time()
-
-        try:
-            limit_pool_result = self.limit_pool_collector.fetch_and_save(trade_date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 涨跌停采集异常：{e}")
-            limit_pool_result = {"success": False, "count": 0, "total": 0, "data": []}
-        logger.info(f"  ✅ 涨跌停完成，耗时 {time.time() - t0:.1f}秒")
+        limit_pool_result = _collect_network(
+            "涨跌停",
+            "data.collect.events.limit_pool_collector",
+            "LimitPoolCollector",
+            method_kwargs={"trade_date": trade_date},
+        )
 
         # 采集监管函
         logger.info("【7/13】采集监管函...")
-        t0 = time.time()
-
-        try:
-            regulatory_letter_result = self.regulatory_letter_collector.fetch_and_save(trade_date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 监管函采集异常：{e}")
-            regulatory_letter_result = {
-                "success": False,
-                "count": 0,
-                "total": 0,
-                "data": [],
-            }
-        logger.info(f"  ✅ 监管函完成，耗时 {time.time() - t0:.1f}秒")
+        regulatory_letter_result = _collect_network(
+            "监管函",
+            "data.collect.events.regulatory_letter_collector",
+            "RegulatoryLetterCollector",
+            method_kwargs={"trade_date": trade_date},
+        )
 
         # 采集大盘指数
         logger.info("【8/13】采集大盘指数...")
-        t0 = time.time()
-
-        try:
-            main_index_result = self.main_index_collector.fetch_and_save(trade_date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 大盘指数采集异常：{e}")
-            main_index_result = {"success": False, "count": 0, "total": 0, "data": []}
-        logger.info(f"  ✅ 大盘指数完成，耗时 {time.time() - t0:.1f}秒")
+        main_index_result = _collect_network(
+            "大盘指数",
+            "data.collect.market.main_index_collector",
+            "MainIndexCollector",
+            method_kwargs={"trade_date": trade_date},
+        )
 
         # 采集股票异动
         logger.info("【9/13】采集股票异动...")
-        t0 = time.time()
-
-        try:
-            stock_monitor_result = self.stock_monitor_collector.fetch_and_save(trade_date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 股票异动采集异常：{e}")
-            stock_monitor_result = {
-                "success": False,
-                "count": 0,
-                "total": 0,
-                "data": [],
-            }
-        logger.info(f"  ✅ 股票异动完成，耗时 {time.time() - t0:.1f}秒")
+        stock_monitor_result = _collect_network(
+            "股票异动",
+            "data.collect.events.stock_monitor_collector",
+            "StockMonitorCollector",
+            method_kwargs={"trade_date": trade_date},
+        )
 
         # 采集停复牌
         logger.info("【10/13】采集停复牌...")
-        t0 = time.time()
-
-        try:
-            suspend_resume_result = self.suspend_resume_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 停复牌采集异常：{e}")
-            suspend_resume_result = {
-                "success": False,
-                "count": 0,
-                "total": 0,
-                "data": [],
-            }
-        logger.info(f"  ✅ 停复牌完成，耗时 {time.time() - t0:.1f}秒")
+        suspend_resume_result = _collect_network(
+            "停复牌",
+            "data.collect.market.suspend_resume_collector",
+            "SuspendResumeCollector",
+        )
 
         # 采集股东增减持
         logger.info("【11/13】采集股东增减持...")
-        t0 = time.time()
-
-        try:
-            share_holder_change_result = self.share_holder_change_collector.fetch_and_save()
-        except Exception as e:
-            logger.error(f"❌ 股东增减持采集异常：{e}")
-            share_holder_change_result = {
-                "success": False,
-                "count": 0,
-                "total": 0,
-                "data": [],
-            }
-        logger.info(f"  ✅ 股东增减持完成，耗时 {time.time() - t0:.1f}秒")
+        share_holder_change_result = _collect_network(
+            "股东增减持",
+            "data.collect.events.share_holder_change_collector",
+            "ShareHolderChangeCollector",
+        )
 
         # 采集公告
         logger.info("【12/13】采集公告...")
-        t0 = time.time()
+        notice_result = _collect_network(
+            "公告",
+            "data.collect.events.notice_collector",
+            "NoticeCollector",
+            method_kwargs={"trade_date": trade_date},
+        )
 
-        try:
-            notice_result = self.notice_collector.fetch_and_save(trade_date=trade_date)
-        except Exception as e:
-            logger.error(f"❌ 公告采集异常：{e}")
-            notice_result = {"success": False, "count": 0, "total": 0, "data": []}
-        logger.info(f"  ✅ 公告采集完成，耗时 {time.time() - t0:.1f}秒")
-
-        # 采集隔夜宏观
+        # 采集隔夜宏观（两步操作：collect_all + save_to_db，在子进程中连续执行）
         logger.info("【13/15】采集隔夜宏观...")
         t0 = time.time()
-        macro_result = {"success": False, "count": 0}
-        try:
-            macro_data = self.macro_collector.collect_all()
-            self.macro_collector.save_to_db(macro_data, trade_date)
-            macro_result = {"success": True, "count": 1}
+        macro_code = f"""
+import json, sys
+sys.path.insert(0, {json.dumps(str(PROJECT_ROOT))})
+from data.collect.macro.macro_collector import MacroCollector
+c = MacroCollector()
+c.trade_date = {json.dumps(trade_date)}
+try:
+    data = c.collect_all()
+    c.save_to_db(data, {json.dumps(trade_date)})
+    print(json.dumps({{"success": True, "count": 1, "total": 1}}))
+except Exception as e:
+    print(json.dumps({{"success": False, "count": 0, "total": 0, "error": str(e)}}))
+"""
+        macro_proc = subprocess.run(
+            [sys.executable, "-c", macro_code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(PROJECT_ROOT),
+        )
+        if macro_proc.returncode == 0:
+            macro_result = json.loads(macro_proc.stdout.strip())
+        else:
+            macro_result = {"success": False, "count": 0, "error": macro_proc.stderr[:200]}
+        if macro_result.get("success"):
             logger.info(f"  ✅ 隔夜宏观完成，耗时 {time.time() - t0:.1f}秒")
-        except Exception as e:
-            logger.error(f"  ❌ 隔夜宏观采集异常：{e}")
+        else:
+            logger.error(f"  ❌ 隔夜宏观采集异常：{macro_result.get('error', '')}")
 
         # 采集 CLS 复盘新闻（焦点复盘 + 每日收评）并落盘
         logger.info("【14/15】采集 CLS 复盘新闻...")
         t0 = time.time()
         news_result = {"success": False, "sections": []}
         try:
-            news_data = self.news_collector.collect_review()
-            if news_data:
-                news_dir = Path(LOGS_DIR) / trade_date / "collectors"
-                news_dir.mkdir(parents=True, exist_ok=True)
-                news_path = news_dir / "cls_digest.json"
-                with open(news_path, "w", encoding="utf-8") as f:
-                    json.dump(news_data, f, ensure_ascii=False, indent=2)
-                sections = [k for k in news_data if news_data[k]]
-                news_result = {"success": True, "sections": sections}
-                logger.info(f"  ✅ CLS 复盘新闻完成（{sections}），落盘 {news_path}，耗时 {time.time() - t0:.1f}秒")
+            cls_code = f"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, {json.dumps(str(PROJECT_ROOT))})
+from system.config.settings import LOGS_DIR
+from data.collect.events.cls_digest_collector import CLSDigestCollector
+c = CLSDigestCollector()
+try:
+    news_data = c.collect_review()
+    if news_data:
+        news_dir = Path(LOGS_DIR) / {json.dumps(trade_date)} / "collectors"
+        news_dir.mkdir(parents=True, exist_ok=True)
+        news_path = news_dir / "cls_digest.json"
+        with open(str(news_path), "w", encoding="utf-8") as f:
+            json.dump(news_data, f, ensure_ascii=False, indent=2)
+        sections = [k for k in news_data if news_data[k]]
+        print(json.dumps({{"success": True, "sections": sections}}))
+    else:
+        print(json.dumps({{"success": False, "sections": []}}))
+except Exception as e:
+    print(json.dumps({{"success": False, "sections": [], "error": str(e)}}))
+"""
+            cls_proc = subprocess.run(
+                [sys.executable, "-c", cls_code],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(PROJECT_ROOT),
+            )
+            if cls_proc.returncode == 0:
+                news_result = json.loads(cls_proc.stdout.strip())
+            sections = news_result.get("sections", [])
+            if news_result.get("success"):
+                logger.info(f"  ✅ CLS 复盘新闻完成（{sections}），耗时 {time.time() - t0:.1f}秒")
             else:
                 logger.warning(f"  ⚠️ CLS 复盘新闻为空，耗时 {time.time() - t0:.1f}秒")
         except Exception as e:
@@ -445,6 +607,12 @@ class ReviewService:
                         logger.info(f"✅ 已记录 {len(stocks)} 只复盘股票到追踪表")
                 except Exception as e:
                     logger.error(f"⚠️ 股票池记录失败：{e}")
+
+                # 同步写入 trade_signals（REVIEW 信号）供盯盘管线使用
+                try:
+                    ReviewService._save_review_signals(stock_pool, trade_date)
+                except Exception as e:
+                    logger.error(f"⚠️ REVIEW 信号入库失败：{e}")
             else:
                 logger.warning("⚠️ 复盘未解析到股票池，跳过记录")
 

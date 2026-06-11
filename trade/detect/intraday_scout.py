@@ -29,7 +29,6 @@ class IntradayScoutMixin:
     SCOUT_AI_TIMEOUT = 45  # AI 超时（秒）
 
     # ── 风控限制 ──
-    MAX_SCOUT_POSITIONS = 4  # 引擎2 最大持仓数
     MIN_POSITION_AMOUNT = 5000  # 单只最小买入金额
     MAX_SAME_SECTOR = 2  # 同板块最多持仓数
 
@@ -87,7 +86,12 @@ class IntradayScoutMixin:
 
         # ── 引擎2 仓位已满 ──
         scout_count = self._scout_position_count()
-        if scout_count >= self.MAX_SCOUT_POSITIONS:
+        if scout_count >= settings.MAX_SCOUT_POSITIONS:
+            return
+
+        # ── 全局仓位已满 ──
+        total_positions = len(self.paper_account.positions)
+        if total_positions >= settings.MAX_POSITIONS:
             return
 
         # ── 第一层：底部发力硬筛 ──
@@ -99,7 +103,7 @@ class IntradayScoutMixin:
         ranked = self._scout_layer2_rank(candidates)
 
         # ── 第三层：高分直买 / 中分 AI 辅助 / 低分仅提醒 ──
-        remaining = self.MAX_SCOUT_POSITIONS - scout_count
+        remaining = settings.MAX_SCOUT_POSITIONS - scout_count
         buys_attempted = 0
         ai_submitted = 0
 

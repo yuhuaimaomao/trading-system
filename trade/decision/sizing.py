@@ -168,7 +168,7 @@ def calc_unified_stop_loss(
     # 2. 策略类型修正
     strategy_mult = {"trend": 1.2, "chase": 0.8}.get(strategy_type, 1.0)
 
-    # 3. 板块修正
+    # 3. 板块修正 — 板块自身趋势 vs 相对大盘强度
     sector_mult = 1.0
     if "持续走强" in trend:
         sector_mult = 1.1
@@ -176,6 +176,9 @@ def calc_unified_stop_loss(
         sector_mult = 0.85
     elif "走弱" in trend:
         sector_mult = 0.92
+    # 板块虽弱但强于大盘 → 减少惩罚。弱势市场中抗跌的板块才是真强
+    if sector_mult < 1.0 and "强于大盘" in trend:
+        sector_mult = max(sector_mult, 0.92)
 
     # 4. 计算原始止损（2x ATR × 策略 × 板块）
     raw_sl = price * (1 - atr_pct * 2 * strategy_mult * sector_mult)
@@ -223,6 +226,9 @@ def calc_unified_take_profit(
         sector_mult = 1.05
     elif "持续走弱" in trend:
         sector_mult = 0.85
+    # 板块虽弱但强于大盘 → 减少惩罚
+    if sector_mult < 1.0 and "强于大盘" in trend:
+        sector_mult = max(sector_mult, 0.92)
 
     # 原始止盈
     raw_tp = price * (1 + atr_pct * 3 * strategy_mult * sector_mult)

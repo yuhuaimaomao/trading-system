@@ -98,11 +98,23 @@ def run():
         if deleted:
             logger.info(f"  🗑️  报告：删除 {deleted} 个文件")
 
-    # 5. 清理容灾表历史数据 + cls_telegraph 旧数据
+    # 5. 清理 QMT 数据 + 容灾表 + cls_telegraph 旧数据
     db_path = Path(DATABASE_PATH)
     if db_path.exists():
         conn = sqlite3.connect(str(db_path))
         try:
+            # QMT 个股分钟快照 + 板块聚合快照（与日志相同保留天数）
+            snap_cutoff = cutoff.strftime("%Y-%m-%d")
+            deleted_m = conn.execute("DELETE FROM market_snapshots WHERE trade_date < ?", (snap_cutoff,)).rowcount
+            deleted_s = conn.execute("DELETE FROM sector_snapshots WHERE trade_date < ?", (snap_cutoff,)).rowcount
+            if deleted_m or deleted_s:
+                conn.commit()
+                logger.info(
+                    f"  🗑️  QMT快照：market_snapshots={deleted_m}, sector_snapshots={deleted_s}（截止 {snap_cutoff}）"
+                )
+            else:
+                logger.info(f"  📊 QMT快照：无需清理（最新 {snap_cutoff}）")
+
             idx_cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             deleted_idx = conn.execute("DELETE FROM index_snapshots WHERE trade_date < ?", (idx_cutoff,)).rowcount
             if deleted_idx:
@@ -150,6 +162,15 @@ def run():
             for date, cnt in rows:
                 bar = "█" * (cnt // 10)
                 logger.info(f"  {date}  {cnt:>4}条  {bar}")
+        finally:
+            conn.close()
+
+    # 7. VACUUM 回收磁盘空间
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("VACUUM")
+            logger.info("✅ VACUUM 完成，磁盘空间已回收")
         finally:
             conn.close()
 

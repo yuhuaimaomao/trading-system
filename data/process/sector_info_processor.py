@@ -32,24 +32,20 @@ class SectorInfoProcessor:
         Returns:
             是否成功更新
         """
-        industry_ok = industry_result.get("count", 0) > 0 and industry_result.get(
-            "count", 0
-        ) == industry_result.get("total", 0)
-        concept_ok = concept_result.get("count", 0) > 0 and concept_result.get(
-            "count", 0
-        ) == concept_result.get("total", 0)
+        industry_ok = industry_result.get("count", 0) > 0 and industry_result.get("count", 0) == industry_result.get(
+            "total", 0
+        )
+        concept_ok = concept_result.get("count", 0) > 0 and concept_result.get("count", 0) == concept_result.get(
+            "total", 0
+        )
 
         if not (industry_ok and concept_ok):
             logger.warning("板块数据采集不完整，跳过 sector_info 更新")
-            logger.warning(
-                f"  行业板块：{industry_result.get('count', 0)}/{industry_result.get('total', 0)}"
-            )
-            logger.warning(
-                f"  概念板块：{concept_result.get('count', 0)}/{concept_result.get('total', 0)}"
-            )
+            logger.warning(f"  行业板块：{industry_result.get('count', 0)}/{industry_result.get('total', 0)}")
+            logger.warning(f"  概念板块：{concept_result.get('count', 0)}/{concept_result.get('total', 0)}")
             return False
 
-        from ops.scripts.update_sector_info import update_sector_info_daily
+        from ops.tools.update_sector_info import update_sector_info_daily
 
         logger.info("行业和概念板块采集完整，开始更新 sector_info 表...")
         update_sector_info_daily(trade_date)

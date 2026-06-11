@@ -120,6 +120,11 @@ def ensure_tables():
             change_pct REAL DEFAULT 0,
             price REAL DEFAULT 0,
             amount REAL DEFAULT 0,
+            volume REAL DEFAULT 0,
+            high REAL DEFAULT 0,
+            low REAL DEFAULT 0,
+            open REAL DEFAULT 0,
+            pre_close REAL DEFAULT 0,
             PRIMARY KEY (trade_date, ts, code)
         );
 
@@ -137,6 +142,17 @@ def ensure_tables():
     """)
 
     conn.commit()
+
+    # market_snapshots 新增 volume/high/low/open/pre_close — 尾盘选股引擎用（幂等迁移）
+    for col in [
+        ("volume", "REAL DEFAULT 0"),
+        ("high", "REAL DEFAULT 0"),
+        ("low", "REAL DEFAULT 0"),
+        ("open", "REAL DEFAULT 0"),
+        ("pre_close", "REAL DEFAULT 0"),
+    ]:
+        with suppress(sqlite3.OperationalError):
+            cursor.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col[0]} {col[1]}")
 
     # locked_volume 列 — T+1 锁仓持久化（幂等迁移）
     with suppress(sqlite3.OperationalError):
@@ -171,6 +187,43 @@ def ensure_tables():
             market_state TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+    """)
+
+    # intraday_fusion 表（盘中融合快照 — 尾盘选股引擎3 审计用）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS intraday_fusion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            round_ts REAL NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT DEFAULT '',
+            price REAL DEFAULT 0,
+            open REAL DEFAULT 0,
+            high REAL DEFAULT 0,
+            low REAL DEFAULT 0,
+            prev_close REAL DEFAULT 0,
+            change_pct REAL DEFAULT 0,
+            volume REAL DEFAULT 0,
+            turnover REAL DEFAULT 0,
+            turnover_rate REAL DEFAULT 0,
+            amplitude REAL DEFAULT 0,
+            circ_market_cap REAL DEFAULT 0,
+            volume_ratio REAL DEFAULT 0,
+            pe_ttm REAL DEFAULT 0,
+            main_force_net REAL DEFAULT 0,
+            main_force_ratio REAL DEFAULT 0,
+            round_type TEXT DEFAULT 'full',
+            is_candidate INTEGER DEFAULT 0,
+            candidate_score REAL DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_if_date_round_code
+        ON intraday_fusion(trade_date, round_ts, stock_code)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_if_date_round
+        ON intraday_fusion(trade_date, round_ts)
     """)
 
     # stock_basic 基础表（与生产库一致，共 50 字段含 id）

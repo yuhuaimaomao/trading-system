@@ -1,6 +1,6 @@
 #!/bin/bash
-# 股票量化系统 - 盘后复盘报告启动脚本
-# 执行时间：每个交易日 18:00
+# 股票量化系统 - 盘前趋势筛选启动脚本
+# 执行时间：每个交易日 08:30
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ export PATH="/opt/homebrew/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
-LOG_FILE="$PROJECT_DIR/storage/logs/$(date +%Y-%m-%d)/tasks/cron_review.log"
+LOG_FILE="$PROJECT_DIR/storage/logs/$(date +%Y-%m-%d)/tasks/cron_strategy.log"
 
 # 日志函数
 log() {
@@ -24,7 +24,7 @@ log() {
 mkdir -p "$(dirname "$LOG_FILE")"
 
 log "=========================================="
-log "盘后复盘报告"
+log "盘前趋势筛选"
 log "=========================================="
 log "启动时间：$(date '+%Y-%m-%d %H:%M:%S')"
 log "项目目录：$PROJECT_DIR"
@@ -50,12 +50,12 @@ if [ -f .env ]; then
     set +a
 fi
 
-# 执行盘后复盘任务
-log "执行盘后复盘..."
-python main.py review 2>&1 | tee -a "$LOG_FILE"
+# 执行盘前趋势筛选任务
+log "执行趋势筛选..."
+python main.py strategy 2>&1 | tee -a "$LOG_FILE"
 
 log ""
 log "=========================================="
-log "盘后复盘执行完成"
+log "盘前趋势筛选执行完成"
 log "完成时间：$(date '+%Y-%m-%d %H:%M:%S')"
 log "=========================================="

@@ -25,6 +25,7 @@ from trade.decision.buy_decision import BuyDecisionMixin
 from trade.decision.late_session import ClosingDecisionMixin
 from trade.detect.intraday_scout import IntradayScoutMixin
 from trade.detect.market_anomaly import AbnormalMonitorMixin
+from trade.detect.tail_close_scout import TailCloseMixin
 from trade.exec.paper.account import PaperAccount
 from trade.risk.position_risk import PositionRiskMixin
 from trade.risk.risk_engine import RiskEngine
@@ -55,6 +56,7 @@ class Watcher(
     SectorContextMixin,
     AbnormalMonitorMixin,
     IntradayScoutMixin,
+    TailCloseMixin,
     ClosingDecisionMixin,
     CloseSummaryMixin,
 ):
@@ -375,8 +377,8 @@ class Watcher(
         self.paper_account.restore(self._trade_date)
         self._restore_pos_meta()
         self._init_bought_watch()
-        self._cleanup_old_snapshots()
         self._load_sector_history()
+        self._load_yesterday_turnover()  # 开盘复审量比计算用
 
         # 盘中重启：立即从 QMT 拉最新价格更新持仓市值，避免快照与持仓数据不一致
         if self._in_trading_hours() and self.qmt and self.paper_account.positions:
@@ -407,6 +409,7 @@ class Watcher(
         self._alert_fingerprints.clear()
         self._max_drawdown_alerted = False
         self._closing_decision_done = False
+        self._tail_reset()
 
         in_trading = self._in_trading_hours()
         if in_trading:
@@ -436,6 +439,11 @@ class Watcher(
             self._connect_collector()
 
         self._running = True
+        self._signal_review_positions: set[str] = set()  # 信号/复盘来源持仓的 code
+        self._opening_review_done = False  # 开盘复审是否已完成
+        self._opening_data: dict = {}  # 开盘复审候选数据
+        self._opening_dropped: set[str] = set()  # 开盘复审放弃的 code
+        self._deferred_buys: list[dict] = []  # 本 scan 周期内待比选的信号/复盘候选
         # AI 异步队列委托给全局 ai_service
         from system.ai import ai
 
@@ -477,6 +485,7 @@ class Watcher(
                 logger.error(f"扫描异常: {e}", exc_info=True)
 
         self._finalize_close()
+        self._expire_signals()  # 收盘后清理 2 天前的 pending 信号
         self._cleanup_session_state()
         logger.info("盯盘进程退出")
 
@@ -499,7 +508,36 @@ class Watcher(
         self._snapshot_price_history.clear()
         self._name_cache.clear() if hasattr(self, "_name_cache") else None
         self._ma_baseline_cache = None
+        # 开盘复审状态
+        if hasattr(self, "_opening_review_done"):
+            self._opening_review_done = False
+        if hasattr(self, "_opening_data"):
+            self._opening_data.clear()
+        if hasattr(self, "_opening_dropped"):
+            self._opening_dropped.clear()
         logger.info("收盘清理完成，运行时状态已清空")
+
+    def _load_yesterday_turnover(self):
+        """加载昨日个股成交额，用于开盘复审的量比计算。"""
+        try:
+            conn = self.repo._conn()
+            yesterday = conn.execute(
+                "SELECT MAX(trade_date) FROM stock_basic WHERE trade_date < ?",
+                (self._trade_date,),
+            ).fetchone()
+            if not yesterday or not yesterday[0]:
+                conn.close()
+                return
+            rows = conn.execute(
+                "SELECT stock_code, turnover FROM stock_basic WHERE trade_date=?",
+                (yesterday[0],),
+            ).fetchall()
+            conn.close()
+            self._yesterday_turnover = {r[0]: (r[1] or 0) for r in rows}
+            logger.info(f"加载昨日成交额: {len(self._yesterday_turnover)} 只 ({yesterday[0]})")
+        except Exception as e:
+            logger.warning(f"加载昨日成交额失败: {e}")
+            self._yesterday_turnover = {}
 
     # ======================== 时段判断 ========================
 
@@ -591,7 +629,9 @@ class Watcher(
             logger.warning(f"基准记录异常: {e}", exc_info=True)
 
         try:
-            drawdown_halt = self.paper_account.drawdown >= settings.MAX_ACCOUNT_DRAWDOWN
+            total_value = self.paper_account.total_value
+            drawdown_ratio = self.paper_account.drawdown / total_value if total_value > 0 else 0
+            drawdown_halt = drawdown_ratio >= settings.MAX_ACCOUNT_DRAWDOWN
             if drawdown_halt:
                 self._check_max_drawdown()
         except Exception as e:
@@ -608,6 +648,26 @@ class Watcher(
             self._maybe_push_resonance()
         except Exception as e:
             logger.warning(f"共振分析异常: {e}", exc_info=True)
+
+    def _allow_dynamic_discovery(self) -> bool:
+        """盘中动态发现（热门板块/回踩）是否允许执行。
+
+        仅在极端行情（熔断/恐慌）时跳过。
+        普通弱势市场不跳过——regime.allow_buy 已阻止买入，
+        动态发现提供的信息（板块热度、候选扫描）仍有价值。
+        """
+        regime = getattr(self, "_regime", None)
+        if regime is None:
+            return False
+        risk = getattr(regime, "risk_level", "safe")
+        if risk == "extreme":
+            return False
+        # 日内亏损 > 2.5% 也暂停动态发现
+        pa = self.paper_account
+        if pa.daily_pnl < 0 and pa.total_value > 0:
+            if abs(pa.daily_pnl) / pa.total_value > 0.025:
+                return False
+        return True
 
         try:
             self._regime = self._check_market_state(state, prices)
@@ -657,6 +717,12 @@ class Watcher(
         except Exception as e:
             logger.warning(f"主动退出检查异常: {e}", exc_info=True)
 
+        # 引擎3：尾盘持仓次日卖出
+        try:
+            self._check_tail_close_positions(prices)
+        except Exception as e:
+            logger.warning(f"尾盘持仓卖出检查异常: {e}", exc_info=True)
+
         # 引擎2：盘中机会发现
         if state.scan_count % IntradayScoutMixin.SCOUT_INTERVAL == 0:
             try:
@@ -683,21 +749,29 @@ class Watcher(
         except Exception as e:
             logger.warning(f"复盘精选检查异常: {e}", exc_info=True)
 
-        # 盘中动态板块发现
+        # 统一比选信号+复盘候选，取最优执行
+        try:
+            self._resolve_deferred_signal_buys()
+        except Exception as e:
+            logger.warning(f"延迟比选异常: {e}", exc_info=True)
+
+        # 盘中动态板块发现 — 大盘弱势时跳过，避免无效空转
         try:
             if state.data_ready and state.scan_count % 3 == 0:
-                dynamic = self._generate_hot_sector_candidates(prices)
-                if dynamic:
-                    self._check_buy_candidates(state, dynamic, self._regime)
+                if self._allow_dynamic_discovery():
+                    dynamic = self._generate_hot_sector_candidates(prices)
+                    if dynamic:
+                        self._check_buy_candidates(state, dynamic, self._regime)
         except Exception as e:
             logger.warning(f"动态板块发现异常: {e}", exc_info=True)
 
-        # 盘中回踩机会发现
+        # 盘中回踩机会发现 — 大盘弱势时跳过
         try:
             if state.data_ready and state.scan_count % settings.PULLBACK_SCAN_INTERVAL == 0:
-                opps = self._scan_pullback_opportunities(prices)
-                if opps:
-                    self._check_buy_candidates(state, opps, self._regime)
+                if self._allow_dynamic_discovery():
+                    opps = self._scan_pullback_opportunities(prices)
+                    if opps:
+                        self._check_buy_candidates(state, opps, self._regime)
         except Exception as e:
             logger.warning(f"回踩机会扫描异常: {e}", exc_info=True)
 
@@ -769,8 +843,8 @@ class Watcher(
         try:
             if state.scan_count % 3 == 0:
                 self._check_abnormal(prices)
-            # 急拉追涨：每3轮跑一次（和异动检测同频，避免重复给管线喂相同候选）
-            if state.data_ready and state.scan_count % 3 == 0:
+            # 急拉追涨：每3轮跑一次。大盘弱势时跳过
+            if state.data_ready and state.scan_count % 3 == 0 and self._allow_dynamic_discovery():
                 chase = self._generate_chase_candidates(getattr(self, "_last_rapid_hits", []) or [], prices)
                 if chase:
                     self._check_buy_candidates(state, chase, self._regime)
@@ -798,6 +872,12 @@ class Watcher(
             self._check_closing(state, prices)
         except Exception as e:
             logger.warning(f"尾盘决策异常: {e}", exc_info=True)
+
+        # 引擎3：尾盘选股（14:30~14:57）
+        try:
+            self._scan_tail_close()
+        except Exception as e:
+            logger.warning(f"尾盘选股异常: {e}", exc_info=True)
 
         try:
             if state.scan_count % 5 == 0:
@@ -1436,6 +1516,11 @@ class Watcher(
                     "changePct": r["change_pct"],
                     "price": r["price"] or 0,
                     "amount": r["amount"] or 0,
+                    "volume": r.get("volume") or 0,
+                    "high": r.get("high") or 0,
+                    "low": r.get("low") or 0,
+                    "open": r.get("open") or 0,
+                    "preClose": r.get("pre_close") or 0,
                 }
             # ts 可能是 epoch 浮点或 ISO 字符串，统一尝试转换
             try:
@@ -1454,9 +1539,13 @@ class Watcher(
             logger.warning(f"从DB恢复市场快照失败: {e}")
 
     def _expire_signals(self):
-        """收盘后：仅过期当日的 pending 信号，bought 保留不动。"""
+        """过期清理：信号以生成日期为 trade_date（早于交易日），
+        只清理 2 天前的 pending 信号，避免误杀前日生成当日使用的信号。"""
+        from datetime import timedelta
+
+        cutoff = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
         try:
-            self.repo.expire_old_pending_signals(self._trade_date)
+            self.repo.expire_old_pending_signals(cutoff)
         except Exception as e:
             logger.warning(f"过期信号处理异常: {e}")
 
@@ -1479,6 +1568,12 @@ class Watcher(
                 sl_result = self.handle_sl_command(text)
                 if sl_result:
                     self._alert(sl_result)
+                    continue
+
+                # /audit N — 查看第 N 条改进建议详情
+                audit_result = self._handle_audit_command(text)
+                if audit_result:
+                    self._alert_private(audit_result)
                     continue
 
                 result = executor.handle_user_reply(text)
@@ -1552,6 +1647,21 @@ class Watcher(
         source: str = "",
     ) -> str:
         """追高/被拒场景提交 AI 异步评估。返回空字符串（异步，不阻塞扫描）。"""
+        # 信号/复盘名额已满时不提交 AI 评估，减少噪音推送
+        if source in ("signal", "review"):
+            self._sync_signal_review_positions()
+            sr_filled = len(getattr(self, "_signal_review_positions", set()))
+            if sr_filled >= settings.MAX_SIGNAL_REVIEW_SLOTS:
+                return ""
+
+        # 盘中动态发现：极端行情时不提交 AI 评估
+        if source not in ("signal", "review"):
+            regime = getattr(self, "_regime", None)
+            if regime is not None:
+                risk = getattr(regime, "risk_level", "safe")
+                if risk == "extreme":
+                    return ""
+
         from system.ai import ai
         from system.ai.prompts.watcher import (
             CHASE_OPINION_SYSTEM,

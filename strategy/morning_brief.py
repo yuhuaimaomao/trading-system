@@ -64,7 +64,7 @@ class MorningBrief:
         )
 
         # 7. 调用 AI（预计算模式，pending 信号已嵌入 prompt）
-        brief, adjustments = self._call_ai_precomputed(prompt, yesterday)
+        brief, adjustments = self._call_ai_precomputed(prompt, trade_date)
 
         if not brief:
             self.logger.error("AI 生成早盘简报失败")
@@ -72,7 +72,7 @@ class MorningBrief:
 
         # 8. 应用修正
         if adjustments:
-            applied = self._apply_adjustments(adjustments, yesterday)
+            applied = self._apply_adjustments(adjustments, trade_date)
             self.logger.info(f"早盘校准: {applied} 条修正已应用")
 
         # 9. 清理修正块 + 添加标题行 + 推送
@@ -245,16 +245,16 @@ class MorningBrief:
     # AI 调用（预计算模式，数据已嵌入 prompt）
     # ================================================================
 
-    def _call_ai_precomputed(self, prompt: str, yesterday: str) -> tuple:
+    def _call_ai_precomputed(self, prompt: str, trade_date: str) -> tuple:
         """预计算 pending 信号嵌入 prompt，单次 AI 调用生成早报。
         返回 (文本, adjustments列表)。"""
 
         from system.ai import ai
         from system.ai.stock_tools import StockTools
 
-        # 预计算：查询昨日 pending 信号
+        # 预计算：查询当日 pending 信号
         tools = StockTools()
-        ps_data = tools.get_pending_signals(yesterday)
+        ps_data = tools.get_pending_signals(trade_date)
         pending_text = self._fmt_pending_signals(ps_data)
         self.logger.info(f"预计算 pending 信号: {ps_data.get('total', 0)} 只")
 

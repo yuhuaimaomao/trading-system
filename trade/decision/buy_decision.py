@@ -874,6 +874,19 @@ class BuyDecisionMixin:
 
         regime: MarketRegime 对象（非旧版 bool），逐票决策时读取 allow_buy/position_mult/entry_rule
         """
+        # ━━━ 开盘复审：信号/复盘候选在开盘 5-10 分钟后用实际走势二次判断 ━━━
+        # 仅在 9:30-10:00 有效，防止重启后误触发
+        if candidates and candidates[0]["source"] in ("signal", "review"):
+            mins = self._minutes_since_open()
+            if 0 <= mins <= 15 and not getattr(self, "_opening_review_done", False):
+                self._capture_opening_data(candidates)
+                if mins >= 5:
+                    self._evaluate_opening_candidates(candidates)
+                    self._opening_review_done = True
+                    # 已弃的信号从候选列表移除
+                    dropped = getattr(self, "_opening_dropped", set())
+                    candidates = [c for c in candidates if c["code"] not in dropped]
+
         # ═══════════════════════════════════════════════════════════════
         # 买入候选处理管线:
         #   1. 前置门控: data_ready / regime / paper_full / breadth
@@ -1179,7 +1192,26 @@ class BuyDecisionMixin:
                         f"{context}\n"
                         f"   📐 {below_reason}  单票仓位 {settings.DEFAULT_POSITION_PCT * below_mul:.1%}{market_note}"
                     )
-                    if not paper_full and market_ok:
+                    # 信号/复盘候选：延迟到统一比选后执行
+                    if source in ("signal", "review"):
+                        self._deferred_add(
+                            code,
+                            name,
+                            price,
+                            buy_min,
+                            buy_max,
+                            sl,
+                            tp,
+                            score,
+                            source,
+                            c["signal_id"] or 0,
+                            below_mul * position_mult,
+                            pattern,
+                            trend,
+                            regime_obj,
+                            below_reason,
+                        )
+                    elif len(self.paper_account.positions) < settings.MAX_POSITIONS and market_ok:
                         self._execute_paper_buy(
                             code,
                             name,
@@ -1409,7 +1441,29 @@ class BuyDecisionMixin:
                 f"{context}"
             )
 
-            if paper_full or not decision_allowed:
+            # 信号/复盘候选：延迟到统一比选后执行
+            if source in ("signal", "review"):
+                self._deferred_add(
+                    code,
+                    name,
+                    price,
+                    buy_min,
+                    buy_max,
+                    sl,
+                    tp,
+                    score,
+                    source,
+                    c["signal_id"] or 0,
+                    size_mul * position_mult,
+                    pattern,
+                    trend,
+                    regime_obj,
+                    "",
+                )
+                alert_state[c["alert_key"]] = (price, True)
+                continue
+
+            if len(self.paper_account.positions) >= settings.MAX_POSITIONS or not decision_allowed:
                 continue
 
             self._execute_paper_buy(
@@ -1429,6 +1483,300 @@ class BuyDecisionMixin:
                 regime=regime_obj,
             )
             alert_state[c["alert_key"]] = (price, True)
+
+    # ━━━━━━━━ 延迟比选（信号+复盘统一排名） ━━━━━━━━
+
+    def _sync_signal_review_positions(self):
+        """同步 _signal_review_positions，剔除已卖出的 code。"""
+        if not hasattr(self, "_signal_review_positions") or not self._signal_review_positions:
+            return
+        current = set(self.paper_account.positions.keys())
+        stale = self._signal_review_positions - current
+        if stale:
+            self._signal_review_positions = self._signal_review_positions & current
+            logger.info(f"信号/复盘持仓清理已卖出: {stale}")
+
+    def _deferred_add(
+        self,
+        code,
+        name,
+        price,
+        buy_min,
+        buy_max,
+        sl,
+        tp,
+        score,
+        source,
+        signal_id,
+        size_mul,
+        pattern,
+        trend,
+        regime,
+        reason,
+    ):
+        """将信号/复盘候选加入延迟比选池。"""
+        if not hasattr(self, "_deferred_buys"):
+            self._deferred_buys = []
+        self._deferred_buys.append(
+            {
+                "code": code,
+                "name": name,
+                "price": price,
+                "buy_min": buy_min,
+                "buy_max": buy_max,
+                "sl": sl,
+                "tp": tp,
+                "score": score,
+                "source": source,
+                "signal_id": signal_id,
+                "size_mul": size_mul,
+                "pattern": pattern,
+                "trend": trend,
+                "regime": regime,
+                "reason": reason,
+            }
+        )
+
+    def _resolve_deferred_signal_buys(self):
+        """比选延迟池中的信号+复盘候选，按 score 排序取最优执行。"""
+        if not hasattr(self, "_deferred_buys") or not self._deferred_buys:
+            return
+        deferred = self._deferred_buys
+        self._deferred_buys = []
+
+        self._sync_signal_review_positions()
+        # 已有信号/复盘持仓则不再执行
+        filled = len(getattr(self, "_signal_review_positions", set()))
+        if filled >= settings.MAX_SIGNAL_REVIEW_SLOTS:
+            for d in deferred:
+                logger.info(
+                    f"延迟比选 [{d['code']} {d['name']}] 跳过 "
+                    f"信号/复盘名额已满 {filled}/{settings.MAX_SIGNAL_REVIEW_SLOTS}"
+                )
+            return
+
+        # 按 score 降序排列
+        deferred.sort(key=lambda d: d["score"], reverse=True)
+        # 取最优 N 个（当前只取 1 个，剩余名额）
+        to_buy = deferred[: settings.MAX_SIGNAL_REVIEW_SLOTS - filled]
+
+        for d in to_buy:
+            if d["source"] == "signal":
+                tag = ""
+            else:
+                tag = "复盘"
+            self._alert(
+                f"🔴 {tag}买入信号 — {d['code']} {d['name']}\n"
+                f"   现价: {d['price']:.2f}  区间: {d['buy_min']:.2f}~{d['buy_max']:.2f}  "
+                f"止损: {d['sl']:.2f}  止盈: {d['tp']:.2f}  评分: {d['score']:.0f}\n"
+                f"   板块:{d['trend']}  source={d['source']}"
+            )
+            self._execute_paper_buy(
+                d["code"],
+                d["name"],
+                d["price"],
+                d["buy_min"],
+                d["buy_max"],
+                d["sl"],
+                d["tp"],
+                d["score"],
+                d["source"],
+                d["signal_id"],
+                d["size_mul"],
+                d["pattern"],
+                d["trend"],
+                regime=d["regime"],
+            )
+
+        # 未入选的也记录一下
+        skipped = deferred[settings.MAX_SIGNAL_REVIEW_SLOTS - filled :]
+        for d in skipped:
+            logger.info(
+                f"延迟比选 [{d['code']} {d['name']}] score={d['score']:.0f} "
+                f"未入选（名额{settings.MAX_SIGNAL_REVIEW_SLOTS}，已选{len(to_buy)}）"
+            )
+
+    # ━━━━━━━━ 开盘复审（9:30后5-10分钟二次判断） ━━━━━━━━
+
+    def _capture_opening_data(self, candidates: list[dict]):
+        """记录候选开盘数据（9:25集合竞价后的第一笔行情）。"""
+        if not hasattr(self, "_opening_data"):
+            self._opening_data: dict[str, dict] = {}
+        for c in candidates:
+            code = c["code"]
+            if code in self._opening_data:
+                continue
+            self._opening_data[code] = {
+                "open_price": c["price"],  # 开盘第一笔成交价
+                "buy_min": c["buy_min"],
+                "buy_max": c["buy_max"],
+                "score": c["score"],
+                "source": c["source"],
+                "trend_open": c["trend"],
+                "capture_scan": self._scan_count,
+                "prices": [c["price"]],  # 开盘后价格序列
+            }
+
+    def _evaluate_opening_candidates(self, candidates: list[dict]):
+        """开盘5-10分钟后，用量价、换手、板块、大盘等多维数据做二次判断：追/等/弃。
+
+        判断维度（按优先级）:
+        1. 开盘价走势: 高开/低开/平开 + 方向
+        2. 量能: 成交额是否异常放大
+        3. 板块: 是否同步走强/走弱
+        4. 大盘: 指数方向
+        5. 日内价格结构: 最高/最低/现价的相对位置
+        """
+        if not hasattr(self, "_opening_data") or not self._opening_data:
+            return
+        if not hasattr(self, "_opening_dropped"):
+            self._opening_dropped: set[str] = set()
+
+        # 大盘环境
+        index_chg = 0.0
+        idx = getattr(self, "_last_index_quote", None) or {}
+        if idx:
+            index_chg = idx.get("change_pct", 0)
+        else:
+            # fallback: 从上证价格序列估算
+            ip = self._index_prices
+            if ip and len(ip) >= 2:
+                index_chg = (ip[-1] / ip[0] - 1) * 100 if ip[0] > 0 else 0
+
+        index_crashing = index_chg < -0.5
+
+        for c in candidates:
+            code = c["code"]
+            od = self._opening_data.get(code)
+            if not od:
+                continue
+
+            open_price = od["open_price"]
+            cur_price = c["price"]
+            name = c["name"]
+            chg_from_open = (cur_price - open_price) / open_price * 100
+            buy_min = od["buy_min"]
+            buy_max = od["buy_max"]
+            score = od["score"]
+
+            # 从 market_snapshot 获取更多数据
+            snap = (getattr(self, "_market_snapshot", None) or {}).get(code, {})
+            pre_close = snap.get("preClose", 0) or 0
+            chg_from_pre = snap.get("changePct", 0) or 0  # 相对昨收涨跌幅
+            amount = snap.get("amount", 0) or 0  # 成交额（累计）
+            hi = snap.get("high", 0) or 0  # 日内最高
+            lo = snap.get("low", 0) or 0  # 日内最低
+
+            # ━━ 量能判断 ━━
+            # 用昨日成交额按时间比例算预期，比较实际 vs 预期
+            vol_ratio = 1.0  # 默认正常量
+            yesterday_turnover = getattr(self, "_yesterday_turnover", {}).get(code, 0)
+            if yesterday_turnover > 0:
+                mins = max(self._minutes_since_open(), 1)
+                expected = yesterday_turnover * mins / 240  # 240分钟全天
+                vol_ratio = amount / expected if expected > 0 else 1.0
+            has_volume = vol_ratio >= 0.5  # 至少有一半的预期量才算有成交
+            vol_high = vol_ratio >= 1.5  # 1.5倍以上算放量
+            vol_low = vol_ratio < 0.3  # 0.3倍以下算无量
+
+            # ━━ 板块 ━━
+            trend = self._get_sector_trend(code)
+            sector_strong = "走强" in trend and "弱" not in trend
+            sector_weak = "走弱" in trend or "普跌" in trend
+            sector_accel_down = "持续走弱" in trend and "加速" in trend
+
+            # ━━ 日内价格结构 ━━
+            # 高低点相对位置：现价在日内什么位置
+            if hi > lo > 0:
+                pos_in_range = (cur_price - lo) / (hi - lo)
+            else:
+                pos_in_range = 0.5
+            # 现价在日内低位 → 偏弱，在高位 → 偏强
+            price_strong = pos_in_range > 0.6
+            price_weak = pos_in_range < 0.3
+
+            # ━━ 综合判断 ━━
+            action = "wait"
+            reason = ""
+
+            # ── 弃：多种确认信号表明该放弃 ──
+            drop_reasons = []
+            if chg_from_open < -2:
+                drop_reasons.append(f"开盘后跌{abs(chg_from_open):.1f}%")
+            if chg_from_open < -1 and sector_weak:
+                drop_reasons.append(f"跌{abs(chg_from_open):.1f}%+板块走弱")
+            if chg_from_open < -1 and index_crashing:
+                drop_reasons.append(f"跌{abs(chg_from_open):.1f}%+大盘急跌")
+            if sector_accel_down and chg_from_open < 0:
+                drop_reasons.append("板块加速走弱")
+            if chg_from_open < 0 and vol_high and price_weak:
+                drop_reasons.append(f"放量{vol_ratio:.1f}倍下跌")
+
+            if drop_reasons:
+                action = "drop"
+                reason = "；".join(drop_reasons)
+
+            # ── 追：多维确认强势 ──
+            chase_reasons = []
+            if chg_from_open > 1 and not sector_weak and not index_crashing:
+                chase_reasons.append(f"涨幅{chg_from_open:+.1f}%")
+            elif cur_price > buy_max and not sector_weak:
+                chase_reasons.append(f"突破买入区上限{buy_max:.2f}")
+            # 需要量能确认：不放量的涨没诚意
+            if chg_from_open > 1 and vol_low:
+                # 无量上涨分两种：缩量加速 vs 无量空涨
+                # 缩量加速：价格稳健在开盘价上方、日内高位、板块不弱 → 卖盘枯竭，可以追
+                # 无量空涨：价格在开盘价附近、日内中低位、无明显方向 → 等放量确认
+                if price_strong and not sector_weak and pos_in_range > 0.6:
+                    # 缩量加速 — 卖盘枯竭，可以追
+                    chase_reasons.append(f"缩量加速(量比{vol_ratio:.1f})")
+                else:
+                    chase_reasons.clear()
+                    reason = f"无量空涨(量比{vol_ratio:.1f})，等放量确认"
+                    action = "wait"
+
+            if chase_reasons and action != "drop":
+                action = "chase"
+                reason = "；".join(chase_reasons)
+                # 调整买入区到当前价附近
+                new_buy_min = round(cur_price * 0.985, 2)
+                new_buy_max = round(cur_price * 1.01, 2)
+                c["buy_min"] = new_buy_min
+                c["buy_max"] = new_buy_max
+
+            # ━━ 执行 ━━
+            if action == "drop":
+                self._opening_dropped.add(code)
+                tag = "" if c["source"] == "signal" else "复盘"
+                self._alert(
+                    f"🚫 {tag}开盘复审弃 — {code} {name}\n"
+                    f"   开盘{open_price:.2f}→现价{cur_price:.2f}({chg_from_open:+.1f}%)  "
+                    f"昨收{pre_close:.1f}({chg_from_pre:+.2f}%)\n"
+                    f"   量比{vol_ratio:.1f}  日内{lo:.2f}/{hi:.2f}  板块{trend[:30]}\n"
+                    f"   → {reason}，今日放弃"
+                )
+                logger.info(f"开盘复审弃 [{code} {name}] {reason}")
+                sid = c.get("signal_id")
+                if sid:
+                    try:
+                        self.repo.update_signal_status(sid, "expired")
+                    except Exception:
+                        pass
+            elif action == "chase":
+                tag = "" if c["source"] == "signal" else "复盘"
+                self._alert(
+                    f"🔔 {tag}开盘复审追 — {code} {name}\n"
+                    f"   开盘{open_price:.2f}→现价{cur_price:.2f}({chg_from_open:+.1f}%)  "
+                    f"昨收{pre_close:.1f}({chg_from_pre:+.2f}%)\n"
+                    f"   量比{vol_ratio:.1f}  板块{trend[:30]}\n"
+                    f"   新区间→{c['buy_min']:.2f}~{c['buy_max']:.2f}  {reason}"
+                )
+                logger.info(f"开盘复审追 [{code} {name}] {reason} 新区间{c['buy_min']:.2f}~{c['buy_max']:.2f}")
+            # wait 不告警
+
+        # 清理已弃候选
+        for code in list(self._opening_dropped):
+            self._opening_data.pop(code, None)
 
     def _check_signals(self, state, prices: dict[str, float], regime):
         """检查 pending 信号 → 转换为统一候选 → 送入公共管线。regime: MarketRegime 或旧版 bool。"""
@@ -1515,12 +1863,27 @@ class BuyDecisionMixin:
         """
         # 名额质量门控：名额越少要求越高，防止低质量信号占坑
         # 追涨豁免：逆势拉涨的票，用更小的仓位试错也是合理的
+        # 名额已满则直接拒绝
         filled = len(self.paper_account.positions)
         remaining = settings.MAX_POSITIONS - filled
+        if remaining < 0:
+            logger.info(f"买入决策 [{code} {name}] 拒绝 持仓{filled} 超限{settings.MAX_POSITIONS}")
+            return
+
+        # 信号/复盘名额检查
+        if source in ("signal", "review"):
+            self._sync_signal_review_positions()
+            sr_filled = len(getattr(self, "_signal_review_positions", set()))
+            if sr_filled >= settings.MAX_SIGNAL_REVIEW_SLOTS:
+                logger.info(
+                    f"买入决策 [{code} {name}] 拒绝 source={source} "
+                    f"信号/复盘名额已满 {sr_filled}/{settings.MAX_SIGNAL_REVIEW_SLOTS}"
+                )
+                return
         if source == "chase_surge":
             min_mul = 0.15  # 追涨门槛低，用仓位控制风险
         else:
-            min_mul = {0: 0.99, 1: 0.80, 2: 0.65, 3: 0.55, 4: 0.50}.get(remaining, 0.50)
+            min_mul = {0: 0.99, 1: 0.80, 2: 0.65, 3: 0.55}.get(remaining, 0.50)
         if size_mul < min_mul:
             logger.info(
                 f"买入决策 [{code} {name}] 放弃 source={source} 名额{filled}/{settings.MAX_POSITIONS} "
@@ -1603,6 +1966,15 @@ class BuyDecisionMixin:
             source=source,
         )
         if result.success:
+            # 追踪信号/复盘来源的持仓
+            if source in ("signal", "review"):
+                if not hasattr(self, "_signal_review_positions"):
+                    self._signal_review_positions = set()
+                self._signal_review_positions.add(code)
+                logger.info(
+                    f"信号/复盘持仓: {len(self._signal_review_positions)}/{settings.MAX_SIGNAL_REVIEW_SLOTS} "
+                    f"[{code} {name}] source={source}"
+                )
             try:
                 self.repo.update_signal_status(signal_id, "bought")
             except Exception:
@@ -1770,8 +2142,19 @@ class BuyDecisionMixin:
         self._ensure_industry_cache()
 
         candidates = []
+        skipped_weak = 0
         for sector in hot_sectors[:5]:  # 取热度前 5 的板块
             sname = sector["name"]
+
+            # 板块预过滤：弱势板块不生成候选（大盘弱+板块弱=买了就套）
+            sec_stats = self._sector_stats.get(sname, {}) if hasattr(self, "_sector_stats") else {}
+            sec_chg = sec_stats.get("change_pct", 0) if sec_stats else 0
+            sec_breadth = sec_stats.get("breadth", 0) if sec_stats else 0
+            sec_rel = sec_stats.get("relative", 0) if sec_stats else 0
+            if sec_chg < -0.5 or sec_breadth < -0.3 or sec_rel < -0.3:
+                skipped_weak += 1
+                continue
+
             if any(kw in sname for kw in self._CHASE_EXCLUDED_SECTORS):
                 continue
 
@@ -1826,6 +2209,8 @@ class BuyDecisionMixin:
         if candidates:
             names = ", ".join(f"{c['code']} {c['name']}" for c in candidates[:6])
             logger.info(f"动态板块发现(实时): {len(candidates)}只候选 ({names})")
+        elif skipped_weak:
+            logger.info(f"动态板块发现: 全部跳过（{skipped_weak}个板块偏弱），无候选")
         return candidates
 
     # 过滤板块：与 strategy/screening/trend.py _SECTOR_BLACKLIST 保持一致

@@ -30,7 +30,7 @@ COMMANDS = [
 
 
 def cmd_review():
-    """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送，成功后自动跑策略管线"""
+    """盘后全流程：采集 -> AI分析 -> 报告 -> Telegram推送"""
     import sys
 
     from review.review_service import ReviewService
@@ -38,9 +38,7 @@ def cmd_review():
     analyze_only = "--analyze-only" in sys.argv
 
     service = ReviewService()
-    ok = service.generate_and_send(analyze_only=analyze_only)
-    if ok:
-        cmd_strategy()
+    service.generate_and_send(analyze_only=analyze_only)
 
 
 def cmd_morning():

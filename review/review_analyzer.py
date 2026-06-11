@@ -904,6 +904,12 @@ class ReviewAnalyzer:
                 active_codes=[s["stock_code"] for s in active_stocks],
             )
 
+            # 预计算关键数据查询失败 → 中止 AI 分析，避免用残缺数据生成报告
+            if precomputed.get("_errors"):
+                error_list = "\n".join(f"  - {e}" for e in precomputed["_errors"])
+                self.logger.error(f"❌ 预计算数据查询失败，中止 AI 分析：\n{error_list}")
+                return f"❌ AI 分析中止：以下数据查询失败，请检查后重试\n{error_list}", []
+
             # ===== 15. 格式化所有数据（按 Prompt 模板新顺序）=====
             self.logger.info("格式化 Prompt 数据...")
             prompt_data = {
@@ -1011,6 +1017,7 @@ class ReviewAnalyzer:
             ]
 
             reports = {}  # {model_name: report_text}
+            batch_submitted = False  # 是否真的提交了 Batch 任务
 
             for model_name, model_label in models_to_run:
                 pass  # model override no longer needed (use system.ai)
@@ -1022,6 +1029,7 @@ class ReviewAnalyzer:
                             # Batch 已提交，子进程负责收尾
                             self.logger.info(f"✅ {model_label} Batch 已提交，报告稍后通过子进程推送")
                             reports[model_name] = None
+                            batch_submitted = True
                             continue
                     else:
                         self.logger.info(f"调用 {model_label} AI 生成复盘报告（预计算模式，Prompt {len(prompt)}字）...")
@@ -1052,10 +1060,15 @@ class ReviewAnalyzer:
             if not report:
                 report = next((v for v in reports.values() if v), None)
             if not report:
-                # 可能是 Batch 模式，子进程稍后推送
                 elapsed = time.time() - start_time
-                self.logger.info(f"📤 Batch 已提交，主进程退出（{elapsed:.0f}s），子进程稍后推送报告")
-                return "报告正在通过批处理生成，稍后推送。", []
+                if batch_submitted:
+                    # Batch 模式：任务已提交，子进程稍后推送
+                    self.logger.info(f"📤 Batch 已提交，主进程退出（{elapsed:.0f}s），子进程稍后推送报告")
+                    return "报告正在通过批处理生成，稍后推送。", []
+                else:
+                    # 实时模式：API 调用失败
+                    self.logger.error(f"❌ AI 分析失败：所有模型均未返回报告（耗时{elapsed:.0f}s）")
+                    return "AI 分析失败：API 调用异常，请检查网络或模型配置。", []
 
             elapsed = time.time() - start_time
             self.logger.info(f"✅ 复盘 AI 分析完成，耗时 {elapsed:.1f}秒")
@@ -1465,7 +1478,7 @@ class ReviewAnalyzer:
             "get_learning_lessons",
         ]
         # FC 日志文件
-        fc_log_path = LOGS_DIR / trade_date / "prompts" / "review_fc_log.txt"
+        fc_log_path = LOGS_DIR / trade_date / "system" / "fc_review.log"
         fc_log_path.parent.mkdir(parents=True, exist_ok=True)
         fc_lines = []
 
@@ -1492,6 +1505,7 @@ class ReviewAnalyzer:
         round_num = 0
         max_fc_rounds = 10  # 防止死循环
         content = ""  # 确保 finally 块可访问
+        _fc_had_response = False  # 是否至少收到过一次 AI 回复
 
         try:
             while True:
@@ -1513,6 +1527,7 @@ class ReviewAnalyzer:
 
                 content = response.get("content", "")
                 tool_calls = response.get("tool_calls", [])
+                _fc_had_response = True
 
                 if content:
                     preview = content[:200].replace("\n", "\\n")
@@ -1579,13 +1594,17 @@ class ReviewAnalyzer:
             return content
 
         finally:
-            # 无论成功还是异常，FC 日志都要落盘
-            try:
-                with open(fc_log_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(fc_lines))
-                self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
-            except Exception as e:
-                self.logger.warning(f"保存 FC 日志失败: {e}")
+            # 只在 AI 实际返回过内容时才保存 FC 日志
+            # 网络异常（DNS/连接失败）第一轮就挂 → 不保存空壳日志
+            if _fc_had_response:
+                try:
+                    with open(fc_log_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(fc_lines))
+                    self.logger.info(f"✅ FC 日志已保存: {fc_log_path}")
+                except Exception as e:
+                    self.logger.warning(f"保存 FC 日志失败: {e}")
+            else:
+                self.logger.info("ℹ️ AI 未返回任何回复，跳过保存 FC 日志")
 
     def _finalize_report(self, report: str, trade_date: str) -> tuple:
         """收尾：解析股票池 → 清理报告 → 提取预测/教训 → 返回 (cleaned_report, stock_pool)"""
@@ -1633,12 +1652,14 @@ class ReviewAnalyzer:
             log_fh.flush()
 
         try:
-            _log(f"启动，轮询间隔 5 分钟，超时 {_settings.BATCH_TIMEOUT_MINUTES} 分钟")
+            _log(
+                f"启动，轮询间隔 {_settings.BATCH_POLL_INTERVAL // 60} 分钟，超时 {_settings.BATCH_TIMEOUT_MINUTES} 分钟"
+            )
 
             # ── 轮询 ──
             status = "unknown"
             while _time.time() < deadline:
-                _time.sleep(300)  # 5 分钟
+                _time.sleep(_settings.BATCH_POLL_INTERVAL)
                 resp = requests.get(f"{batch_base}/batches/{batch_id}", headers=headers, timeout=30)
                 info = resp.json()
                 status = info.get("status", status)
@@ -1753,12 +1774,14 @@ class ReviewAnalyzer:
         self.logger.info("预计算：5 个必修工具...")
 
         # CLS 复盘新闻
+        cls_data = {"error": "未查询"}
         try:
             cls_data = tools.get_cls_digest_news(trade_date)
             result["news_data_text"] = self._fmt_cls_news(cls_data)
             self.logger.info(f"  ✅ CLS 新闻：{cls_data.get('summary', '空')}")
         except Exception as e:
             self.logger.warning(f"  ⚠️ CLS 新闻预计算失败: {e}")
+            cls_data["error"] = str(e)
             result["news_data_text"] = "（CLS 新闻数据不可用）"
 
         # 昨日复盘报告（原始数据，后续 _fmt_calibration_section 统一处理）
@@ -1850,6 +1873,7 @@ class ReviewAnalyzer:
 
         chain_codes_list = list(chain_codes)
         lhb_results = {}
+        lhb_raw = {}
         if chain_codes_list:
             lhb_raw = tools.get_lhb_seats(stock_codes=chain_codes_list, trade_date=trade_date)
             seats = lhb_raw.get("seats", {})
@@ -1904,6 +1928,29 @@ class ReviewAnalyzer:
             f"{risk_count}只有风险，{len(chain_codes)}只查席位，"
             f"{valid_zj}个板块中军"
         )
+
+        # 检查关键工具是否有错误（不放过任何一个失败的查询）
+        precompute_errors = []
+        _check = (
+            lambda name, data: precompute_errors.append(f"{name}: {data['error']}")
+            if data and data.get("error")
+            else None
+        )
+
+        _check("CLS复盘新闻", cls_data)
+        _check("昨日复盘", yr_data)
+        _check("历史校准", cal_data)
+        _check("昨日推荐表现", yp_data)
+        _check("经验教训", ll_data)
+        _check("个股电报", telegraph_raw)
+        _check("监管风险", regulatory_raw)
+        _check("龙虎榜席位", lhb_raw if chain_codes_list else None)
+
+        if precompute_errors:
+            result["_errors"] = precompute_errors
+            self.logger.error(f"❌ 预计算关键数据查询失败（{len(precompute_errors)}项）：")
+            for e in precompute_errors:
+                self.logger.error(f"  - {e}")
 
         return result
 

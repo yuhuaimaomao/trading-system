@@ -53,9 +53,9 @@ AI_MODEL_WATCHER_TRAPPED = os.environ.get("AI_MODEL_WATCHER_TRAPPED", AI_MODEL_W
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "")  # dashscope / deepseek / auto
 
 # ===== Batch API =====
-BATCH_ENABLED = os.environ.get("BATCH_ENABLED", "false").lower() == "true"
+BATCH_ENABLED = os.environ["BATCH_ENABLED"].lower() == "true"
 BATCH_TIMEOUT_MINUTES = int(os.environ.get("BATCH_TIMEOUT_MINUTES", "180"))
-BATCH_POLL_INTERVAL = int(os.environ.get("BATCH_POLL_INTERVAL", "10"))
+BATCH_POLL_INTERVAL = int(os.environ.get("BATCH_POLL_INTERVAL", "600"))  # 10 分钟
 
 # Provider 端点
 DASHSCOPE_ENDPOINT = os.environ.get(
@@ -112,7 +112,11 @@ PAPER_INITIAL_CAPITAL = float(os.environ.get("PAPER_INITIAL_CAPITAL", 200_000))
 REAL_INITIAL_CAPITAL = float(os.environ.get("REAL_INITIAL_CAPITAL", 200_000))
 REAL_TRADE_ENABLED = os.environ.get("REAL_TRADE_ENABLED", "false").lower() == "true"
 DEFAULT_POSITION_PCT = float(os.environ.get("DEFAULT_POSITION_PCT", 0.30))
-MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", 3))
+MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", 4))
+# 引擎名额分配: 引擎1=1, 引擎2=2, 引擎3=1, 总计4
+MAX_SIGNAL_REVIEW_SLOTS = int(os.environ.get("MAX_SIGNAL_REVIEW_SLOTS", 1))  # 引擎1
+MAX_SCOUT_POSITIONS = int(os.environ.get("MAX_SCOUT_POSITIONS", 2))  # 引擎2
+MAX_TAIL_POSITIONS = int(os.environ.get("MAX_TAIL_POSITIONS", 1))  # 引擎3
 SWAP_SCORE_GAP = float(os.environ.get("SWAP_SCORE_GAP", 15))
 MAX_ACCOUNT_DRAWDOWN = float(os.environ.get("MAX_ACCOUNT_DRAWDOWN", 0.15))
 REVIEW_PICK_POSITION_PCT = float(os.environ.get("REVIEW_PICK_POSITION_PCT", 0.08))

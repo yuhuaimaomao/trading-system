@@ -188,20 +188,59 @@ class CloseSummaryMixin:
                     imps = self.repo.get_pending_watcher_improvements()
                     if imps:
                         from audit.watcher_improvement import (
-                            format_improvement_card,
+                            format_improvement_list,
                         )
 
-                        cards = [format_improvement_card(i) for i in imps[-5:]]
+                        summary = format_improvement_list(imps)
                         msg = (
                             f"🔧 收盘审计 {self._trade_date}\n"
                             f"   规则审计发现 → AI 生成 {len(imps)} 条改进建议\n\n"
-                            + "\n".join(cards)
-                            + "\n\n   💡 使用 /apply N 应用具体改进"
+                            + summary
+                            + "\n\n   💡 回复 /audit N 查看第 N 条详情"
                         )
                         self._alert_private(msg)
-                        self._alert(f"🔧 收盘审计完成 → {len(imps)}条改进建议（详情私聊）")
+                        self._alert_private(f"🔧 收盘审计完成 → {len(imps)}条改进建议（详情私聊）")
         except Exception as e:
             logger.warning(f"收盘审计异常（不阻塞主流程）: {e}")
+
+    def _handle_audit_command(self, text: str) -> str | None:
+        """处理 /audit N 命令，查看第 N 条改进建议详情。"""
+        import re
+
+        m = re.match(r"/audit\s+(\d+)", text.strip())
+        if not m:
+            return None
+        imp_id = int(m.group(1))
+        try:
+            from audit.watcher_improvement import format_improvement_card
+
+            with self.repo._conn() as conn:
+                row = conn.execute(
+                    "SELECT * FROM watcher_improvements WHERE id=?",
+                    (imp_id,),
+                ).fetchone()
+            if not row:
+                return f"未找到改进建议 #{imp_id}"
+            cols = [
+                "id",
+                "trade_date",
+                "improvement_type",
+                "target_module",
+                "target_param",
+                "suggested_change",
+                "code_diff",
+                "rationale",
+                "evidence_ids",
+                "status",
+                "applied_date",
+                "effectiveness_check",
+                "created_at",
+            ]
+            imp = dict(zip(cols, row))
+            return format_improvement_card(imp)
+        except Exception as e:
+            logger.warning(f"audit 命令异常: {e}")
+            return f"查询 #{imp_id} 失败: {e}"
 
     def _get_today_open_value(self) -> float:
         """今日开盘基准 = 上个交易日最后一条快照的 total_value，无则初始资金。"""

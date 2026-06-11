@@ -103,16 +103,65 @@ class AIAuditor:
                 sampled[key] = chg
         return "\n".join(f"{h} {n}: {c:+.2f}%" for (h, n), c in sorted(sampled.items())[:50])
 
+    # 发给 AI 审计的策略参数白名单——仅限交易策略相关，禁止泄露 API Key/Token/模型配置
+    _AUDIT_PARAM_WHITELIST = {
+        # 仓位/风控
+        "MAX_POSITIONS",
+        "MAX_SIGNAL_REVIEW_SLOTS",
+        "MAX_SINGLE_STOCK_PCT",
+        "MAX_SINGLE_SECTOR_PCT",
+        "CASH_RESERVE_PCT",
+        "MAX_DAILY_LOSS",
+        "MAX_ACCOUNT_DRAWDOWN",
+        # 入场/出场
+        "DEFAULT_POSITION_PCT",
+        "DEFAULT_TRAILING_STOP",
+        "DEFAULT_TAKE_PROFIT_RATIO",
+        "DEFAULT_SLIPPAGE",
+        "SWAP_SCORE_GAP",
+        "REVIEW_PICK_POSITION_PCT",
+        # 市场宽度
+        "BREADTH_DOWN_UP_RATIO",
+        "BREADTH_IMPROVEMENT_THRESHOLD",
+        "BREADTH_ROLLING_WINDOW_SHORT",
+        "BREADTH_ROLLING_WINDOW_MEDIUM",
+        # 恐慌衰减
+        "PANIC_FADE_MINUTES",
+        "PANIC_RECOVERY_MIN_PCT",
+        "PANIC_BREADTH_IMPROVE_MIN",
+        # 板块/动态发现
+        "DYNAMIC_SECTOR_DISCOVERY_ENABLED",
+        "DYNAMIC_SECTOR_HEAT_THRESHOLD",
+        "DYNAMIC_SECTOR_MAX_CANDIDATES",
+        "PULLBACK_SCAN_ENABLED",
+        "PULLBACK_SCAN_INTERVAL",
+        "PULLBACK_PRICE_MIN",
+        "PULLBACK_SECTOR_MIN_CHANGE",
+        # Regime / 共振
+        "REGIME_STABLE_SCANS",
+        "REGIME_JITTER_MAX",
+        "REGIME_JITTER_WINDOW",
+        "RESONANCE_TOP_N",
+        "RESONANCE_TOP5_WINDOW_ENTRIES",
+        "RESONANCE_PUSH_COOLDOWN_ROUNDS",
+        "RESONANCE_VOLATILITY_TRIGGER",
+        # 账户
+        "PAPER_INITIAL_CAPITAL",
+        "REAL_INITIAL_CAPITAL",
+        "REAL_TRADE_ENABLED",
+        # 审计
+        "AUDIT_AUTO_APPLY_PARAM",
+    }
+
     def _get_current_params(self) -> str:
         from system.config import settings
 
         params = []
-        for name in dir(settings):
-            if name.isupper() and not name.startswith("_"):
-                val = getattr(settings, name)
-                if isinstance(val, (int, float, str, bool)):
-                    params.append(f"{name}={val}")
-        return "\n".join(sorted(params)[:40])
+        for name in sorted(self._AUDIT_PARAM_WHITELIST):
+            val = getattr(settings, name, None)
+            if val is not None and isinstance(val, (int, float, str, bool)):
+                params.append(f"{name}={val}")
+        return "\n".join(params)
 
     def _parse_response(self, text: str) -> dict | None:
         m = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)

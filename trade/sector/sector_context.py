@@ -406,22 +406,6 @@ class SectorContextMixin:
         except Exception as e:
             logger.warning(f"从 market_snapshots 重建板块趋势异常: {e}")
 
-    def _cleanup_old_snapshots(self):
-        """清理 3 天前的市场快照。"""
-        try:
-            from datetime import timedelta
-
-            cutoff = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
-            conn = connect(self.db_path)
-            deleted_m = conn.execute("DELETE FROM market_snapshots WHERE trade_date < ?", (cutoff,)).rowcount
-            deleted_s = conn.execute("DELETE FROM sector_snapshots WHERE trade_date < ?", (cutoff,)).rowcount
-            conn.commit()
-            conn.close()
-            if deleted_m or deleted_s:
-                logger.info(f"清理旧快照: market_snapshots={deleted_m}, sector_snapshots={deleted_s}")
-        except Exception:
-            pass
-
     def _restore_index_context(self):
         """从 index_snapshots DB 恢复全天指数走势上下文（盘中容灾重启用）。
 

@@ -17,19 +17,10 @@ import time
 from collections import defaultdict
 from datetime import datetime
 
-# ⚠️ 必须在任何网络库导入前清除代理
-os.environ["http_proxy"] = ""
-os.environ["https_proxy"] = ""
-os.environ["no_proxy"] = "*"
+import requests
 
-from system.utils.dns_bypass import install as dns_bypass_install
-
-dns_bypass_install()
-
-import requests  # noqa: E402
-
-from system.config.settings import DATABASE_PATH  # noqa: E402
-from system.utils.logger import get_collect_logger  # noqa: E402
+from system.config.settings import DATABASE_PATH
+from system.utils.logger import get_collect_logger
 
 
 class StockBasicFusionCollector:
@@ -79,6 +70,20 @@ class StockBasicFusionCollector:
         self.trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
         self.logger = get_collect_logger("market")
         self.logger.info(f"融合采集器初始化: trade_date={self.trade_date}")
+        self._setup_network()
+
+    @staticmethod
+    def _setup_network():
+        """初始化网络环境：清代理 + DNS bypass（仅实例化时执行，import 不触发）。"""
+        os.environ["http_proxy"] = ""
+        os.environ["https_proxy"] = ""
+        os.environ["no_proxy"] = "*"
+        try:
+            from system.utils.dns_bypass import install as _install
+
+            _install()
+        except Exception:
+            pass  # dig 不可用时静默跳过
 
     # ============================================================
     # 主流程

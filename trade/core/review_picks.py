@@ -1,11 +1,10 @@
 """复盘推荐盯盘 — 与趋势信号同一逻辑：盘中持续盯买入区间，进入/离开/再进入可重复提醒。
 
-数据来源: stock_tracker (source='复盘')
-买入区间: 基于均线支撑位动态计算
-  - MA10 > MA20 → MA10 支撑买入
-  - 否则 → MA20 回踩买入
+数据来源: trade_signals (signal_source='REVIEW')
+买入区间: 直接使用 REVIEW 信号中的 buy_zone_min / buy_zone_max，不复算 MA 均线。
 """
 
+from datetime import datetime
 from typing import Optional
 
 from data._base import connect
@@ -26,7 +25,7 @@ class ReviewPickMonitor:
 
     def __init__(self, db_path: str, telegram_bot=None):
         self.db_path = db_path
-        self._picks: dict[str, dict] = {}  # code → {name, ma5, ma10, ma20, ...}
+        self._picks: dict[str, dict] = {}  # code → {name, buy_min, buy_max, stop_loss, ...}
         self._loaded = False
 
     def _get_conn(self):
@@ -37,72 +36,44 @@ class ReviewPickMonitor:
     # ------------------------------------------------------------------
 
     def load_picks(self):
-        """开盘一次性加载复盘推荐 + 均线参考位。"""
-        rows = self._load_from_tracker()
+        """开盘一次性加载复盘推荐（从 trade_signals 的 REVIEW 信号）。"""
+        rows = self._load_from_trade_signals()
         if not rows:
             logger.info("无复盘推荐标的")
             self._loaded = True
             return
 
-        self._fill_ma_levels(rows)
-
         for r in rows:
             code = r["stock_code"]
             self._picks[code] = {
                 "name": r.get("stock_name", code),
-                "ma5": r.get("ma5", 0) or 0,
-                "ma10": r.get("ma10", 0) or 0,
-                "ma20": r.get("ma20", 0) or 0,
+                "buy_min": r.get("buy_zone_min", 0) or 0,
+                "buy_max": r.get("buy_zone_max", 0) or 0,
                 "stop_loss": r.get("stop_loss", 0) or 0,
-                "target_price": r.get("target_price", 0) or 0,
-                "industry": r.get("industry", ""),
+                "target_price": r.get("take_profit", 0) or 0,
             }
 
         self._loaded = True
-        logger.info(f"复盘盯盘加载: {len(self._picks)} 只标的")
+        logger.info(f"复盘盯盘加载: {len(self._picks)} 只标的（来源: trade_signals REVIEW）")
 
-    def _load_from_tracker(self) -> list[dict]:
+    def _load_from_trade_signals(self) -> list[dict]:
         try:
+            today = datetime.now().strftime("%Y-%m-%d")
             conn = self._get_conn()
             rows = conn.execute(
-                """SELECT * FROM stock_tracker
-                   WHERE push_date = (
-                       SELECT MAX(push_date) FROM stock_tracker WHERE source='复盘'
-                   )"""
+                """SELECT stock_code, stock_name, buy_zone_min, buy_zone_max,
+                          stop_loss, take_profit
+                   FROM trade_signals
+                   WHERE trade_date = ?
+                     AND signal_source = 'REVIEW'
+                     AND status = 'pending'""",
+                (today,),
             ).fetchall()
             conn.close()
             return [dict(r) for r in rows]
         except Exception as e:
-            logger.warning(f"加载复盘推荐失败: {e}")
+            logger.warning(f"加载复盘信号失败: {e}")
             return []
-
-    def _fill_ma_levels(self, picks: list[dict]):
-        """从 stock_basic 补充 MA 值和行业。"""
-        codes = [p["stock_code"] for p in picks]
-        if not codes:
-            return
-        try:
-            conn = self._get_conn()
-            placeholders = ",".join("?" for _ in codes)
-            rows = conn.execute(
-                f"""SELECT stock_code, ma5, ma10, ma20, price as prev_close, industry
-                    FROM stock_basic
-                    WHERE trade_date = (SELECT MAX(trade_date) FROM stock_basic)
-                    AND stock_code IN ({placeholders})""",
-                codes,
-            ).fetchall()
-            conn.close()
-            ref_map = {row[0]: row for row in rows}
-            for p in picks:
-                ref = ref_map.get(p["stock_code"])
-                if ref:
-                    p["ma5"] = ref[1]
-                    p["ma10"] = ref[2]
-                    p["ma20"] = ref[3]
-                    p["prev_close"] = ref[4]
-                    p["industry"] = ref[5] or ""
-        except Exception as e:
-            logger.warning(f"加载均线参考位失败: {e}")
 
     # ------------------------------------------------------------------
     # 查询
@@ -118,20 +89,11 @@ class ReviewPickMonitor:
         return self._picks.get(code)
 
     def get_buy_zone(self, code: str) -> tuple[float, float]:
-        """返回买入区间 (buy_min, buy_max)，无有效区间返回 (0, 0)。
-
-        规则: MA10 在 MA20 上方 → MA10 支撑，否则 → MA20 回踩。
-        """
+        """返回买入区间 (buy_min, buy_max)，直接取 REVIEW 信号中已计算好的区间。"""
         pick = self._picks.get(code)
         if not pick:
             return (0, 0)
-        ma10, ma20 = pick.get("ma10", 0) or 0, pick.get("ma20", 0) or 0
-
-        if ma10 > 0 and ma10 > ma20:
-            return (round(ma10 * 0.99, 2), round(ma10 * 1.01, 2))
-        if ma20 > 0:
-            return (round(ma20 * 0.99, 2), round(ma20 * 1.02, 2))
-        return (0, 0)
+        return (pick.get("buy_min", 0) or 0, pick.get("buy_max", 0) or 0)
 
     # ------------------------------------------------------------------
     # 开盘参考
@@ -153,7 +115,8 @@ class ReviewPickMonitor:
             if price is None:
                 continue
 
-            buy_min, buy_max = self.get_buy_zone(code)
+            buy_min = pick.get("buy_min", 0) or 0
+            buy_max = pick.get("buy_max", 0) or 0
             if buy_min <= 0:
                 continue
 
@@ -165,9 +128,6 @@ class ReviewPickMonitor:
 
             sl = pick.get("stop_loss", 0) or 0
             tp = pick.get("target_price", 0) or 0
-            industry = pick.get("industry", "")
-            sector_chg = sector_data.get(industry) if sector_data else None
-            sector_str = f"板块{sector_chg:+.1f}%" if sector_chg is not None else ""
 
             line = f"{code} {pick['name']} 现价{price:.2f} | {status}"
             line += f" | 买入{buy_min:.2f}-{buy_max:.2f}"
@@ -175,8 +135,6 @@ class ReviewPickMonitor:
                 line += f" | 止损{sl:.2f}"
             if tp > 0:
                 line += f" | 目标{tp:.2f}"
-            if sector_str:
-                line += f" | {sector_str}"
             lines.append(line)
 
         if not lines:

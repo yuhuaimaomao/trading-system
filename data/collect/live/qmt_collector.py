@@ -70,7 +70,15 @@ class QMTCollector:
                     PRIMARY KEY (trade_date, ts)
                 )"""
             )
-            for col, typ in [("price", "REAL DEFAULT 0"), ("amount", "REAL DEFAULT 0")]:
+            for col, typ in [
+                ("price", "REAL DEFAULT 0"),
+                ("amount", "REAL DEFAULT 0"),
+                ("volume", "REAL DEFAULT 0"),
+                ("high", "REAL DEFAULT 0"),
+                ("low", "REAL DEFAULT 0"),
+                ("open", "REAL DEFAULT 0"),
+                ("pre_close", "REAL DEFAULT 0"),
+            ]:
                 try:
                     conn.execute(f"ALTER TABLE market_snapshots ADD COLUMN {col} {typ}")
                 except sqlite3.OperationalError:
@@ -130,6 +138,11 @@ class QMTCollector:
                 chg = 0.0
             price = item.get("price", 0) or 0
             amount = item.get("amount", 0) or 0
+            volume = item.get("volume", 0) or 0
+            high = item.get("high", price) or price
+            low = item.get("low", price) or price
+            open_ = item.get("open", price) or price
+            pre_close = item.get("preClose", 0) or 0
             rows.append(
                 (
                     self._trade_date,
@@ -138,6 +151,11 @@ class QMTCollector:
                     round(chg, 4),
                     round(float(price), 4),
                     round(float(amount), 2),
+                    round(float(volume), 0),
+                    round(float(high), 4),
+                    round(float(low), 4),
+                    round(float(open_), 4),
+                    round(float(pre_close), 4),
                 )
             )
         if not rows:
@@ -146,8 +164,9 @@ class QMTCollector:
             conn = sqlite3.connect(self.db_path)
             conn.executemany(
                 """INSERT OR REPLACE INTO market_snapshots
-                   (trade_date, ts, code, change_pct, price, amount)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (trade_date, ts, code, change_pct, price, amount,
+                    volume, high, low, open, pre_close)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
             conn.commit()
@@ -170,22 +189,14 @@ class QMTCollector:
                 return
 
             bars = []
-            today_start = time.mktime(
-                datetime.now()
-                .replace(hour=9, minute=0, second=0, microsecond=0)
-                .timetuple()
-            )
+            today_start = time.mktime(datetime.now().replace(hour=9, minute=0, second=0, microsecond=0).timetuple())
             for bar in data:
                 close_val = bar.get("close")
                 if close_val is None:
                     continue
                 bar_time = bar.get("time") or bar.get("timestamp")
                 if bar_time:
-                    ts = (
-                        float(bar_time)
-                        if isinstance(bar_time, (int, float))
-                        else time.time()
-                    )
+                    ts = float(bar_time) if isinstance(bar_time, (int, float)) else time.time()
                 else:
                     ts = time.time()
                 # 只保留今日 9:00 之后的 K 线
@@ -285,14 +296,8 @@ class QMTCollector:
                     # 归一化：去后缀，标准化字段名
                     stocks = {}
                     for full_code, item in raw.items():
-                        short = (
-                            full_code.split(".")[0] if "." in full_code else full_code
-                        )
-                        price = (
-                            item.get("lastPrice")
-                            or item.get("last_price")
-                            or item.get("price")
-                        )
+                        short = full_code.split(".")[0] if "." in full_code else full_code
+                        price = item.get("lastPrice") or item.get("last_price") or item.get("price")
                         if price is None:
                             continue
                         price_float = float(price)
@@ -303,10 +308,21 @@ class QMTCollector:
                         amt = item.get("amount")
                         if amt is None:
                             amt = 0
+                        # 成交量、最高/最低/开盘价 → 尾盘选股引擎用
+                        vol = item.get("volume") or 0
+                        high = item.get("high") or price_float
+                        low = item.get("low") or price_float
+                        open_ = item.get("open") or price_float
+                        pre_close = item.get("preClose") or item.get("pre_close") or 0
                         stocks[short] = {
                             "price": price_float,
                             "changePct": float(raw_chg),
                             "amount": float(amt),
+                            "volume": float(vol),
+                            "high": float(high),
+                            "low": float(low),
+                            "open": float(open_),
+                            "preClose": float(pre_close),
                         }
                     if stocks:
                         ts = time.time()
@@ -339,9 +355,7 @@ class QMTCollector:
                             continue
                         ts = time.time()
                         pre_close = float(item.get("preClose") or 0)
-                        change_pct = (
-                            (float(price) - pre_close) / pre_close if pre_close else 0
-                        )
+                        change_pct = (float(price) - pre_close) / pre_close if pre_close else 0
                         amount = float(item.get("amount") or item.get("turnover") or 0)
                         idx_high = float(item.get("high") or price)
                         idx_low = float(item.get("low") or price)
@@ -359,8 +373,14 @@ class QMTCollector:
                         }
                         self._send_json(msg)
                         self._write_index_snapshot(
-                            ts, code, float(price), idx_high, idx_low,
-                            pre_close, change_pct, amount,
+                            ts,
+                            code,
+                            float(price),
+                            idx_high,
+                            idx_low,
+                            pre_close,
+                            change_pct,
+                            amount,
                         )
                         pushed_index = True
                         if code == "000001.SH":
@@ -381,9 +401,7 @@ class QMTCollector:
     @staticmethod
     def _in_trading_hours() -> bool:
         now = datetime.now().time()
-        return (
-            MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
-        )
+        return MORNING_START <= now < MORNING_END or AFTERNOON_START <= now < MARKET_CLOSE
 
     @staticmethod
     def _after_market() -> bool:

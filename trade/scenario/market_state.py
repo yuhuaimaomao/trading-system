@@ -68,10 +68,11 @@ class MarketStateMixin:
                     f"   → 暂停所有买入，评估是否减仓"
                 )
                 return
-        if p.drawdown > 0.15:
+        drawdown_ratio = p.drawdown / p.total_value if p.total_value > 0 else 0
+        if drawdown_ratio > 0.15:
             self._max_drawdown_alerted = True
             self._alert(
-                f"🚨 最大回撤警报\n   总资产: {p.total_value:.0f}  回撤: {p.drawdown:.1%}\n   → 建议立即清仓所有持仓"
+                f"🚨 最大回撤警报\n   总资产: {p.total_value:.0f}  回撤: {drawdown_ratio:.1%}\n   → 建议立即清仓所有持仓"
             )
 
     # ━━━━━━━━ 市场宽度 ━━━━━━━━

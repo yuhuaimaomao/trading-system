@@ -28,6 +28,7 @@ from strategy.screening.breadth import MarketBreadth
 from strategy.screening.profiles import ProfileBuilder
 from strategy.screening.trend import TrendScreener
 from system.config import settings
+from system.config.trading_calendar import get_next_trading_day
 from system.utils.logger import get_strategy_logger
 
 logger = get_strategy_logger("pipeline")
@@ -49,7 +50,7 @@ class StrategyPipeline:
 
     def run(self, trade_date: Optional[str] = None) -> list[OrderSignal]:
         """执行完整策略管线，返回入库的信号列表。"""
-        trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+        trade_date = trade_date or get_next_trading_day()
         logger.info(f"策略管线开始 {trade_date}")
 
         # 步骤 0: 市场宽度 → 大盘状态
@@ -117,14 +118,7 @@ class StrategyPipeline:
         if holdings_review:
             self._save_holdings_review(holdings_review, trade_date)
 
-        # 步骤 3.5: 复盘趋势精选 → 结构化信号（与 AI 信号合并，统一盯盘）
-        if review_ctx and review_ctx.review_stocks_raw:
-            review_signals = self._build_review_signals(review_ctx.review_stocks_raw, trade_date)
-            # 去重：复盘信号中与 AI 信号重复的股票跳过
-            ai_codes = {s.stock_code for s in signals}
-            new_review = [rs for rs in review_signals if rs.stock_code not in ai_codes]
-            signals = signals + new_review
-            logger.info(f"复盘结构化信号: {len(review_signals)} 只 (新增{len(new_review)}只)")
+        # REVIEW 信号已在复盘任务中直接写入 trade_signals，此处不再重复生成
 
         # 即使没有买入信号，持仓审查也要推送
         if not signals and not holdings_review:
